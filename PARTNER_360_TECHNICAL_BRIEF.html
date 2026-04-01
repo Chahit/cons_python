@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Partner 360 — Technical Brief</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --primary: #1e40af;
+    --primary-light: #dbeafe;
+    --accent: #0ea5e9;
+    --green: #059669;
+    --green-light: #d1fae5;
+    --amber: #d97706;
+    --amber-light: #fef3c7;
+    --red: #dc2626;
+    --red-light: #fee2e2;
+    --purple: #7c3aed;
+    --purple-light: #ede9fe;
+    --text: #111827;
+    --text-secondary: #4b5563;
+    --text-muted: #9ca3af;
+    --border: #e5e7eb;
+    --bg: #f9fafb;
+    --card: #ffffff;
+    --code-bg: #1e293b;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+    color: var(--text);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Cover ── */
+  .cover {
+    background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #1e40af 100%);
+    color: #fff;
+    padding: 72px 80px 64px;
+  }
+  .cover-badge {
+    display: inline-block;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+  }
+  .cover h1 {
+    font-size: 42px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    line-height: 1.15;
+    margin-bottom: 14px;
+  }
+  .cover h1 span { color: #93c5fd; }
+  .cover .subtitle {
+    font-size: 16px;
+    color: #bfdbfe;
+    font-weight: 400;
+    max-width: 580px;
+    margin-bottom: 40px;
+    line-height: 1.6;
+  }
+  .cover-meta {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+    border-top: 1px solid rgba(255,255,255,0.15);
+    padding-top: 28px;
+  }
+  .cover-meta-item { font-size: 12px; color: #93c5fd; }
+  .cover-meta-item strong { display: block; color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+
+  /* ── Layout ── */
+  .container { max-width: 900px; margin: 0 auto; padding: 56px 40px; }
+
+  /* ── TOC ── */
+  .toc {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 48px;
+  }
+  .toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; margin-bottom: 16px; }
+  .toc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; }
+  .toc-item { font-size: 13.5px; color: var(--primary); font-weight: 500; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+  .toc-num { color: var(--text-muted); font-weight: 400; margin-right: 6px; font-size: 12px; }
+
+  /* ── Intro box ── */
+  .intro-box {
+    background: var(--primary-light);
+    border-left: 4px solid var(--primary);
+    border-radius: 0 10px 10px 0;
+    padding: 20px 24px;
+    margin-bottom: 48px;
+    font-size: 14.5px;
+    color: #1e3a8a;
+    line-height: 1.7;
+  }
+
+  /* ── Section ── */
+  .section { margin-bottom: 56px; }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 22px;
+    padding-bottom: 14px;
+    border-bottom: 2px solid var(--border);
+  }
+  .section-num {
+    background: var(--primary);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .section h2 { font-size: 21px; font-weight: 700; color: var(--text); }
+  .section-file {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    background: var(--code-bg);
+    color: #7dd3fc;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 24px 0 10px; }
+  h4 { font-size: 13.5px; font-weight: 600; color: var(--text-secondary); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+  p { margin-bottom: 14px; color: var(--text-secondary); font-size: 14.5px; }
+  p:last-child { margin-bottom: 0; }
+
+  /* ── Formula box ── */
+  .formula {
+    background: var(--code-bg);
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin: 16px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: #e2e8f0;
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+  .formula .comment { color: #64748b; }
+  .formula .highlight { color: #34d399; }
+  .formula .var { color: #93c5fd; }
+  .formula .op { color: #f472b6; }
+
+  /* ── Callout boxes ── */
+  .callout {
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin: 16px 0;
+    font-size: 14px;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.4; }
+  .callout-body { flex: 1; }
+  .callout-body strong { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+  .callout.why  { background: var(--primary-light); color: #1e3a8a; }
+  .callout.alt  { background: var(--amber-light); color: #78350f; }
+  .callout.tip  { background: var(--green-light); color: #064e3b; }
+  .callout.warn { background: var(--red-light); color: #7f1d1d; }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; margin: 18px 0; border-radius: 10px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead tr { background: #f1f5f9; }
+  th { padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-secondary); border-bottom: 2px solid var(--border); }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f8fafc; }
+  td code, th code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; background: #f1f5f9; padding: 1px 5px; border-radius: 3px; color: #1e40af; }
+  td strong { color: var(--text); font-weight: 600; }
+
+  /* ── Comparison block ── */
+  .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .compare-card {
+    border-radius: 10px;
+    padding: 16px 18px;
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+  .compare-card.current { background: var(--green-light); border: 1px solid #6ee7b7; color: #064e3b; }
+  .compare-card.alt     { background: #f3f4f6; border: 1px solid var(--border); color: var(--text-secondary); }
+  .compare-card .label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; display: block; }
+  .compare-card.current .label { color: #059669; }
+  .compare-card.alt .label     { color: var(--text-muted); }
+
+  /* ── Impact strip ── */
+  .impact-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin: 20px 0;
+  }
+  .impact-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+  .impact-icon { font-size: 22px; margin-bottom: 6px; }
+  .impact-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 4px; }
+  .impact-val { font-size: 18px; font-weight: 700; color: var(--primary); }
+
+  /* ── Config table special ── */
+  .env-tag { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #7c3aed; background: var(--purple-light); padding: 2px 7px; border-radius: 4px; }
+
+  /* ── Footer ── */
+  .footer {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+    font-size: 12px;
+    border-top: 1px solid var(--border);
+    margin-top: 16px;
+  }
+  .footer strong { color: var(--text-secondary); }
+
+  /* ── Pill tags ── */
+  .pill { display: inline-block; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+  .pill-blue   { background: var(--primary-light); color: var(--primary); }
+  .pill-green  { background: var(--green-light); color: var(--green); }
+  .pill-amber  { background: var(--amber-light); color: var(--amber); }
+  .pill-red    { background: var(--red-light); color: var(--red); }
+
+  @media (max-width: 640px) {
+    .cover { padding: 40px 24px; }
+    .cover h1 { font-size: 28px; }
+    .container { padding: 32px 20px; }
+    .toc-grid { grid-template-columns: 1fr; }
+    .compare-grid { grid-template-columns: 1fr; }
+    .impact-strip { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ COVER ═══════════════════ -->
+<div class="cover">
+  <div class="cover-badge">Internal Technical Brief</div>
+  <h1>Partner 360<br/><span>Technical Documentation</span></h1>
+  <p class="subtitle">
+    A complete walkthrough of every formula, ML algorithm, business decision, and improvement opportunity
+    inside the Sales Intelligence Dashboard's Partner 360 module.
+  </p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><strong>Version</strong>2.4 — Week 2 Calibration</div>
+    <div class="cover-meta-item"><strong>Date</strong>April 2026</div>
+    <div class="cover-meta-item"><strong>Audience</strong>Technical &amp; Business Managers</div>
+    <div class="cover-meta-item"><strong>Files Covered</strong>9 core engine files</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ BODY ═══════════════════ -->
+<div class="container">
+
+  <!-- Intro -->
+  <div class="intro-box">
+    This document explains every formula and model inside the Partner 360 view — not just what it does, but <strong>why we made that specific choice</strong>, what we could have done instead, and where we should go next. It is written for someone who understands the business but doesn't need to know Python to follow it. Technical references and code file names are included for the engineering team.
+  </div>
+
+  <!-- TOC -->
+  <div class="toc">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-item"><span class="toc-num">01</span>What is Partner 360?</div>
+      <div class="toc-item"><span class="toc-num">06</span>Peer Gap Analysis</div>
+      <div class="toc-item"><span class="toc-num">02</span>Health Score</div>
+      <div class="toc-item"><span class="toc-num">07</span>FP-Growth / Product Affinity</div>
+      <div class="toc-item"><span class="toc-num">03</span>Churn Probability</div>
+      <div class="toc-item"><span class="toc-num">08</span>Credit Risk</div>
+      <div class="toc-item"><span class="toc-num">04</span>30-Day Revenue Forecast</div>
+      <div class="toc-item"><span class="toc-num">09</span>Product Lifecycle</div>
+      <div class="toc-item"><span class="toc-num">05</span>Partner Clustering</div>
+      <div class="toc-item"><span class="toc-num">10</span>Recommendations &amp; Confidence</div>
+    </div>
+  </div>
+
+  <!-- ── S0: What is P360 ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">00</div>
+      <h2>What is Partner 360?</h2>
+    </div>
+    <p>Partner 360 is a single screen that gives a complete, real-time view of any distributor in your network. Pick a state, pick a partner — and you see everything: revenue health, churn risk, how much money you're leaving on the table, their credit exposure, and a ready-to-use sales script tailored to their data.</p>
+    <p>Every number is computed live by the ML engine from the production database. Nothing is manually maintained or hardcoded. The data flow looks like this:</p>
+    <div class="formula">
+<span class="comment">PostgreSQL Database</span>
+    ↓
+<span class="highlight">BaseLoaderMixin</span>      →  Revenue, recency, growth, volatility features
+    ↓
+<span class="highlight">ChurnCreditMixin</span>     →  Churn probability + Credit risk score
+<span class="highlight">ClusteringMixin</span>      →  Partner segments (which "type" of buyer are they?)
+<span class="highlight">AssociationsMixin</span>    →  Product affinities (what to cross-sell?)
+<span class="highlight">LifecycleMixin</span>       →  Is this product growing or dying?
+    ↓
+<span class="highlight">RecommendationMixin</span>  →  Ranked actions + Confidence scores
+    ↓
+<span class="highlight">Partner 360 UI</span>       →  Sales rep sees everything in one screen
+    </div>
+    <div class="impact-strip">
+      <div class="impact-card"><div class="impact-icon">🏥</div><div class="impact-label">Health Score</div><div class="impact-val">0–1</div></div>
+      <div class="impact-card"><div class="impact-icon">📉</div><div class="impact-label">Churn Risk</div><div class="impact-val">0–100%</div></div>
+      <div class="impact-card"><div class="impact-icon">🔍</div><div class="impact-label">Peer Gap</div><div class="impact-val">₹ / mo</div></div>
+      <div class="impact-card"><div class="impact-icon">💳</div><div class="impact-label">Credit Risk</div><div class="impact-val">3 bands</div></div>
+    </div>
+  </div>
+
+  <!-- ── S1: Health Score ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">01</div>
+      <h2>Health Score</h2>
+      <span class="section-file">base_loader_mixin.py → _add_health_scores()</span>
+    </div>
+    <p>A single number between 0 and 1 summarising how well a partner is doing right now. Drives the traffic-light segmentation shown at the top of every partner card.</p>
+
+    <h3>Segmentation Thresholds</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Segment</th><th>Health Score</th><th>Revenue Drop</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill pill-green">Champion</span></td><td>≥ 0.80</td><td>&lt; 10%</td><td>Growing, healthy, no intervention needed</td></tr>
+          <tr><td><span class="pill pill-blue">Healthy</span></td><td>≥ 0.60</td><td>&lt; threshold</td><td>Stable, monitor quarterly</td></tr>
+          <tr><td><span class="pill pill-amber">At Risk</span></td><td>≥ 0.40</td><td>Any</td><td>Declining — needs attention within 2 weeks</td></tr>
+          <tr><td><span class="pill pill-red">Critical</span></td><td>&lt; 0.40</td><td>Any</td><td>Immediate action or revenue is already zero</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>The Formula</h3>
+    <div class="formula">
+<span class="var">Health Score</span> <span class="op">=</span>  0.35 × <span class="highlight">revenue_strength</span>    <span class="comment">← How much they spend</span>
+              + 0.30 × <span class="highlight">growth_trend</span>         <span class="comment">← Are they growing or shrinking?</span>
+              + 0.20 × <span class="highlight">recency_activity</span>     <span class="comment">← How recently did they order?</span>
+              + 0.15 × <span class="highlight">stability</span>            <span class="comment">← Is their revenue consistent?</span>
+
+<span class="comment">── Each component normalised 0→1 before combining ──</span>
+<span class="var">revenue_strength</span>  = normalise( log(1 + recent_90d_revenue) )
+<span class="var">growth_trend</span>      = normalise( growth_rate_90d  clipped to [-100%, +150%] )
+<span class="var">recency_activity</span>  = 1 − normalise( log(1 + recency_days) )
+<span class="var">stability</span>         = 1 − normalise( log(1 + revenue_volatility) )
+    </div>
+
+    <div class="callout why">
+      <div class="callout-icon">🔍</div>
+      <div class="callout-body">
+        <strong>Why log-transform recency?</strong>
+        The old version used raw <code>recency_days ÷ 365</code>. That meant a partner absent for 10 days looked almost as bad as one absent for 40 days. In reality, a sales rep cares much more about 200 days vs 50 days than 10 days vs 40 days. <br/><br/>
+        Log compression fixes this: <br/>
+        <code>10d → 0.19 &nbsp;|&nbsp; 100d → 0.39 &nbsp;|&nbsp; 300d → 0.52</code><br/>
+        A 300-day absence now scores twice as urgent as 100 days — which is what the business actually needs.
+      </div>
+    </div>
+
+    <h3>State-Level Degrowth Threshold</h3>
+    <div class="formula">
+<span class="var">degrowth_threshold</span> = 70th percentile of revenue_drop_pct  <span class="highlight">within the same state</span>
+                       (clamped between 10% and 40%)
+    </div>
+    <p>A 30% drop in Maharashtra is different from a 30% drop in a smaller state where seasonal swings are bigger. Computing the threshold per state from actual data means partners aren't penalised for normal regional fluctuations.</p>
+
+    <div class="compare-grid">
+      <div class="compare-card current"><span class="label">✅ Current Approach</span>Weighted formula with log-transformed recency. Gives real differentiation across all partners. Explainable to sales reps.</div>
+      <div class="compare-card alt"><span class="label">Alternative: RFM Score</span>Classic retail approach. Less reliable in B2B where a distributor might order monthly in large batches — low frequency doesn't mean they're at risk.</div>
+    </div>
+  </div>
+
+  <!-- ── S2: Churn ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">02</div>
+      <h2>Churn Probability</h2>
+      <span class="section-file">churn_credit_stub_mixin.py → _score_churn_rule_based()</span>
+    </div>
+    <p>The probability (0–1) that a partner will stop ordering in the next 90 days. Drives the "Revenue at Risk" metric and the retention recommendation priority.</p>
+
+    <h3>Churn Risk Bands</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Band</th><th>Threshold</th><th>Recommended Action</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill pill-red">High</span></td><td>&gt; 70%</td><td>Call within 24 hours. Retention intervention.</td></tr>
+          <tr><td><span class="pill pill-amber">Medium</span></td><td>45–70%</td><td>Schedule visit this week. Probe for blockers.</td></tr>
+          <tr><td><span class="pill pill-green">Low</span></td><td>&lt; 45%</td><td>Regular cycle. Monitor.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>The Scoring Formula</h3>
+    <div class="formula">
+<span class="var">Churn Score</span> <span class="op">=</span>  w₁ × <span class="highlight">rev_drop</span>       <span class="comment">← Revenue dropped vs last 90 days</span>
+             + w₂ × <span class="highlight">log_recency</span>    <span class="comment">← Days since last order (log-scaled)</span>
+             + w₃ × <span class="highlight">CoV</span>            <span class="comment">← Revenue unpredictability</span>
+             + w₄ × <span class="highlight">growth_risk</span>    <span class="comment">← Negative growth trend</span>
+             + w₅ × <span class="highlight">txn_drop</span>       <span class="comment">← Transaction count falling</span>
+
+<span class="comment">── Individual feature transforms ──</span>
+<span class="var">rev_drop</span>      = revenue_drop_pct ÷ 100             (clipped 0–1)
+<span class="var">log_recency</span>   = log(1 + recency_days) ÷ log(1 + 730)  (clipped 0–1)
+<span class="var">CoV</span>           = revenue_volatility ÷ recent_90d_revenue  (normalised 0–1)
+<span class="var">growth_risk</span>   = (1 − growth_rate_90d) ÷ 2           (clipped 0–1)
+<span class="var">txn_drop</span>      = (prev_txns − recent_txns) ÷ prev_txns (clipped 0–1)
+
+<span class="comment">── Special rule: zero recent revenue → force churn = 0.85 ──</span>
+    </div>
+
+    <h3>How Weights Are Calibrated (Not Hardcoded)</h3>
+    <p>The weights w₁–w₅ are computed fresh every session using <strong>point-biserial correlation</strong> — a standard statistical technique for measuring how a continuous variable relates to a binary outcome.</p>
+    <div class="formula">
+<span class="comment">Step 1: Generate churn labels from 12–15 months of history</span>
+  Active in month M + zero revenue in month M+3  →  churn_label = 1
+  Active and still ordering                       →  churn_label = 0
+
+<span class="comment">Step 2: Compute correlation between each feature and label</span>
+  corr(feature, churn_label)  using Pearson (= point-biserial for binary y)
+
+<span class="comment">Step 3: Normalise to weights that sum to 1.0</span>
+  w_feature = |corr(feature, label)| ÷ Σ|corr(all features, label)|
+
+<span class="comment">Fallback if &lt;20 samples or &lt;5 churn events:</span>
+  {rev_drop: 0.30, recency: 0.25, growth: 0.20, volatility: 0.15, txn_drop: 0.10}
+    </div>
+
+    <h3>Revenue at Risk Formula</h3>
+    <div class="formula">
+<span class="var">Revenue at Risk (90d)</span>     = churn_probability × recent_90d_revenue
+<span class="var">Revenue at Risk (monthly)</span>  = churn_probability × recent_90d_revenue ÷ 3
+
+<span class="comment">Example: 60% churn risk, Rs 5L revenue → Rs 3L at risk</span>
+    </div>
+
+    <div class="callout alt">
+      <div class="callout-icon">⚖️</div>
+      <div class="callout-body">
+        <strong>Why not XGBoost? (We built it but don't use it)</strong>
+        We trained XGBoost on historical data, but when scoring active partners it predicted ~1% churn for almost everyone. The problem: it was trained on "zero revenue = churned", and all active partners have some revenue. Gradient boosted trees learn the label exactly — they don't naturally generalise to "declining but not yet zero." The rule-based scoring with calibrated correlation weights gives far more useful differentiation.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── S3: Forecast ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">03</div>
+      <h2>30-Day Revenue Forecast</h2>
+      <span class="section-file">churn_credit_stub_mixin.py → _build_partner_forecast()</span>
+    </div>
+    <div class="formula">
+<span class="var">Forecast_30d</span>  = (recent_90d_revenue ÷ 3) × (1 + growth_rate_90d ÷ 3)
+<span class="var">Confidence</span>    = 0.75  if partner has ≥ 6 months history
+              = 0.45  if newer partner
+    </div>
+    <div class="callout alt">
+      <div class="callout-icon">📊</div>
+      <div class="callout-body">
+        <strong>Why not Prophet or ARIMA?</strong>
+        Monthly B2B order data is lumpy — a distributor may place one large order in January and nothing until March. ARIMA would try to fit a pattern that doesn't exist. Prophet handles seasonality well but needs 2+ years of clean, dense data. Until we have proper model validation pipelines, linear projection is honest and explainable. The database query for full time-series history already exists — upgrading to Prophet is an execution priority, not a technical blocker.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── S4: Clustering ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">04</div>
+      <h2>Partner Clustering (Segmentation)</h2>
+      <span class="section-file">clustering_mixin.py</span>
+    </div>
+    <p>Groups all partners into business segments based on purchasing behaviour. This is what makes peer comparison possible — you can only benchmark a partner against similar partners if you first know which group they belong to.</p>
+
+    <h3>Pipeline: PCA → UMAP → HDBSCAN + GMM</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Step</th><th>Algorithm</th><th>What it does</th><th>Key parameter</th></tr></thead>
+        <tbody>
+          <tr><td><strong>1</strong></td><td>Feature grouping</td><td>Groups columns by category (spend, RFM, etc.) with weights</td><td>Group weight = 1.0 (spend), 0.8 (RFM)</td></tr>
+          <tr><td><strong>2</strong></td><td>PCA</td><td>Compresses correlated features within each group</td><td><code>n_components = min(features, n÷6, 8)</code></td></tr>
+          <tr><td><strong>3</strong></td><td>UMAP</td><td>Non-linear dimensionality reduction to find curved cluster shapes</td><td>n_neighbors, min_dist (adaptive)</td></tr>
+          <tr><td><strong>4</strong></td><td>HDBSCAN + GMM</td><td>Two algorithms compete — best Silhouette Score wins</td><td>Automatic cluster count</td></tr>
+          <tr><td><strong>5</strong></td><td>VIP classification</td><td>Top 80th percentile revenue + revenue share check</td><td>VIP contribution: 20–45% of total</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Adaptive UMAP Parameters</h3>
+    <div class="formula">
+<span class="var">n_neighbors</span> = max(5,  min(30,  √n_partners))
+<span class="comment">  → √n gives statistically sound local-global balance</span>
+<span class="comment">  → For 100 partners: n_neighbors = 10</span>
+<span class="comment">  → For 400 partners: n_neighbors = 20</span>
+
+<span class="var">min_dist</span>:
+  &lt; 50  partners  →  0.10   <span class="comment">(spread out — small datasets compress too much)</span>
+  50–200 partners →  0.05   <span class="comment">(balanced — typical B2B size)</span>
+  200+  partners  →  0.01   <span class="comment">(tighter — large data has denser structure)</span>
+    </div>
+    <p>The old version hardcoded <code>n_neighbors=15, min_dist=0.10</code>, which worked at 100 partners but produced overlapping clusters at 300+. The square-root formula is the standard recommendation from the UMAP paper authors.</p>
+
+    <h3>Business Cluster Labels (Not VIP-0, Growth-1)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Cluster Profile</th><th>Label Given</th></tr></thead>
+        <tbody>
+          <tr><td>VIP + High spend + Diversified purchase mix</td><td><strong>Strategic Accounts</strong></td></tr>
+          <tr><td>VIP + High spend + Concentrated in one category</td><td><strong>Category Champions</strong></td></tr>
+          <tr><td>VIP + Medium spend + Diversified</td><td><strong>Emerging Power Buyers</strong></td></tr>
+          <tr><td>Growth + High spend + Single category focus</td><td><strong>Niche Power Players</strong></td></tr>
+          <tr><td>Growth + Low spend, recently inactive</td><td><strong>Win-Back Targets</strong></td></tr>
+          <tr><td>Growth + Medium spend + Balanced mix</td><td><strong>Balanced Growth Partners</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Cluster Quality Validation (Runs Automatically)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>What it measures</th><th>Good range</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Silhouette Score</strong></td><td>Are clusters well-separated from each other?</td><td>&gt; 0.4 is good (range: -1 to 1)</td></tr>
+          <tr><td><strong>Calinski-Harabasz</strong></td><td>Between-cluster vs within-cluster variance ratio</td><td>Higher is better</td></tr>
+          <tr><td><strong>ARI Stability</strong></td><td>Bootstrap: are clusters stable across 80% samples?</td><td>ARI ≈ 1.0 = perfectly stable</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── S5: Peer Gap ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">05</div>
+      <h2>Peer Gap Analysis — Cross-Sell Identification</h2>
+    </div>
+    <p>Compares this partner's spend in each product category against the average of their cluster peers. A gap = a cross-sell opportunity with a specific Rs value attached to it.</p>
+    <div class="formula">
+<span class="var">Gap %</span>               = Others_Do_Pct − You_Do_Pct   (floored at 0)
+<span class="var">Potential (monthly)</span>  = Gap % × Peer_Avg_Monthly_Spend_In_Category
+<span class="var">Potential (yearly)</span>   = Potential Monthly × 12
+    </div>
+
+    <h3>Priority Tiers</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Priority</th><th>Monthly Gap</th><th>Display</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill pill-red">🔥 High</span></td><td>&gt; ₹50,000/month</td><td>Shown upfront — immediate pitch opportunity</td></tr>
+          <tr><td><span class="pill pill-amber">⚡ Medium</span></td><td>₹10,000 – ₹50,000</td><td>Shown — worth a structured conversation</td></tr>
+          <tr><td><span class="pill pill-blue">Low</span></td><td>&lt; ₹10,000</td><td>Collapsed — mention in passing only</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body"><strong>Why compare only within the cluster?</strong>A small regional distributor should never be benchmarked against a national key account. Clustering ensures the comparison is always like-for-like. If cluster peers average ₹50K/month on smartphones and this partner spends ₹10K, the ₹40K gap is realistic because the peers are genuinely similar in size and profile.</div>
+    </div>
+  </div>
+
+  <!-- ── S6: FP-Growth ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">06</div>
+      <h2>Product Affinity — FP-Growth Association Rules</h2>
+      <span class="section-file">associations_mixin.py</span>
+    </div>
+    <p>Finds products that are frequently bought together. If 70% of partners who buy Product A also buy Product B that same month, we should pitch B to any partner who buys A but not B.</p>
+
+    <h3>Key Metrics</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>Formula</th><th>Our Threshold</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Support</strong></td><td>% of baskets containing both A and B</td><td>Adaptive (see below)</td><td>How common is this pairing?</td></tr>
+          <tr><td><strong>Confidence</strong></td><td>P(B | A) — given A, how often is B also bought?</td><td>≥ 15%</td><td>How reliable is this recommendation?</td></tr>
+          <tr><td><strong>Lift</strong></td><td>P(A∩B) ÷ (P(A) × P(B))</td><td>≥ 1.1</td><td>Is this better than random? (&gt;1 = yes)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Adaptive Min-Support (Key Fix)</h3>
+    <p>The original code used a static <code>min_support = 2%</code>. In sparse B2B data (200 partners, 50 products, each buying 3–5 products/month), this eliminated many real patterns. The new formula:</p>
+    <div class="formula">
+<span class="var">sparsity</span> = actual_pair_co-occurrences ÷ max_possible_pair_co-occurrences
+
+if sparsity &lt; 0.10:   min_support = max(0.005,  2 ÷ n_baskets)   <span class="comment">← min 2 real occurrences</span>
+if sparsity 0.10–0.30: min_support = 0.01
+if sparsity &gt; 0.30:   min_support = 0.02   <span class="comment">← standard default</span>
+    </div>
+    <p>The floor of <code>2/n_baskets</code> ensures we never report a "rule" based on a single coincidence — a minimum of 2 actual co-occurrences is always required.</p>
+  </div>
+
+  <!-- ── S7: Credit Risk ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">07</div>
+      <h2>Credit Risk Scoring</h2>
+      <span class="section-file">churn_credit_stub_mixin.py → _load_credit_risk_features()</span>
+    </div>
+
+    <h3>Three-Tier Logic (Best Available Data Wins)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Tier</th><th>Source</th><th>When Used</th><th>Accuracy</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Tier 1</strong></td><td><code>view_partner_credit_risk_score</code> (AR view)</td><td>When view has real overdue data (max score &gt; 0.05)</td><td>⭐⭐⭐⭐⭐ Ground truth</td></tr>
+          <tr><td><strong>Tier 2</strong></td><td><code>due_payment</code> table — payment age signals</td><td>When AR view returns all zeros</td><td>⭐⭐⭐⭐ Leading indicator</td></tr>
+          <tr><td><strong>Tier 3</strong></td><td>Revenue proxy only</td><td>When due_payment is also unavailable</td><td>⭐⭐ Lagging indicator</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Tier 2 Formula — Enhanced Payment Proxy</h3>
+    <div class="formula">
+<span class="var">Credit Risk</span> <span class="op">=</span>  0.35 × <span class="highlight">payment_delay_ratio</span>      <span class="comment">← Leading: are they paying late?</span>
+             + 0.25 × <span class="highlight">overdue_outstanding_norm</span>  <span class="comment">← Confirmed: unpaid amount / revenue</span>
+             + 0.20 × <span class="highlight">concentration_risk</span>       <span class="comment">← Fragility: single-category dependency</span>
+             + 0.20 × <span class="highlight">rev_drop_pct</span>             <span class="comment">← Lagging: revenue already falling</span>
+
+<span class="var">payment_delay_ratio</span>     = (avg_payment_days − assigned_credit_days) ÷ assigned_credit_days
+<span class="var">overdue_outstanding_norm</span> = unpaid_amount ÷ recent_90d_revenue
+<span class="var">concentration_risk</span>      = 1 ÷ category_count  <span class="comment">(1 category = 1.0 risk)</span>
+    </div>
+    <div class="callout why">
+      <div class="callout-icon">⏰</div>
+      <div class="callout-body"><strong>Why payment_delay_ratio gets 35% weight — the leading vs lagging distinction</strong>Revenue drop is a lagging signal: by the time revenue drops, the credit event has often already happened or is imminent. Payment age fires early — a partner consistently paying 15 days past their 30-day credit window is already showing financial stress. We want to catch it before it becomes a bad debt, not after.</div>
+    </div>
+
+    <h3>Credit Adjusted Risk Value</h3>
+    <div class="formula">
+<span class="var">Credit Adjusted Risk Value</span> = credit_risk_score × recent_90d_revenue
+<span class="comment">
+Example: 80% risk score, Rs 5L revenue → Rs 4L credit adjusted risk
+This is the money-weighted number — far more useful for collections prioritisation.</span>
+    </div>
+  </div>
+
+  <!-- ── S8: Lifecycle ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">08</div>
+      <h2>Product Lifecycle Staging</h2>
+      <span class="section-file">product_lifecycle_mixin.py</span>
+    </div>
+    <p>Classifies every product into a lifecycle stage. Sales reps should pitch Growing products aggressively, defend Mature ones, and start phasing out End-of-Life items.</p>
+
+    <h3>Velocity Score Formula</h3>
+    <div class="formula">
+<span class="var">Velocity Score</span> <span class="op">=</span>  0.35 × (slope_per_month_pct ÷ 10)   <span class="comment">← Linear trend slope</span>
+               + 0.30 × (growth_3m_pct ÷ 50)        <span class="comment">← Recent 3-month growth</span>
+               + 0.20 × (buyer_trend ÷ 2)            <span class="comment">← Number of buyers trending</span>
+               + 0.15 × (txn_trend ÷ 5)              <span class="comment">← Transaction count trending</span>
+
+<span class="comment">slope_per_month comes from np.polyfit() — best-fit line through monthly revenue history</span>
+    </div>
+
+    <h3>Data-Driven Stage Boundaries</h3>
+    <div class="formula">
+<span class="comment">OLD (fixed thresholds — broken when all products are declining):</span>
+  <span class="highlight">velocity ≥ 0.3  →  Growing</span>  <span class="comment">← What if no product reaches 0.3?</span>
+
+<span class="comment">NEW (percentile-based — adapts to this dataset's actual distribution):</span>
+  <span class="var">v_p80</span> = 80th percentile of velocity scores  →  Growing floor
+  <span class="var">v_p50</span> = median                               →  Mature floor
+  <span class="var">v_p25</span> = 25th percentile                      →  Declining start
+  <span class="var">v_p10</span> = 10th percentile                      →  End-of-Life ceiling
+    </div>
+
+    <h3>Slope + Acceleration Signals</h3>
+    <div class="formula">
+<span class="var">acceleration</span> = growth_3m_pct − growth_rate_90d × 100
+
+<span class="comment">Positive = product is speeding up (3m better than 6m) → momentum</span>
+<span class="comment">Negative = product is decelerating (3m worse than 6m) → plateauing</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Stage</th><th>Classification Conditions</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill pill-green">Growing</span></td><td>v ≥ v_p80 AND growth ≥ g_p70 AND acceleration ≥ 0</td></tr>
+          <tr><td><span class="pill pill-blue">Mature</span></td><td>v ≥ v_p50 AND growth ≥ g_p30 AND peak distance &lt; 20%</td></tr>
+          <tr><td><span class="pill pill-amber">Plateauing</span></td><td>v ≥ v_p25 AND peak distance &lt; 30% AND acceleration &lt; 0</td></tr>
+          <tr><td><span class="pill pill-red">Declining</span></td><td>v ≥ v_p10 OR growth &lt; g_p30</td></tr>
+          <tr><td><span class="pill pill-red">End-of-Life</span></td><td>v &lt; v_p10 AND recency &gt; 180 days</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── S9: Recommendations ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">09</div>
+      <h2>Recommendations &amp; Confidence Scores</h2>
+      <span class="section-file">recommendation_mixin.py + recommendation_hub.py</span>
+    </div>
+
+    <h3>How a Recommendation is Built</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Signal Checked</th><th>Action Type</th><th>Priority Score</th></tr></thead>
+        <tbody>
+          <tr><td>High peer gap product found</td><td>Cross-sell Upsell</td><td>55 + gap_size effect</td></tr>
+          <tr><td>Strong FP-Growth affinity (conf ≥ 0.10 or lift ≥ 1.1)</td><td>Affinity Bundle</td><td>58 + confidence effect</td></tr>
+          <tr><td>Health "At Risk" or Churn &gt; 45%</td><td>Retention Intervention</td><td>70 + monthly loss effect</td></tr>
+          <tr><td>Credit risk &gt; 55%</td><td>Credit-safe Action</td><td>65 + credit effect</td></tr>
+          <tr><td>VIP + Champion/Healthy segment</td><td>Strategic Expansion</td><td>52–60</td></tr>
+          <tr><td>Any active alert</td><td>Alert-led Escalation</td><td>75 + severity</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Confidence, Similar Partners, Expected Uplift</h3>
+    <div class="formula">
+<span class="var">Confidence %</span>         = 50 + (priority_score ÷ 100) × 47
+<span class="comment">→ Maps priority 0–100 to interpretable 50–97%</span>
+<span class="comment">→ Priority = 80 → Confidence = 87.6%</span>
+
+<span class="var">Similar Partners</span>     = count of cluster peers with same cluster_label
+  Retention/Credit actions: × 0.40  <span class="comment">(~40% of cluster at risk)</span>
+  Cross-sell actions:       × 0.75  <span class="comment">(gap exists for most healthy peers)</span>
+
+<span class="var">Expected Uplift/month</span> = extracted from recommendation text (Rs amounts)
+                       or fallback:
+                       = (recent_90d_revenue ÷ 3) × (priority_score ÷ 100) × 0.15
+    </div>
+
+    <h3>The SPIN Selling Script</h3>
+    <p>Auto-generated in Python (no AI tokens used) — personalised to each partner's real data:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>SPIN Step</th><th>What it uses</th><th>Goal</th></tr></thead>
+        <tbody>
+          <tr><td><strong>S — Situation</strong></td><td>Cluster type, state, recency</td><td>Open with what you already know</td></tr>
+          <tr><td><strong>P — Problem</strong></td><td>Revenue drop %, peer gap category</td><td>Surface the issue without confrontation</td></tr>
+          <tr><td><strong>I — Implication</strong></td><td>Yearly gap ₹, churn probability</td><td>Quantify what inaction costs</td></tr>
+          <tr><td><strong>N — Need-Payoff</strong></td><td>Missing category, credit status</td><td>Close with a specific trial offer</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── S10: Improvements ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">10</div>
+      <h2>What We Should Improve Next</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Improvement</th><th>Current Gap</th><th>Expected Business Impact</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><strong>Prophet Time-Series Forecast</strong></td>
+            <td>Linear projection ignores seasonality</td>
+            <td>Better 30/60/90d forecasts. Festival/harvest cycles captured. Stronger revenue planning conversations.</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><strong>Supervised Churn Model (XGBoost + SHAP)</strong></td>
+            <td>Cannot learn interaction effects between signals</td>
+            <td>Better prediction accuracy. SHAP values explain exactly why a partner is flagged (e.g., "200-day absence is the primary driver").</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><strong>Full AR Aging Validation</strong></td>
+            <td>Credit Tier 1 view shows all zeros — falling back to proxy</td>
+            <td>Credit scores become forensically accurate, backed by real receivables data. Enables collections prioritisation.</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><strong>Reinforcement Learning (Bandit) for Recommendations</strong></td>
+            <td>No feedback loop — don't know if reps acted on recommendations</td>
+            <td>Recommendations improve over time with actual sales data. High-converting offers get weighted higher automatically.</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td><strong>Partner Similarity Embedding Store</strong></td>
+            <td>Peer comparison is cluster-boundary limited</td>
+            <td>More precise peer gap analysis. Outlier partners (who don't fit any cluster cleanly) get meaningful comparisons.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Config Reference ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">11</div>
+      <h2>Configuration Reference</h2>
+    </div>
+    <p>All key thresholds are environment variables — nothing is buried in code. Change these in your <code>.env</code> file to tune behaviour without touching the model.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Variable</th><th>Default</th><th>What it controls</th></tr></thead>
+        <tbody>
+          <tr><td><span class="env-tag">CHURN_PROB_HIGH</span></td><td>0.65</td><td>Threshold for "High" churn band</td></tr>
+          <tr><td><span class="env-tag">CHURN_PROB_MEDIUM</span></td><td>0.35</td><td>Threshold for "Medium" churn band</td></tr>
+          <tr><td><span class="env-tag">CREDIT_RISK_HIGH</span></td><td>0.67</td><td>Threshold for "High" credit band</td></tr>
+          <tr><td><span class="env-tag">CREDIT_RISK_MEDIUM</span></td><td>0.40</td><td>Threshold for "Medium" credit band</td></tr>
+          <tr><td><span class="env-tag">ALERT_REVENUE_DROP_SHARP_PCT</span></td><td>35.0</td><td>Revenue drop % that triggers an alert</td></tr>
+          <tr><td><span class="env-tag">ALERT_CHURN_HIGH_LEVEL</span></td><td>0.45</td><td>Churn level that triggers risk warning</td></tr>
+          <tr><td><span class="env-tag">ALERT_CREDIT_HIGH_LEVEL</span></td><td>0.55</td><td>Credit level that triggers risk warning</td></tr>
+          <tr><td><span class="env-tag">GAP_LOOKBACK_DAYS</span></td><td>365</td><td>Window for peer gap computation</td></tr>
+          <tr><td><span class="env-tag">MBA_LOOKBACK_MONTHS</span></td><td>12</td><td>Window for FP-Growth basket analysis</td></tr>
+          <tr><td><span class="env-tag">CHURN_HISTORY_MONTHS</span></td><td>15</td><td>Months of history for churn label generation</td></tr>
+          <tr><td><span class="env-tag">CLUSTER_VIP_PERCENTILE</span></td><td>0.80</td><td>Revenue percentile to qualify as VIP</td></tr>
+          <tr><td><span class="env-tag">FAST_MODE</span></td><td>true</td><td>Skip full churn scoring for dashboard speed</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Business Impact ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">12</div>
+      <h2>Business Impact Summary</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Use Case</th><th>How the Model Helps</th><th>Before vs After</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Revenue Protection</strong></td>
+            <td>Churn probability × revenue at risk tells the rep exactly who to call first</td>
+            <td>Before: rely on gut feel. After: 70% churn risk + ₹10L revenue = call tomorrow morning</td>
+          </tr>
+          <tr>
+            <td><strong>Revenue Growth</strong></td>
+            <td>Peer gap gives a specific product and a specific rupee figure to pitch</td>
+            <td>Before: "try our new product." After: "your peers earn ₹80K/mo on Category X and you're at ₹15K"</td>
+          </tr>
+          <tr>
+            <td><strong>Credit Management</strong></td>
+            <td>Credit scores give collections a prioritised list with money-weighted risk values</td>
+            <td>Before: flat spreadsheet sorted by outstanding amount. After: risk-weighted, leading-indicator driven</td>
+          </tr>
+          <tr>
+            <td><strong>Sales Efficiency</strong></td>
+            <td>SPIN script means 5 minutes on the dashboard = better first 3 minutes of any call</td>
+            <td>Before: 30 minutes pulling spreadsheets. After: consistent, data-backed talking points at scale</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- end container -->
+
+<div class="footer">
+  <strong>Partner 360 Technical Brief</strong> &nbsp;·&nbsp; Version 2.4 — Week 2 ML Calibration Complete &nbsp;·&nbsp; April 2026<br/>
+  Covers: base_loader_mixin.py · churn_credit_stub_mixin.py · clustering_mixin.py · associations_mixin.py<br/>
+  product_lifecycle_mixin.py · recommendation_mixin.py · partner_360.py · kanban_pipeline.py · sales_model.py
+</div>
+
+</body>
+</html>

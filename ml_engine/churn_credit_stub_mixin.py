@@ -277,6 +277,100 @@ class ChurnCreditStubMixin:
         }
         print(f"[XGBoost] Falling back to rule-based scoring: {reason}")
 
+    def _compute_calibrated_churn_weights(self) -> dict:
+        """
+        Compute data-driven churn signal weights using point-biserial correlations
+        between each feature and auto-generated churn labels.
+
+        Returns a dict of weights {feature_name: weight} that sum to 1.0.
+        Falls back to safe defaults if labeled data is insufficient.
+
+        WHY: Arbitrary constants like 0.30/0.25/0.15 do not reflect which signals
+        actually predict churn in this specific dataset. Correlation-derived weights
+        ensure that whichever signal discriminates best gets the highest weight.
+        """
+        # Safe defaults (original calibration) used as fallback
+        DEFAULTS = {
+            "revenue_drop_pct": 0.30,
+            "recency_days":     0.25,
+            "revenue_volatility": 0.15,
+            "growth_rate_90d":  0.20,
+            "txn_drop":         0.10,
+        }
+
+        try:
+            labeled = self._generate_churn_labels_from_history()
+            if labeled.empty or len(labeled) < 20:
+                print("[ChurnWeights] Insufficient labeled data — using default weights.")
+                return DEFAULTS
+
+            n_churned = int(labeled["churn_label"].sum())
+            if n_churned < 5 or (len(labeled) - n_churned) < 5:
+                print("[ChurnWeights] Too few churned/retained samples — using default weights.")
+                return DEFAULTS
+
+            # Build the same features used in rule-based scoring
+            labeled["revenue_drop_pct"] = np.where(
+                labeled["prev_revenue"] > 0,
+                ((labeled["prev_revenue"] - labeled["curr_revenue"]) / labeled["prev_revenue"] * 100).clip(0, 100),
+                0.0,
+            )
+            labeled["recency_days"] = (
+                pd.Timestamp.now().normalize() -
+                pd.to_datetime(labeled["last_order_date"], errors="coerce")
+            ).dt.days.fillna(365).clip(0, 730)
+            labeled["growth_rate_90d"] = np.where(
+                labeled["prev_revenue"] > 0,
+                ((labeled["curr_revenue"] - labeled["prev_revenue"]) / labeled["prev_revenue"]).clip(-1, 2),
+                0.0,
+            )
+            labeled["revenue_volatility"] = (
+                labeled["curr_revenue"].std() if len(labeled) > 1 else 0.0
+            )
+            labeled["txn_drop"] = np.where(
+                labeled["prev_txns"] > 0,
+                ((labeled["prev_txns"] - labeled["curr_txns"]) / labeled["prev_txns"]).clip(0, 1),
+                0.0,
+            )
+
+            y = labeled["churn_label"].astype(float).values
+            feature_corrs = {}
+            for feat in DEFAULTS:
+                if feat not in labeled.columns:
+                    continue
+                x = labeled[feat].fillna(0).astype(float).values
+                # Point-biserial correlation (equivalent to Pearson for binary y)
+                if x.std() < 1e-9:
+                    feature_corrs[feat] = 0.0
+                    continue
+                try:
+                    corr = float(np.corrcoef(x, y)[0, 1])
+                    # Take absolute value — direction matters for interpretation
+                    # but both strongly positive and strongly negative correlations
+                    # are informative for churn risk scoring.
+                    feature_corrs[feat] = abs(corr) if np.isfinite(corr) else 0.0
+                except Exception:
+                    feature_corrs[feat] = 0.0
+
+            total_corr = sum(feature_corrs.values())
+            if total_corr < 1e-6:
+                print("[ChurnWeights] All correlations near zero — using default weights.")
+                return DEFAULTS
+
+            # Normalize to sum to 1.0
+            calibrated = {k: round(v / total_corr, 4) for k, v in feature_corrs.items()}
+            # Fill any features not in labeled (e.g. revenue_volatility)
+            for k, v in DEFAULTS.items():
+                if k not in calibrated:
+                    calibrated[k] = 0.0
+
+            print(f"[ChurnWeights] Calibrated weights: {calibrated}")
+            return calibrated
+
+        except Exception as exc:
+            print(f"[ChurnWeights] Calibration failed ({exc}) — using default weights.")
+            return DEFAULTS
+
     # ═════════════════════════════════════════════════════════════════════════
     # SCORING: apply XGBoost (or rule-based fallback) to current partners
     # ═════════════════════════════════════════════════════════════════════════
@@ -342,10 +436,26 @@ class ChurnCreditStubMixin:
 
     def _score_churn_rule_based(self, pf: pd.DataFrame):
         """
-        Original rule-based churn scoring — used as fallback.
+        Calibrated rule-based churn scoring.
+
+        Key improvements vs. original:
+        1. Log-transformed recency: np.log1p(days) prevents 10d absence from
+           being treated the same as 200d absence under linear scaling.
+        2. Data-driven weights: computed via point-biserial correlation against
+           auto-generated churn labels (see _compute_calibrated_churn_weights).
+           Falls back to defensible defaults if labeled data is insufficient.
         """
-        rev_drop   = pf.get("revenue_drop_pct", pd.Series(0.0, index=pf.index)).fillna(0).clip(0, 100) / 100.0
-        recency    = pf.get("recency_days", pd.Series(0.0, index=pf.index)).fillna(0).clip(0, 365) / 365.0
+        # --- Feature computation ---
+        rev_drop = pf.get("revenue_drop_pct", pd.Series(0.0, index=pf.index)).fillna(0).clip(0, 100) / 100.0
+
+        # LOG-TRANSFORM recency before normalizing.
+        # WHY: The difference between 10d and 40d absence is far less business-meaningful
+        # than 100d vs 200d. Linear scaling (d/365) under-weights long silences.
+        # np.log1p compresses the scale: log1p(10)≈2.4, log1p(100)≈4.6, log1p(365)≈5.9
+        raw_recency = pf.get("recency_days", pd.Series(0.0, index=pf.index)).fillna(0).clip(0, 730)
+        log_recency_max = float(np.log1p(730))  # max = 2 years
+        recency = (np.log1p(raw_recency) / log_recency_max).clip(0, 1)
+
         revenue    = pf.get("recent_90_revenue", pd.Series(1.0, index=pf.index)).replace(0, 1)
         vol        = pf.get("revenue_volatility", pd.Series(0.0, index=pf.index)).fillna(0)
         cov        = (vol / revenue).clip(0, 2) / 2.0
@@ -358,12 +468,26 @@ class ChurnCreditStubMixin:
             ((prev_txns - recent_txns) / prev_txns).clip(0, 1),
             np.where(recent_txns == 0, 0.5, 0.0),
         )
+
+        # --- Calibrated weights ---
+        # Use cached calibration if already computed this session, else re-compute.
+        weights = getattr(self, "_calibrated_churn_weights", None)
+        if weights is None:
+            weights = self._compute_calibrated_churn_weights()
+            self._calibrated_churn_weights = weights
+
+        w_drop    = weights.get("revenue_drop_pct", 0.30)
+        w_recency = weights.get("recency_days", 0.25)
+        w_vol     = weights.get("revenue_volatility", 0.15)
+        w_growth  = weights.get("growth_rate_90d", 0.20)
+        w_txn     = weights.get("txn_drop", 0.10)
+
         churn_prob = (
-            0.30 * rev_drop
-            + 0.25 * recency
-            + 0.15 * cov
-            + 0.20 * growth_risk
-            + 0.10 * txn_drop
+            w_drop    * rev_drop
+            + w_recency * recency
+            + w_vol     * cov
+            + w_growth  * growth_risk
+            + w_txn     * txn_drop
         ).clip(0.0, 1.0)
 
         # Partners with zero recent revenue → force high churn
@@ -407,10 +531,79 @@ class ChurnCreditStubMixin:
     # CREDIT RISK
     # ═════════════════════════════════════════════════════════════════════════
 
+    def _load_due_payment_signals(self) -> "pd.DataFrame":
+        """
+        Load payment-behaviour signals from the due_payment table.
+
+        Returns a DataFrame indexed by company_name with columns:
+        - payment_age_days:   avg days between bill_date and payment_date
+        - payment_freq_ratio: payments made / orders placed (lower = slower payer)
+        - overdue_outstanding: total outstanding amount still unpaid
+        - payment_concentration: 1-category HHI proxy for revenue concentration risk
+
+        WHY: Revenue-drop % is a lagging indicator of credit risk.
+        Payment age and frequency are LEADING indicators — a partner who is
+        slow to pay is a credit risk even if their revenue is still growing.
+        """
+        engine = getattr(self, "engine", None)
+        if engine is None:
+            return pd.DataFrame()
+        try:
+            query = """
+                SELECT
+                    mp.company_name,
+                    -- Payment age: how long bills sit before payment
+                    AVG(
+                        CASE
+                            WHEN dp.payment_date IS NOT NULL AND dp.bill_date IS NOT NULL
+                            THEN EXTRACT(EPOCH FROM (dp.payment_date::timestamp - dp.bill_date::timestamp)) / 86400.0
+                            ELSE dp.credit_days
+                        END
+                    )                                          AS payment_age_days,
+                    -- Credit days assigned (contracted)
+                    AVG(COALESCE(dp.credit_days, 30))          AS assigned_credit_days,
+                    -- Total billed vs total collected
+                    SUM(COALESCE(dp.amount, 0))                AS total_billed,
+                    SUM(COALESCE(dp.net_amt, 0))               AS total_collected,
+                    COUNT(dp.id)                               AS payment_count,
+                    -- Outstanding (unpaid) amount
+                    SUM(CASE WHEN dp.payment_date IS NULL AND dp.is_active = TRUE
+                             THEN COALESCE(dp.amount, 0) ELSE 0 END) AS overdue_outstanding
+                FROM due_payment dp
+                JOIN master_party mp ON mp.id = dp.contact_id
+                WHERE dp.is_active = TRUE
+                  AND dp.bill_date >= NOW() - INTERVAL '12 months'
+                GROUP BY mp.company_name
+                HAVING COUNT(dp.id) >= 1
+            """
+            import pandas as pd
+            df = pd.read_sql(query, engine)
+            if df.empty:
+                return pd.DataFrame()
+
+            df["payment_age_days"]  = pd.to_numeric(df["payment_age_days"],  errors="coerce").fillna(30)
+            df["assigned_credit_days"] = pd.to_numeric(df["assigned_credit_days"], errors="coerce").fillna(30)
+            df["total_billed"]      = pd.to_numeric(df["total_billed"],      errors="coerce").fillna(0)
+            df["total_collected"]   = pd.to_numeric(df["total_collected"],   errors="coerce").fillna(0)
+            df["overdue_outstanding"] = pd.to_numeric(df["overdue_outstanding"], errors="coerce").fillna(0)
+
+            # Payment delay ratio: how many extra days beyond credit window (clamped 0-1)
+            df["payment_delay_ratio"] = (
+                (df["payment_age_days"] - df["assigned_credit_days"]).clip(lower=0) /
+                df["assigned_credit_days"].clip(lower=1)
+            ).clip(0, 2) / 2.0  # normalise to 0-1
+
+            return df.set_index("company_name")
+
+        except Exception as exc:
+            print(f"[CreditRisk] due_payment signals unavailable ({exc}), using revenue proxy only.")
+            return pd.DataFrame()
+
     def _load_credit_risk_features(self) -> pd.DataFrame:
         """
         Load credit risk data from view_partner_credit_risk_score (real AR data).
-        Falls back to proxy formula if the view is unavailable.
+        Falls back to enhanced proxy formula using due_payment signals if the view
+        is unavailable.
         """
         # ── Try real AR view first ────────────────────────────────────────────
         engine = getattr(self, "engine", None)
@@ -445,19 +638,20 @@ class ChurnCreditStubMixin:
                 import pandas as pd
                 df_cr = pd.read_sql(query, engine)
                 if not df_cr.empty:
-                    # If the view has real overdue data (any score > 0.05), use it directly.
                     score_col = "credit_risk_score"
                     max_score = float(df_cr[score_col].fillna(0).max()) if score_col in df_cr.columns else 0.0
                     if max_score >= 0.05:
                         self.credit_risk_report = {"method": "real_ar_data"}
                         return df_cr
-                    # All scores are ~0 (no overdue in due_payment). Fall through to
-                    # proxy formula so partners get meaningful behavioral credit scores.
                     print(f"[CreditRisk] View loaded but all scores = 0 (no overdue data). Using behavioral proxy.")
             except Exception as exc:
                 print(f"[CreditRisk] view_partner_credit_risk_score unavailable, using proxy: {exc}")
 
-        # ── Fallback: proxy formula from partner features ─────────────────────
+        # ── Enhanced fallback: proxy using due_payment signals ────────────────
+        # WHY: The original formula  0.40*rev_drop + 0.35*recency + 0.25*cov
+        # is a lagging indicator — revenue must already be dropping before credit
+        # risk is flagged. Payment age + frequency from due_payment are LEADING
+        # signals that fire before revenue drops.
         pf = getattr(self, "df_partner_features", None)
         if pf is None or pf.empty:
             return pd.DataFrame()
@@ -466,14 +660,62 @@ class ChurnCreditStubMixin:
         if "company_name" not in df.columns and "index" in df.columns:
             df = df.rename(columns={"index": "company_name"})
 
+        # -- Legacy revenue-based signals (still useful as lagging confirmation) --
         rev_drop = df.get("revenue_drop_pct", pd.Series(0.0)).fillna(0).clip(0, 100) / 100.0
-        recency  = df.get("recency_days", pd.Series(0.0)).fillna(0).clip(0, 365) / 365.0
         vol      = df.get("revenue_volatility", pd.Series(0.0)).fillna(0)
         revenue  = df.get("recent_90_revenue", pd.Series(1.0)).replace(0, 1)
         cov      = (vol / revenue).clip(0, 2) / 2.0
-        overdue_proxy = ((recency + rev_drop) / 2).clip(0, 1)
 
-        df["credit_risk_score"]          = (0.40 * rev_drop + 0.35 * recency + 0.25 * cov).clip(0, 1).round(4)
+        # Revenue concentration: single-product dependency = higher credit risk
+        # (If partner revenue is from 1 category, any disruption = default risk)
+        cat_count = df.get("category_count", pd.Series(3.0)).fillna(3).clip(lower=1)
+        concentration_risk = (1.0 / cat_count.clip(lower=1)).clip(0, 1)
+
+        # -- due_payment signals (payment age + frequency) --
+        pay_signals = self._load_due_payment_signals()
+        has_pay_signals = not pay_signals.empty
+
+        if has_pay_signals:
+            # Merge payment delay ratio into df
+            df["_payment_delay"] = (
+                pay_signals["payment_delay_ratio"]
+                .reindex(df["company_name"])
+                .values
+            )
+            df["_overdue_outstanding"] = (
+                pay_signals["overdue_outstanding"]
+                .reindex(df["company_name"])
+                .values
+            )
+            payment_delay = df["_payment_delay"].fillna(0.15).clip(0, 1)  # default 15% delay
+            overdue_norm  = (
+                df["_overdue_outstanding"].fillna(0) /
+                revenue.clip(lower=1)
+            ).clip(0, 1)
+
+            # Weighted formula with payment signals
+            # WHY: payment_delay is the strongest leading signal (35%)
+            #      overdue_outstanding confirms materialisation (25%)
+            #      revenue concentration = fragility (20%)
+            #      revenue drop = lagging confirmation (20%)
+            df["credit_risk_score"] = (
+                0.35 * payment_delay
+                + 0.25 * overdue_norm
+                + 0.20 * concentration_risk
+                + 0.20 * rev_drop
+            ).clip(0, 1).round(4)
+            self.credit_risk_report = {"method": "due_payment_enhanced_proxy"}
+            print("[CreditRisk] Using enhanced proxy with due_payment payment-age signals.")
+        else:
+            # Original formula — pure revenue-based, last resort
+            recency = df.get("recency_days", pd.Series(0.0)).fillna(0).clip(0, 365) / 365.0
+            df["credit_risk_score"] = (
+                0.40 * rev_drop + 0.35 * recency + 0.25 * cov
+            ).clip(0, 1).round(4)
+            self.credit_risk_report = {"method": "rule_based_proxy"}
+            print("[CreditRisk] Using original revenue-proxy (no due_payment data).")
+
+        overdue_proxy = ((df.get("recency_days", pd.Series(0.0)).fillna(0).clip(0, 365) / 365.0 + rev_drop) / 2).clip(0, 1)
         df["overdue_ratio"]              = overdue_proxy.round(4)
         df["credit_utilization"]         = rev_drop.round(4)
         df["outstanding_amount"]         = (
@@ -482,7 +724,6 @@ class ChurnCreditStubMixin:
         df["credit_adjusted_risk_value"] = (
             df["credit_risk_score"] * df.get("recent_90_revenue", pd.Series(0.0)).fillna(0)
         ).round(2)
-        self.credit_risk_report = {"method": "rule_based_proxy"}
         return df
 
     def _score_credit_risk(self):
@@ -579,11 +820,17 @@ class ChurnCreditStubMixin:
         r_txns     = float(pd.to_numeric(row.get("recent_txns", 0), errors="coerce") or 0)
         p_txns     = float(pd.to_numeric(row.get("prev_txns", 0), errors="coerce") or 0)
 
-        s_rev_drop = 0.30 * min(rev_drop / 100.0, 1.0)
-        s_recency  = 0.25 * min(recency / 365.0, 1.0)
-        s_vol      = 0.15 * min((volatility / revenue) / 2.0, 1.0)
-        s_growth   = 0.20 * max(0.0, (-growth + 1) / 2.0)
-        s_txn      = 0.10 * (max(0, (p_txns - r_txns) / max(p_txns, 1)) if p_txns > 0 else 0.5)
+        # Use same log-transform and calibrated weights as _score_churn_rule_based
+        weights = getattr(self, "_calibrated_churn_weights", {
+            "revenue_drop_pct": 0.30, "recency_days": 0.25, "revenue_volatility": 0.15,
+            "growth_rate_90d": 0.20, "txn_drop": 0.10,
+        })
+        log_recency_max = float(np.log1p(730))
+        s_rev_drop = weights.get("revenue_drop_pct", 0.30) * min(rev_drop / 100.0, 1.0)
+        s_recency  = weights.get("recency_days", 0.25) * min(np.log1p(recency) / log_recency_max, 1.0)
+        s_vol      = weights.get("revenue_volatility", 0.15) * min((volatility / revenue) / 2.0, 1.0)
+        s_growth   = weights.get("growth_rate_90d", 0.20) * max(0.0, (-growth + 1) / 2.0)
+        s_txn      = weights.get("txn_drop", 0.10) * (max(0, (p_txns - r_txns) / max(p_txns, 1)) if p_txns > 0 else 0.5)
 
         shap_values = {
             "Revenue Drop %":       round(s_rev_drop, 4),

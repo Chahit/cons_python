@@ -544,11 +544,25 @@ class ClusteringMixin:
 
         try:
             import umap
-            n_neighbors = max(5, min(15, n_samples // 5))
+            # Adaptive n_neighbors: sqrt(n) gives good local/global balance.
+            # Clamped: min 5 (too low = noisy), max 30 (too high = global structure lost).
+            # WHY: default formula n_samples//5 undershoots for large datasets (200+ partners).
+            n_neighbors = max(5, min(30, int(np.sqrt(n_samples))))
+
+            # Adaptive min_dist based on dataset size.
+            # WHY: small datasets need spread-out embeddings (0.1) to avoid over-compression;
+            # large datasets need tighter clustering (0.01) to separate dense groups.
+            if n_samples < 50:
+                min_dist = 0.10   # spread out — small datasets compress too much
+            elif n_samples <= 200:
+                min_dist = 0.05   # balanced — typical size
+            else:
+                min_dist = 0.01   # tighter — large datasets have denser structure
+
             reducer = umap.UMAP(
                 n_components=target_dim,
                 n_neighbors=n_neighbors,
-                min_dist=0.05,
+                min_dist=min_dist,
                 metric="euclidean",
                 random_state=42,
                 low_memory=True,
@@ -558,7 +572,8 @@ class ClusteringMixin:
                 X_umap, index=features.index,
                 columns=[f"umap_{i}" for i in range(target_dim)]
             )
-            print(f"[Clustering] PCA→UMAP: {len(features.columns)} raw → {X_pca.shape[1]} PCA → {target_dim} UMAP dims")
+            print(f"[Clustering] PCA→UMAP: {len(features.columns)} raw → {X_pca.shape[1]} PCA → {target_dim} UMAP dims "
+                  f"(n_neighbors={n_neighbors}, min_dist={min_dist})")
         except ImportError:
             # umap-learn not installed — use PCA output directly
             result = pd.DataFrame(X_pca, index=features.index,
@@ -1481,11 +1496,11 @@ Rules:
 3. Keep the tier prefix (VIP or Growth) but replace the generic number
 4. Do NOT use generic labels like "Cluster A" or "Group 1"
 
-Respond ONLY with a JSON object mapping original label to new label. Example:
-{{{{
+Respond ONLY with a valid JSON object. No explanation, no markdown fences. Example:
+{{
   "VIP-0": "VIP — Premium Multi-Category Leaders",
   "Growth-1": "Growth — Emerging Niche Specialists"
-}}}}"""
+}}"""
 
         try:
             text_out, err = self._call_gemini_recommendation(
@@ -1494,21 +1509,26 @@ Respond ONLY with a JSON object mapping original label to new label. Example:
             if err or not text_out:
                 return {}
 
-            # Extract JSON from response
+            # Extract JSON from response — handle both raw JSON and ```-fenced output
             text_clean = text_out.strip()
-            if text_clean.startswith("```"):
+            if "```" in text_clean:
                 lines = text_clean.split("\n")
                 text_clean = "\n".join(
                     l for l in lines if not l.strip().startswith("```")
-                )
+                ).strip()
+            # Find JSON boundaries in case LLM prepended/appended prose
+            start = text_clean.find("{")
+            end   = text_clean.rfind("}") + 1
+            if start != -1 and end > start:
+                text_clean = text_clean[start:end]
             mapping = json.loads(text_clean)
             if not isinstance(mapping, dict):
                 return {}
 
-            # Validate: all values must be non-empty strings
+            # Validate: labels must be meaningful strings (3– 80 chars)
             result = {}
             for old, new in mapping.items():
-                if isinstance(new, str) and len(new.strip()) > 2:
+                if isinstance(new, str) and 3 <= len(new.strip()) <= 80:
                     result[str(old)] = new.strip()
             return result
         except Exception:
@@ -1516,69 +1536,98 @@ Respond ONLY with a JSON object mapping original label to new label. Example:
 
     def _generate_cluster_labels_heuristic(self, profiles):
         """
-        Generate descriptive labels without LLM, using centroid features.
+        Generate business-meaningful cluster labels without LLM, using centroid profiles.
+
+        Labels use recognizable business archetypes (Strategic Accounts, Category Champions,
+        Win-Back Targets, etc.) rather than generic descriptors.
         Fallback when OpenAI API key is not available.
         """
         if not profiles:
             return {}
 
+        # Business archetype definitions.
+        # Each archetype is matched by a combination of spend level + breadth + concentration.
+        # Priority order: more specific matches take precedence.
+        ARCHETYPES = [
+            # VIP archetypes
+            ("VIP",    "High-spend",   "diversified",      None,               "Strategic Accounts"),
+            ("VIP",    "High-spend",   None,               "highly concentrated", "Category Champions"),
+            ("VIP",    "High-spend",   "moderate",         None,               "Core Revenue Drivers"),
+            ("VIP",    "High-spend",   "focused",          None,               "Anchor Specialists"),
+            ("VIP",    "Medium-spend", "diversified",      None,               "Emerging Power Buyers"),
+            ("VIP",    "Medium-spend", None,               None,               "Steady Contributors"),
+            ("VIP",    "Low-spend",    None,               None,               "Rising VIPs"),
+            # Growth archetypes
+            ("Growth", None,           None,               None,               None),  # fallthrough
+        ]
+        GROWTH_ARCHETYPES = [
+            ("High-spend",   "diversified",  None,               "High-Growth Partners"),
+            ("High-spend",   None,           "highly concentrated", "Niche Power Players"),
+            ("High-spend",   None,           None,               "High-Volume Accounts"),
+            ("Medium-spend", "diversified",  None,               "Balanced Growth Partners"),
+            ("Medium-spend", "focused",      None,               "Category Growth Specialists"),
+            ("Medium-spend", None,           None,               "Mid-Tier Growing Accounts"),
+            ("Low-spend",    None,           None,               "Win-Back Targets"),
+        ]
+
         result = {}
-        # Track seen labels to avoid collisions
-        seen_labels = {}
+        seen_labels = {}   # base_label → first cluster_num that used it
+
         for label, profile in profiles.items():
             parts = label.split("-", 1)
-            tier = parts[0] if parts else "Cluster"
+            tier = parts[0] if parts else "Cluster"   # "VIP" or "Growth"
             cluster_num = parts[1] if len(parts) > 1 else "0"
 
-            # Spend level
-            if "High-spend" in profile:
-                spend_level = "High-Value"
-            elif "Medium-spend" in profile:
-                spend_level = "Mid-Tier"
-            elif "Low-spend" in profile:
-                spend_level = "Emerging"
-            else:
-                spend_level = ""
+            # Extract profile signals
+            is_high   = "High-spend" in profile
+            is_med    = "Medium-spend" in profile
+            is_low    = "Low-spend" in profile
+            is_div    = "diversified" in profile
+            is_mod    = "moderate" in profile
+            is_foc    = "focused" in profile or "narrow" in profile
+            is_conc   = "highly concentrated" in profile
+            is_well   = "well-distributed" in profile
 
-            # Breadth
-            if "diversified" in profile:
-                breadth = "Diversified"
-            elif "moderate" in profile:
-                breadth = "Balanced"
-            elif "focused" in profile or "narrow" in profile:
-                breadth = "Specialist"
-            else:
-                breadth = ""
+            spend_level = "High-spend" if is_high else ("Medium-spend" if is_med else "Low-spend")
+            breadth_str = "diversified" if is_div else ("moderate" if is_mod else ("focused" if is_foc else None))
+            conc_str    = "highly concentrated" if is_conc else None
 
-            # Concentration
-            if "highly concentrated" in profile:
-                concentration = "Category-Focused"
-            elif "well-distributed" in profile:
-                concentration = "Multi-Category"
-            else:
-                concentration = ""
+            # Match archetype
+            archetype_name = None
 
-            # Top category name (e.g. "Lubricants")
-            top_cat = ""
-            if "Top categories:" in profile:
-                cat_section = profile.split("Top categories:")[1].strip().rstrip(".")
-                first_cat = cat_section.split(",")[0].strip()
-                if "(" in first_cat:
-                    top_cat = first_cat.split("(")[0].strip()
+            if tier == "VIP":
+                for (t, sp, br, cn, name) in ARCHETYPES:
+                    if t != "VIP":
+                        continue
+                    if sp and sp not in profile:
+                        continue
+                    if br and br not in profile:
+                        continue
+                    if cn and cn not in profile:
+                        continue
+                    archetype_name = name
+                    break
+                if archetype_name is None:
+                    archetype_name = "Key Accounts"
 
-            # Build descriptive base label
-            descriptors = [d for d in [spend_level, breadth or concentration] if d]
-            if top_cat and len(top_cat) < 25:
-                descriptors.append(f"{top_cat}")
+            else:  # Growth
+                for (sp, br, cn, name) in GROWTH_ARCHETYPES:
+                    if sp and sp not in profile:
+                        continue
+                    if br and br not in profile:
+                        continue
+                    if cn and cn not in profile:
+                        continue
+                    archetype_name = name
+                    break
+                if archetype_name is None:
+                    archetype_name = "Developing Partners"
 
-            if descriptors:
-                base_label = f"{tier} — {' · '.join(descriptors[:2])}"
-            else:
-                base_label = f"{tier} — Segment {cluster_num}"
+            base_label = f"{tier} — {archetype_name}"
 
             # Deduplicate: if this base_label was already used, append cluster number
             if base_label in seen_labels:
-                new_label = f"{base_label} #{cluster_num}"
+                new_label = f"{base_label} {cluster_num}"
             else:
                 new_label = base_label
                 seen_labels[base_label] = cluster_num

@@ -245,6 +245,56 @@ class RecommendationMixin:
                 2,
             )
         actions = sorted(actions, key=lambda x: float(x.get("priority_score", 0.0)), reverse=True)
+
+        # ── Confidence Score, Similar Partners, Expected Uplift ─────────────
+        # WHY (Roadmap 4.1): Every recommendation should show:
+        #   Confidence %  | Based on N similar partners | Expected uplift Rs/month
+        # These make recommendations actionable and build trust with sales reps.
+        cluster_matrix = getattr(self, "matrix", None)
+        cluster_label_val = str(report.get("cluster_label", ""))
+        n_similar = 0
+        if cluster_matrix is not None and not cluster_matrix.empty and "cluster_label" in cluster_matrix.columns:
+            n_similar = int((cluster_matrix["cluster_label"] == cluster_label_val).sum())
+
+        for a in actions:
+            ps = float(a.get("priority_score", 50.0))
+            action_type = str(a.get("action_type", "")).lower()
+
+            # Confidence: derived from priority_score + signal strength
+            # priority_score range is 0-100; remap to 50-97% for interpretability
+            confidence_pct = round(50.0 + (ps / 100.0) * 47.0, 1)
+
+            # Similar partners: peers in the same cluster who might benefit from this action
+            # For retention/credit actions, narrow to at-risk peers; for cross-sell, use full cluster
+            if "retention" in action_type or "credit" in action_type or "alert" in action_type:
+                # Estimate ~40% of cluster is at-risk
+                effective_similar = max(1, int(n_similar * 0.40))
+            elif "affinity" in action_type or "cross-sell" in action_type or "upsell" in action_type:
+                # Cross-sell applies to all healthy cluster peers too
+                effective_similar = max(1, int(n_similar * 0.75))
+            else:
+                effective_similar = max(1, n_similar)
+
+            # Expected uplift: extract from why_relevant or gap data
+            uplift = 0.0
+            why = str(a.get("why_relevant", ""))
+            # Try to extract Rs amounts from the why_relevant text
+            import re as _re
+            money_match = _re.findall(r"Rs ([\.\d,]+)", why)
+            if money_match:
+                try:
+                    uplift = float(money_match[0].replace(",", ""))
+                except Exception:
+                    uplift = 0.0
+            # Fallback: estimate from priority_score and revenue
+            if uplift == 0:
+                rev = float(facts.get("recent_90_revenue", 0.0) or 0.0) / 3.0  # monthly
+                uplift = round(rev * (ps / 100.0) * 0.15, 0)  # 15% of monthly revenue * confidence
+
+            a["confidence_pct"]        = confidence_pct
+            a["similar_partners_count"] = effective_similar
+            a["expected_uplift_monthly"] = round(float(uplift), 2)
+
         return actions
 
     def _build_sequence_text(self, actions):

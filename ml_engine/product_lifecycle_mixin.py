@@ -211,8 +211,80 @@ class ProductLifecycleMixin:
             })
 
         result = pd.DataFrame(records)
-        if not result.empty:
-            result = result.sort_values("velocity_score", ascending=False).reset_index(drop=True)
+        if result.empty:
+            return result
+
+        # ── Data-driven lifecycle stage classification ───────────────────────
+        # WHY: Fixed thresholds (e.g. velocity >= 0.3) do not adapt to the actual
+        # spread of products in this dataset. If all products are declining, fixed
+        # thresholds push everyone into "End-of-Life" or vice versa.
+        # Using percentiles of the computed velocity_score and growth_3m_pct gives
+        # stage boundaries that reflect THIS dataset's actual distribution.
+        v_scores = result["velocity_score"]
+        g_scores = result["growth_3m_pct"]
+
+        # Compute percentile boundaries
+        v_p80 = float(v_scores.quantile(0.80))  # Top 20% = Growing
+        v_p50 = float(v_scores.quantile(0.50))  # Median    = Mature
+        v_p25 = float(v_scores.quantile(0.25))  # Bottom 25% = Declining start
+        v_p10 = float(v_scores.quantile(0.10))  # Bottom 10% = End-of-Life
+
+        g_p70 = float(g_scores.quantile(0.70))  # Top 30% growth rate
+        g_p30 = float(g_scores.quantile(0.30))  # Below 30th = weak growth
+
+        # Clamp percentile thresholds so they remain interpretable:
+        # Growing must have positive velocity; End-of-Life must be negative.
+        v_p80 = max(v_p80, 0.05)   # Growing floor
+        v_p10 = min(v_p10, -0.05)  # EOL ceiling
+
+        def _classify_stage(row):
+            v = row["velocity_score"]
+            g = row["growth_3m_pct"]      # slope: rate of change in recent 3 months
+            peak_dist = row["peak_distance_pct"]
+            # Acceleration proxy: difference between recent slope (3m) and longer slope (6m/90d)
+            # If growth is accelerating (3m > 6m), the product is gaining momentum.
+            # If decelerating (3m < 6m), even positive growth may be plateauing.
+            g_90 = float(row.get("growth_rate_90d", 0.0) or 0.0) * 100.0  # normalise to %
+            accel = g - g_90  # positive = accelerating, negative = decelerating
+
+            # End-of-Life: slope strongly negative AND product hasn't been ordered recently
+            # Roadmap definition: slope << 0 AND recency > 180 days
+            recency_d = float(row.get("recency_days", 0.0) or 0.0)
+            if v < v_p10 and recency_d > 180:
+                return "End-of-Life"
+
+            # Growing: top velocity AND positive slope AND accelerating
+            # Roadmap: slope > 0 AND acceleration > 0
+            if v >= v_p80 and g >= g_p70 and accel >= 0:
+                return "Growing"
+
+            # Mature: above median velocity AND slope near zero AND low volatility
+            # Roadmap: slope ≈ 0 AND low volatility
+            # We use: g in bottom-to-top 30-70th range AND peak_dist < 20
+            if v >= v_p50 and g >= g_p30 and peak_dist < 20:
+                return "Mature"
+
+            # Plateauing: slope near zero BUT high volatility (decelerating)
+            # Roadmap: slope ≈ 0 AND high volatility
+            if v >= v_p25 and peak_dist < 30 and accel < 0:
+                return "Plateauing"
+
+            # Declining: slope < 0 (negative recent growth)
+            # Roadmap: slope < 0
+            if v >= v_p10 or g < g_p30:
+                return "Declining"
+
+            # Fallback End-of-Life
+            return "End-of-Life"
+
+        result["lifecycle_stage"] = result.apply(_classify_stage, axis=1)
+
+        print(
+            f"[Lifecycle] Data-driven thresholds: v_p80={v_p80:.3f}, v_p50={v_p50:.3f}, "
+            f"v_p25={v_p25:.3f}, v_p10={v_p10:.3f} | g_p70={g_p70:.1f}%, g_p30={g_p30:.1f}%"
+        )
+
+        result = result.sort_values("velocity_score", ascending=False).reset_index(drop=True)
         return result
 
     # -----------------------------------------------------------------------

@@ -117,6 +117,22 @@ def _build_kanban_df(_pf_df):
                 "recency_days", "expected_revenue_at_risk_90d"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
+    # Fallback: if churn scoring was skipped (fast_mode=True) the
+    # expected_revenue_at_risk_90d column may be 0 even though churn_probability
+    # is non-zero. In that case compute it inline so the Kanban always shows
+    # meaningful risk values.
+    # Formula: churn_probability × recent_90_revenue (probability-weighted loss).
+    # WHY: This is the same formula used in churn_credit_stub_mixin when full
+    # scoring runs — applying it here as a fallback ensures consistency.
+    zero_risk_mask = df["expected_revenue_at_risk_90d"] == 0.0
+    has_churn_prob = df["churn_probability"] > 0.0
+    fallback_mask = zero_risk_mask & has_churn_prob
+    if fallback_mask.any():
+        df.loc[fallback_mask, "expected_revenue_at_risk_90d"] = (
+            df.loc[fallback_mask, "churn_probability"]
+            * df.loc[fallback_mask, "recent_90_revenue"]
+        ).round(2)
+
     return df
 
 

@@ -116,32 +116,67 @@ def render(ai):
                 return re.sub('<[^<]+?>', '', str(text)).strip()
 
             df_display = df.copy()
-            
-            # Map icons for a premium look
+
             icon_map = {
-                "up-sell": "📈", "cross-sell": "🛒", "rescue": "🚨", "retention": "🔄", "affinity": "📦"
+                "up-sell": "📈", "cross-sell": "🛒", "rescue": "🚨",
+                "retention": "🔄", "affinity": "📦", "strategic": "♟️",
+                "alert": "⚠️", "nurture": "🌱", "credit": "🔒",
             }
-            
-            df_display["Type"] = df_display["action_type"].apply(lambda x: f"{icon_map.get(next((k for k in icon_map if k in str(x).lower()), ''), '📦')} {str(x).upper()}")
-            df_display["Recommendation"] = df_display["recommended_offer"]
-            df_display["Logic"] = df_display["why_relevant"].apply(clean_html)
-            df_display["Execution"] = df_display["suggested_sequence"].apply(clean_html)
-            df_display["Priority"] = df_display["priority_score"]
-            
-            # Show the table — no column_config, all columns pre-formatted as strings
-            reco_disp = df_display[["Priority", "Type", "Recommendation", "Logic", "Execution"]].copy()
-            reco_disp["Priority"] = reco_disp["Priority"].apply(
-                lambda v: f"{float(v):.0f}" if v == v else "0"
+
+            df_display["Type"] = df_display["action_type"].apply(
+                lambda x: f"{icon_map.get(next((k for k in icon_map if k in str(x).lower()), ''), '📦')} {str(x).upper()}"
             )
+            df_display["Offer"]     = df_display["recommended_offer"]
+            df_display["Why?"]      = df_display["why_relevant"].apply(clean_html)
+            df_display["Next Step"] = df_display["suggested_sequence"].apply(clean_html)
+
+            # Roadmap 4.1 — Confidence + Similar Partners + Expected Uplift
+            df_display["Confidence"] = df_display["confidence_pct"].apply(
+                lambda v: f"{float(v):.0f}%" if pd.notna(v) else "—"
+            ) if "confidence_pct" in df_display.columns else "—"
+            df_display["Based On"] = df_display["similar_partners_count"].apply(
+                lambda v: f"{int(float(v))} peers" if pd.notna(v) else "—"
+            ) if "similar_partners_count" in df_display.columns else "—"
+            df_display["Est. Uplift/mo"] = df_display["expected_uplift_monthly"].apply(
+                lambda v: f"Rs {int(float(v)):,}" if pd.notna(v) and float(v) > 0 else "—"
+            ) if "expected_uplift_monthly" in df_display.columns else "—"
+
+            # Display top action confidence badges prominently
+            top_action = df_display.iloc[0] if not df_display.empty else None
+            if top_action is not None:
+                b1, b2, b3 = st.columns(3)
+                with b1:
+                    st.markdown(
+                        f"<div style='background:#1e3a5f;border-radius:10px;padding:10px 14px;text-align:center;'>"
+                        f"<div style='color:#93c5fd;font-size:0.75em;letter-spacing:1px;'>CONFIDENCE</div>"
+                        f"<div style='color:#eff6ff;font-size:1.6em;font-weight:700;'>{top_action.get('Confidence','—')}</div>"
+                        f"</div>", unsafe_allow_html=True,
+                    )
+                with b2:
+                    st.markdown(
+                        f"<div style='background:#1a3a2f;border-radius:10px;padding:10px 14px;text-align:center;'>"
+                        f"<div style='color:#6ee7b7;font-size:0.75em;letter-spacing:1px;'>BASED ON</div>"
+                        f"<div style='color:#ecfdf5;font-size:1.6em;font-weight:700;'>{top_action.get('Based On','—')}</div>"
+                        f"</div>", unsafe_allow_html=True,
+                    )
+                with b3:
+                    st.markdown(
+                        f"<div style='background:#3b1f00;border-radius:10px;padding:10px 14px;text-align:center;'>"
+                        f"<div style='color:#fcd34d;font-size:0.75em;letter-spacing:1px;'>EXPECTED UPLIFT/MONTH</div>"
+                        f"<div style='color:#fffbeb;font-size:1.6em;font-weight:700;'>{top_action.get('Est. Uplift/mo','—')}</div>"
+                        f"</div>", unsafe_allow_html=True,
+                    )
+                st.markdown("<br/>", unsafe_allow_html=True)
+
+            reco_disp = df_display[[
+                "Confidence", "Based On", "Est. Uplift/mo",
+                "Type", "Offer", "Why?", "Next Step",
+            ]].copy()
             for _rc in reco_disp.select_dtypes(include=["object"]).columns:
                 reco_disp[_rc] = reco_disp[_rc].fillna("").astype(str)
-            reco_disp = reco_disp.sort_values("Priority", ascending=False)
-            reco_disp = reco_disp.rename(columns={
-                "Priority": "Confidence", "Type": "Category",
-                "Recommendation": "Offer", "Logic": "Why This?", "Execution": "Next Step",
-            })
             st.dataframe(reco_disp, use_container_width=True, hide_index=True)
             st.markdown("---")
+
 
     # ======================================================================
     # FP-Growth Predictive Bundles

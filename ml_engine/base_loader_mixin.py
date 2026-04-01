@@ -105,8 +105,45 @@ class BaseLoaderMixin:
             return
         self.ensure_core_loaded()
         self._timed_step("model.clustering", self.run_clustering)
+        # Inject auto-named cluster labels into df_partner_features so every tab
+        # (Kanban, Partner 360, Chatbot, Monitoring) sees meaningful labels
+        # like "VIP — High-Value · Diversified" instead of "VIP-0".
+        self._merge_cluster_labels_to_features()
         self._clustering_ready = True
         self._clustering_loaded_at = time.time()
+
+    def _merge_cluster_labels_to_features(self):
+        """
+        Bridge: push cluster_label, cluster_type, cluster, and strategic_tag from
+        self.matrix into self.df_partner_features after every clustering run.
+
+        Without this step, df_partner_features keeps default empty cluster columns
+        (set during _load_partner_features) and all tabs show blank cluster info.
+
+        Called by ensure_clustering() so it runs automatically after clustering.
+        """
+        if self.matrix is None or self.matrix.empty:
+            return
+        if self.df_partner_features is None or self.df_partner_features.empty:
+            return
+
+        cluster_cols = ["cluster_label", "cluster_type", "cluster", "strategic_tag"]
+        for col in cluster_cols:
+            if col in self.matrix.columns:
+                self.df_partner_features[col] = (
+                    self.matrix[col].reindex(self.df_partner_features.index)
+                )
+
+        # Partners not covered by clustering (new, inactive, or <3 transactions)
+        # get neutral defaults so downstream code never sees NaN.
+        if "cluster_label" in self.df_partner_features.columns:
+            self.df_partner_features["cluster_label"] = (
+                self.df_partner_features["cluster_label"].fillna("Uncategorized")
+            )
+        if "cluster_type" in self.df_partner_features.columns:
+            self.df_partner_features["cluster_type"] = (
+                self.df_partner_features["cluster_type"].fillna("Growth")
+            )
 
     def ensure_churn_forecast(self):
         if self._churn_ready and not self._is_stale(
@@ -287,7 +324,11 @@ class BaseLoaderMixin:
         # Derive revenue proxy columns expected by downstream components
         rev_col = "total_revenue" if "total_revenue" in features.columns else "total_spend"
         features["recent_90_revenue"] = features.get(rev_col, pd.Series(0.0, index=features.index))
-        features["prev_90_revenue"] = features["recent_90_revenue"] * 0.9
+        # In the fallback path we don't have the 90-180 day split.
+        # Use flat assumption (prev = recent) — neutral and honest.
+        # The old `* 0.9` implied all partners dropped 11% which was wrong:
+        # it inflated churn scores uniformly and made revenue_drop_pct misleading.
+        features["prev_90_revenue"] = features["recent_90_revenue"].copy()
         features["revenue_drop_pct"] = 0.0
         features["growth_rate_90d"] = 0.0
 
@@ -459,7 +500,11 @@ class BaseLoaderMixin:
     def _add_health_scores(self, features):
         revenue_strength = self._normalize(np.log1p(features["recent_90_revenue"]))
         growth_trend = self._normalize(features["growth_rate_90d"].clip(-1.0, 1.5))
-        recency_activity = 1.0 - self._normalize(features["recency_days"])
+        # LOG-TRANSFORM recency before normalizing into the health score.
+        # WHY: Linear normalization treats absence of 10d vs 40d identically to 100d vs 200d.
+        # np.log1p compresses short absences — a partner gone 10 days is barely penalized,
+        # while one gone 200+ days is heavily penalized. This matches real sales urgency.
+        recency_activity = 1.0 - self._normalize(np.log1p(features["recency_days"].clip(lower=0)))
         stability = 1.0 - self._normalize(np.log1p(features["revenue_volatility"]))
 
         features["health_score"] = (
@@ -482,6 +527,19 @@ class BaseLoaderMixin:
         features["estimated_monthly_loss"] = (
             (features["prev_90_revenue"] - features["recent_90_revenue"]).clip(lower=0) / 3.0
         )
+
+        # Revenue at risk — trend-based baseline.
+        # Formula: absolute revenue lost over the past 90 days (prev - recent, floor 0).
+        # This gives a meaningful non-zero value immediately from health scoring,
+        # even before churn scoring runs. When _score_partner_churn_risk() runs,
+        # it overwrites this with the more accurate formula:
+        #   expected_revenue_at_risk_90d = churn_probability × recent_90_revenue
+        # which is better because it accounts for partners who are declining slowly
+        # (still positive revenue, but high churn probability).
+        features["expected_revenue_at_risk_90d"] = (
+            (features["prev_90_revenue"] - features["recent_90_revenue"]).clip(lower=0)
+        )
+        features["expected_revenue_at_risk_monthly"] = features["estimated_monthly_loss"].copy()
 
         segments = []
         statuses = []

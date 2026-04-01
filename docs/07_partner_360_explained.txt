@@ -1,0 +1,1111 @@
+PARTNER 360 - COMPLETE IMPLEMENTATION EXPLAINER
+================================================
+
+Purpose
+-------
+This document explains how the Partner 360 module works in the current codebase:
+
+- what data it uses
+- what formulas it applies
+- what ML or heuristic methods are involved
+- why those methods were chosen
+- what alternatives could be used
+- whether the current choice is the best one
+- what should be improved next
+- what business value the module creates
+
+This is based on the current implementation in:
+
+- frontend/tabs/partner_360.py
+- ml_engine/base_loader_mixin.py
+- ml_engine/churn_credit_stub_mixin.py
+- ml_engine/clustering_mixin.py
+- ml_engine/associations_mixin.py
+
+
+1. What Partner 360 Is
+----------------------
+Partner 360 is a decision-support page for one distributor / dealer / partner.
+
+It combines:
+
+- revenue health
+- churn risk
+- short-term forecast
+- credit risk
+- peer benchmarking
+- cross-sell opportunities
+- alerts
+- an action playbook
+- a ready-to-use sales conversation script
+
+In simple business language:
+
+- "How healthy is this account?"
+- "Is it slowing down?"
+- "How much revenue is at risk?"
+- "What are similar partners buying that this partner is not?"
+- "Should sales push growth, retention, or credit-safe recovery?"
+
+
+2. Runtime Flow
+---------------
+The page flow is:
+
+1. User selects a state.
+2. User selects a partner in that state.
+3. UI calls ai.get_partner_intelligence(selected_partner).
+4. The backend assembles a report dictionary with:
+   - facts
+   - peer gaps
+   - cluster label
+   - cluster type
+   - cluster context
+   - alerts
+   - playbook
+
+Important implementation detail:
+
+- Partner 360 always depends on clustering because peer comparison comes from the cluster matrix.
+- If realtime scoring is enabled, it also loads churn, credit risk, and association rules before building the report.
+
+
+3. High-Level Data Dependencies
+-------------------------------
+Partner 360 is not powered by one model. It is a composite view assembled from several layers.
+
+3.1 Base transaction layer
+
+Main tables / views used:
+
+- transactions_dsr
+- transactions_dsr_products
+- master_party
+- master_products
+- master_group
+- master_state
+- view_ml_input
+- fact_sales_intelligence
+- view_partner_credit_risk_score
+- due_payment and related tables
+
+3.2 Derived layers
+
+- partner feature table built in Python
+- cluster assignments
+- association-rule recommendations
+- churn probability
+- revenue forecast
+- credit-risk metrics
+- playbook / alert logic
+
+
+4. What the UI Actually Displays
+--------------------------------
+The Partner 360 screen shows these main blocks:
+
+4.1 Revenue Health
+
+- Revenue Drop
+- Unlocked Potential (peer-gap revenue)
+- Health Score
+- Estimated Monthly Loss
+
+4.2 Churn and Forecast
+
+- Churn Probability
+- Churn Risk Band
+- Revenue At Risk (90 days and monthly)
+- Forecast Next 30 Days
+- Forecast Trend Percent
+- Forecast Confidence
+- Last Activity / Recency
+
+4.3 Credit Risk
+
+- Credit Risk Score
+- Credit Risk Band
+- Credit Utilization
+- Overdue Ratio
+- Outstanding Amount
+- Credit Adjusted Risk Value
+
+4.4 Actioning Blocks
+
+- Retention strategy / top affinity pitch
+- Peer gap analysis
+- Alerts
+- Playbook
+- SPIN selling script
+
+
+5. Partner Feature Engineering
+------------------------------
+Most core Partner 360 numbers come from a partner-level feature table built in Python.
+
+5.1 Recent and previous 90-day revenue
+
+Formulas:
+
+- recent_90_revenue = revenue in last 90 days
+- prev_90_revenue = revenue in 90-180 day window before the last 90 days
+
+Why used:
+
+- This gives a simple, stable two-window trend view.
+- It is easier to explain to business users than more complex rolling models.
+
+Alternative:
+
+- rolling weekly trend
+- month-over-month trend
+- seasonally adjusted trend
+
+Is this the best approach?
+
+- Good for operational dashboards.
+- Not best when business is highly seasonal or order cycles are irregular.
+
+
+5.2 Recency
+
+Formula:
+
+- recency_days = data_last_date - last_purchase_date
+
+Why used:
+
+- Recency is one of the strongest practical signals in B2B retention.
+- Long silence often matters more than raw revenue alone.
+
+Alternative:
+
+- days since last order and days since last meaningful order separately
+- weighted recency by order value
+
+Best approach?
+
+- Very good as a baseline feature.
+- Should remain in any future version.
+
+
+5.3 Growth rate
+
+Formula:
+
+- growth_rate_90d = (recent_90_revenue - prev_90_revenue) / prev_90_revenue
+
+Fallback behavior:
+
+- If previous revenue is zero, growth_rate_90d falls back to 0.0 in the current implementation.
+
+Why used:
+
+- Gives relative trend, not just absolute loss.
+- Makes small and large partners comparable.
+
+Alternative:
+
+- log growth
+- robust percentage growth with smoothing
+- trend from 6-month regression
+
+Best approach?
+
+- Good for first-pass scoring.
+- Can become unstable for very small denominators.
+
+
+5.4 Revenue drop percent
+
+Formula:
+
+- revenue_drop_pct =
+  if prev_90_revenue > 0 and recent_90_revenue < prev_90_revenue
+  then ((prev_90_revenue - recent_90_revenue) / prev_90_revenue) * 100
+  else 0
+
+Why used:
+
+- This is the easiest degradation metric for users to understand.
+- It translates directly into business action.
+
+Alternative:
+
+- negative growth only
+- percent change with confidence intervals
+- volatility-adjusted decline
+
+Best approach?
+
+- Very strong for explainability.
+- Should stay, even if a better predictive model is added.
+
+
+5.5 Behavioral features added for scoring
+
+The implementation also creates:
+
+- avg_order_value = recent_90_revenue / recent_txns
+- avg_order_value_prev = prev_90_revenue / prev_txns
+- aov_trend = (avg_order_value - avg_order_value_prev) / avg_order_value_prev
+- category_diversity_change = category_count - category_count_prev
+- engagement_velocity = recent_txns / prev_txns
+
+Why used:
+
+- These features tell us whether the account is:
+  - shrinking basket value
+  - reducing category breadth
+  - ordering less often
+
+Alternative:
+
+- product-level RFM features
+- category entropy
+- order interval modeling
+
+Best approach?
+
+- Good lightweight feature set for a practical dashboard.
+- Not exhaustive, but sensible.
+
+
+6. Health Score
+---------------
+The health score is a weighted composite score from 0 to 1.
+
+6.1 Inputs
+
+The current formula uses four normalized components:
+
+- revenue_strength
+- growth_trend
+- recency_activity
+- stability
+
+Definitions:
+
+- revenue_strength = normalize(log(1 + recent_90_revenue))
+- growth_trend = normalize(growth_rate_90d clipped to [-1.0, 1.5])
+- recency_activity = 1 - normalize(log(1 + recency_days))
+- stability = 1 - normalize(log(1 + revenue_volatility))
+
+6.2 Final formula
+
+- health_score =
+  0.35 * revenue_strength
+  + 0.30 * growth_trend
+  + 0.20 * recency_activity
+  + 0.15 * stability
+
+Then clipped to [0, 1].
+
+6.3 Why this design was used
+
+- Revenue matters most, so it gets the highest weight.
+- Growth is next because improving momentum is commercially important.
+- Recency is important because inactive partners are risky.
+- Stability helps separate healthy predictable buyers from noisy ones.
+
+Why log-transform revenue and recency?
+
+- Large partners would dominate without compression.
+- The business impact difference between 10 and 40 days of inactivity is smaller than 100 vs 200 days.
+
+6.4 Alternatives
+
+- equal-weight scorecard
+- learned score from logistic regression
+- gradient boosting model
+- Bayesian health index
+
+6.5 Is this the best approach?
+
+- For explainability and stakeholder buy-in: yes, it is good.
+- For pure predictive accuracy: probably not.
+- It is best described as a business-friendly composite index, not a true predictive model.
+
+6.6 Suggestions
+
+- calibrate weights from historical outcomes
+- add margin contribution
+- add payment behavior directly into health
+- separate activity health and financial health
+
+
+7. Health Segments and Status
+-----------------------------
+The health score is converted into business segments.
+
+Current logic:
+
+- if recent_90_revenue <= 0 and prev_90_revenue > 0:
+  segment = Critical
+  status = Churned (Risk)
+
+- elif health_score >= 0.8 and revenue_drop_pct < 10:
+  segment = Champion
+  status = Healthy (Growing)
+
+- elif health_score >= 0.6 and revenue_drop_pct < degrowth_threshold_pct:
+  segment = Healthy
+  status = Stable
+
+- elif health_score >= 0.4:
+  segment = At Risk
+  status = At Risk (Degrowth)
+
+- else:
+  segment = Critical
+  status = Critical (Immediate Action)
+
+Why used:
+
+- Business teams need simple, named buckets.
+- Champion / Healthy / At Risk / Critical is much easier to operationalize than a raw score.
+
+Alternative:
+
+- deciles
+- survival-based tiers
+- expected value tiers
+
+Best approach?
+
+- Good for adoption.
+- Needs periodic threshold review.
+
+
+8. Degrowth Threshold and Estimated Loss
+----------------------------------------
+8.1 Degrowth threshold
+
+The module uses a state-specific threshold:
+
+- degrowth_threshold_pct = 70th percentile of positive revenue drops in that state
+- then clipped between 10% and 40%
+
+Why used:
+
+- Different states / markets behave differently.
+- A fixed 20% threshold may be too strict in one region and too loose in another.
+
+Alternative:
+
+- company-wide threshold
+- category-specific threshold
+- volatility-adjusted threshold
+
+Best approach?
+
+- Better than a single global threshold.
+- Can be unstable if a state has very few partners.
+
+8.2 Degrowth flag
+
+- degrowth_flag = revenue_drop_pct >= degrowth_threshold_pct
+
+8.3 Estimated monthly loss
+
+- estimated_monthly_loss = max(prev_90_revenue - recent_90_revenue, 0) / 3
+
+Why used:
+
+- Converts decline into rupee terms, which makes action prioritization practical.
+
+
+9. Revenue At Risk
+------------------
+There are two versions in the pipeline.
+
+9.1 Baseline version from health scoring
+
+- expected_revenue_at_risk_90d = max(prev_90_revenue - recent_90_revenue, 0)
+- expected_revenue_at_risk_monthly = estimated_monthly_loss
+
+This exists so the dashboard still shows something meaningful even before churn scoring runs.
+
+9.2 More advanced version after churn scoring
+
+- expected_revenue_at_risk_90d = churn_probability * recent_90_revenue
+- expected_revenue_at_risk_monthly = churn_probability * recent_90_revenue / 3
+
+Why better?
+
+- It combines current revenue size with probability of churn.
+- A partner can still be large and risky even if the raw decline is not dramatic yet.
+
+Alternative:
+
+- expected value over 6 or 12 months
+- scenario-based risk ranges
+
+Best approach?
+
+- The churn-adjusted version is the better operational metric.
+
+
+10. Churn Risk Model
+--------------------
+The code explicitly uses a rule-based churn score for current partners.
+
+10.1 Why not XGBoost in current production flow?
+
+The code comments state:
+
+- the trained XGBoost version learned "total churn" too literally
+- for active partners it was assigning nearly zero risk
+- that made it weak for practical prioritization
+
+So the current system intentionally uses a rule-based scorer.
+
+10.2 Rule-based inputs
+
+- rev_drop = revenue_drop_pct / 100
+- recency = log-normalized recency_days
+- cov = coefficient-of-variation-style volatility proxy
+- growth_risk = (-growth + 1) / 2
+- txn_drop = drop in transaction count
+
+10.3 Rule-based formula
+
+- churn_probability =
+  w_drop * rev_drop
+  + w_recency * recency
+  + w_vol * cov
+  + w_growth * growth_risk
+  + w_txn * txn_drop
+
+10.4 Where do weights come from?
+
+The system tries to calibrate weights from historical auto-labeled churn data using point-biserial correlation.
+
+Default fallback weights:
+
+- revenue_drop_pct: 0.30
+- recency_days: 0.25
+- revenue_volatility: 0.15
+- growth_rate_90d: 0.20
+- txn_drop: 0.10
+
+10.5 Special rule
+
+- If recent_90_revenue <= 0, churn_probability is forced to 0.85
+
+10.6 Risk bands
+
+- High: churn_probability >= 0.70
+- Medium: churn_probability >= 0.45
+- Low: otherwise
+
+10.7 Why this approach was used
+
+- It is interpretable.
+- It behaves sensibly on active partners.
+- It avoids the "all active partners look safe" failure mode.
+
+10.8 Alternatives
+
+- XGBoost with better target definition
+- survival analysis
+- hazard model
+- sequence models over monthly history
+
+10.9 Is this the best approach?
+
+- Best short-term operational approach: yes, probably.
+- Best long-term modeling approach: no.
+- Long-term, a properly designed supervised churn or survival model should outperform this.
+
+10.10 Suggestions
+
+- redefine churn label as sustained reduction or partial churn, not only zero revenue
+- train on multiple horizons
+- calibrate probabilities against observed outcomes
+- backtest by segment and state
+
+
+11. 30-Day Forecast
+-------------------
+The current forecast is intentionally simple.
+
+Formula:
+
+- monthly_base = recent_90_revenue / 3
+- monthly_growth = growth_rate_90d / 3
+- forecast_next_30d = monthly_base * (1 + monthly_growth)
+
+Other outputs:
+
+- forecast_trend_pct = monthly_growth * 100
+- forecast_confidence = 0.75 if active_months >= 6 else 0.45
+
+Why used:
+
+- easy to compute
+- stable
+- explainable
+- no heavy model dependency
+
+Alternative:
+
+- exponential smoothing
+- Prophet
+- ARIMA / SARIMA
+- hierarchical forecasting
+- gradient-boosted demand forecasting
+
+Is this the best approach?
+
+- No, not for products or partners with seasonality.
+- Yes, if the goal is speed, simplicity, and low maintenance.
+
+Suggestions:
+
+- use seasonal forecasting when 12+ months history exists
+- expose forecast error bands
+- switch confidence from static rule to backtested confidence
+
+
+12. Credit Risk
+---------------
+Partner 360 supports two credit-risk modes:
+
+- real AR view from SQL materialized view
+- fallback proxy if the AR view is unavailable or empty
+
+12.1 Best path: real AR credit score
+
+If view_partner_credit_risk_score is available and non-zero, that is used.
+
+Core SQL formula:
+
+- credit_risk_score =
+  0.30 * overdue_ratio
+  + 0.25 * credit_utilization_ratio
+  + 0.20 * aging_severity_score
+  + 0.15 * speed_score
+  + 0.10 * count_score
+
+What each component means:
+
+- overdue_ratio = overdue_amount / total_billed
+- credit_utilization_ratio = outstanding_amount / credit_limit
+- aging_severity_score = weighted severity of overdue buckets
+- speed_score = how much actual payment speed exceeds assigned credit days
+- count_score = overdue invoice count scaled to a 0-1 range
+
+Aging severity weights in SQL:
+
+- 0.10 * overdue_0_30
+- 0.20 * overdue_31_60
+- 0.30 * overdue_61_90
+- 0.40 * overdue_91_120
+- 0.60 * overdue_120_plus
+
+Why this is strong:
+
+- it uses real receivables behavior
+- it captures both quantity of overdue exposure and quality / severity of lateness
+
+This is the best current credit approach in the project.
+
+12.2 Fallback: enhanced due_payment proxy
+
+If the AR materialized view is not available, the code builds a proxy:
+
+- payment_delay = normalized excess payment days beyond assigned credit days
+- overdue_norm = overdue_outstanding / recent_90_revenue
+- concentration_risk = 1 / category_count
+- rev_drop = revenue_drop_pct / 100
+
+Formula:
+
+- credit_risk_score =
+  0.35 * payment_delay
+  + 0.25 * overdue_norm
+  + 0.20 * concentration_risk
+  + 0.20 * rev_drop
+
+Why used:
+
+- payment behavior is a leading signal
+- revenue decline alone is too late
+
+12.3 Last-resort fallback
+
+If due_payment signals are also unavailable:
+
+- credit_risk_score = 0.40 * rev_drop + 0.35 * recency + 0.25 * cov
+
+This is the weakest version and should be treated as a rough proxy only.
+
+12.4 Supporting outputs
+
+The fallback also derives:
+
+- overdue_ratio proxy
+- credit_utilization proxy
+- outstanding_amount proxy
+- credit_adjusted_risk_value = credit_risk_score * recent_90_revenue
+
+12.5 Alternatives
+
+- PD/LGD style credit model
+- invoice-level default model
+- time-to-delinquency survival model
+- graph-based exposure risk
+
+12.6 Is this the best approach?
+
+- real AR view: yes, strong and practical
+- due_payment proxy: decent
+- revenue-only proxy: not ideal
+
+12.7 Suggestions
+
+- add bounce history
+- add write-off history
+- add cheque return / disputed invoice signals
+- use collections aging trend, not only current snapshot
+
+
+13. Cluster Context in Partner 360
+----------------------------------
+Partner 360 uses clustering for peer comparison and context.
+
+13.1 Why clustering is used
+
+- A partner should be compared to similar buying patterns, not the whole base.
+- This makes gap analysis much more actionable.
+
+13.2 Current clustering idea
+
+- top revenue partners become VIP tier using Pareto-style revenue split
+- remaining partners go to Growth tier
+- clustering is ensemble-driven using KMeans, GMM, Spectral, and sometimes HDBSCAN
+
+The exact cluster engine is more sophisticated than the page itself shows, but in Partner 360 the cluster mainly serves as:
+
+- peer benchmark group
+- narrative context
+- playbook context
+
+13.3 Alternatives
+
+- no clustering, only geography benchmark
+- segmentation by size only
+- supervised peer matching
+
+13.4 Is this the best approach?
+
+- Better than comparing everyone to everyone.
+- Good for actionability.
+- Needs cluster quality monitoring and stable labels.
+
+
+14. Peer Gap Analysis
+---------------------
+This is one of the most useful parts of Partner 360.
+
+14.1 Goal
+
+Find product groups where similar partners buy materially more than the selected partner.
+
+14.2 Basic calculations
+
+For a partner inside a cluster:
+
+- peer_avg = average spend of cluster peers by product group
+- diff = max(peer_avg - partner_spend, 0)
+- gap_ratio = diff / peer_avg
+
+14.3 Dynamic filtering threshold
+
+The system does not show every positive difference.
+
+It computes:
+
+- ref_ratio_matrix = (peer_avg - reference_peers) / peer_avg
+- positive_ratios = only positive values
+- gap_ratio_cutoff = 70th percentile of positive peer shortfall ratios
+- then clamp cutoff to [5%, 60%]
+
+If enough same-state peers exist, the threshold is based on same-state peers first.
+
+Why this is smart:
+
+- avoids flooding the UI with trivial differences
+- makes gap logic sensitive to local peer norms
+
+14.4 Valid gap rule
+
+- valid gap if diff > 0 and gap_ratio >= gap_ratio_cutoff
+
+14.5 Revenue conversion
+
+When recent matrix is used:
+
+- annualization_factor_local = 365 / gap_lookback_days
+- yearly_gap = diff * annualization_factor_local
+- monthly_gap = yearly_gap / 12
+- weekly_gap = yearly_gap / 52
+
+14.6 Share-of-wallet style percentages
+
+- You_Do_Pct = partner spend in gap categories / total partner spend * 100
+- Others_Do_Pct = peer average spend in gap categories / total peer average spend * 100
+
+Why this is useful:
+
+- absolute revenue shows money
+- percentage mix shows portfolio imbalance
+
+14.7 Alternatives
+
+- nearest-neighbor peer matching instead of cluster average
+- uplift-based next best product
+- profit-weighted gap instead of revenue-weighted gap
+
+14.8 Is this the best approach?
+
+- Excellent for business explainability.
+- Not perfect statistically, but very actionable.
+
+14.9 Suggestions
+
+- compute gap on margin, not only revenue
+- use confidence intervals for sparse clusters
+- add stock availability filter before surfacing opportunities
+
+
+15. Top Affinity Pitch
+----------------------
+This is the "Pitch This" product recommendation shown in the retention strategy area.
+
+15.1 What it is
+
+It uses association rules:
+
+- if partners who buy product A often also buy product B,
+- and this partner already buys A but not B,
+- then B becomes a candidate recommendation.
+
+15.2 Basket design
+
+The basket base is:
+
+- partner_id + year-month
+
+So rules are built from monthly partner baskets, not from individual invoice lines only.
+
+15.3 Main rule metrics
+
+confidence:
+
+- confidence_a_to_b = times_bought_together / support_a
+
+lift:
+
+- lift_a_to_b =
+  confidence_a_to_b / (support_b / total_baskets)
+
+expected revenue gain:
+
+- expected_revenue_gain = times_bought_together * avg_line_revenue(product_b)
+
+expected margin gain:
+
+- expected_margin_gain = times_bought_together * avg_line_margin(product_b)
+
+margin rate:
+
+- margin_rate = avg_line_margin / avg_line_revenue
+
+15.4 Rule strength buckets
+
+- High if confidence >= 0.4 and lift >= 1.5
+- Medium if confidence >= 0.2 and lift >= 1.1
+- Low otherwise
+
+15.5 Why this approach was chosen
+
+- highly interpretable
+- works with relatively small B2B datasets
+- gives clear sales stories: "buyers of X often also buy Y"
+
+15.6 Alternatives
+
+- collaborative filtering
+- matrix factorization
+- graph embeddings
+- sequence-to-sequence recommendation
+
+15.7 Is this the best approach?
+
+- For explainable B2B selling motions: yes, very good.
+- For maximal personalization: no, more advanced recommenders could do better.
+
+15.8 Suggestions
+
+- add stock and price guardrails
+- combine with peer-gap scoring
+- learn conversion uplift from feedback events
+
+
+16. Alerts
+----------
+Partner 360 also generates prioritized alerts.
+
+16.1 Sharp revenue drop alert
+
+Threshold:
+
+- sharp_drop_threshold = max(ALERT_REVENUE_DROP_SHARP_PCT, degrowth_threshold_pct)
+
+Logic:
+
+- if drop >= threshold, alert fires
+- severity becomes critical if drop exceeds threshold by another 15 points
+
+16.2 Churn jump alert
+
+Compares live score vs stored live baseline:
+
+- fire if churn_delta >= alert_churn_jump_delta
+- and churn_now >= alert_churn_high_level
+
+16.3 Credit jump alert
+
+Similar logic for credit risk:
+
+- fire if credit_delta >= alert_credit_jump_delta
+- and credit_now >= alert_credit_high_level
+
+Why used:
+
+- sudden change matters more than static level in many accounts
+
+Alternative:
+
+- z-score anomalies
+- Bayesian change detection
+
+Best approach?
+
+- Good operational heuristic.
+- Could be improved with true drift detection.
+
+
+17. Playbook Generation
+-----------------------
+The playbook is deterministic, not generated by an LLM.
+
+Inputs:
+
+- health segment
+- health status
+- cluster type
+- cluster label
+- strategic tag
+- top affinity pitch
+- alerts
+
+Why this is good:
+
+- predictable
+- auditable
+- easy to change with business input
+
+Alternative:
+
+- LLM-generated playbook every time
+- decision tree policy engine
+
+Best approach?
+
+- Deterministic playbooks are better for core dashboard reliability.
+- LLM should be optional commentary, not the primary decision engine.
+
+
+18. SPIN Script
+---------------
+The SPIN script in the UI is generated from dashboard facts, not from a model.
+
+It uses:
+
+- recency
+- cluster information
+- revenue drop
+- missing peer category
+- monthly / yearly gap
+- churn probability
+- credit score
+
+Why this is useful:
+
+- turns analytics into a sales conversation
+- reduces the "insight-to-action" gap
+
+Alternative:
+
+- free-form AI pitch
+- template library by segment
+
+Best approach?
+
+- Good hybrid: data-driven, deterministic, easy to trust.
+
+
+19. Technology Choices Summary
+------------------------------
+Current Partner 360 uses a hybrid of:
+
+- SQL aggregation
+- rules / heuristics
+- lightweight scoring
+- clustering
+- association rules
+- optional AI text generation elsewhere in the project
+
+This is a good architecture for:
+
+- fast dashboarding
+- business interpretability
+- low operational complexity
+
+It is not yet the best architecture for:
+
+- rigorous probability calibration
+- causal recommendation ranking
+- seasonal forecasting
+- enterprise-grade risk modeling
+
+
+20. Is the Current Overall Approach Good?
+-----------------------------------------
+Short answer:
+
+- Yes for a practical sales intelligence dashboard.
+- No if the goal is best-in-class predictive science.
+
+20.1 What is strong
+
+- highly explainable
+- easy to operationalize
+- directly tied to commercial actions
+- robust even when some advanced views are missing
+- mixes revenue, retention, credit, and cross-sell in one place
+
+20.2 What is weak
+
+- several pieces are heuristic rather than statistically optimized
+- forecast is simplistic
+- fallback credit logic is approximate
+- recommendation value is opportunity-based, not true expected uplift
+- cluster and peer logic should be tested regularly
+
+
+21. Improvement Roadmap
+-----------------------
+Priority 1 - fix and stabilize
+
+- fix stale strategic tag update after auto-labeling
+- review cluster profile spend labeling
+- remove secret leakage and hardcoded credential fallbacks
+- add direct Partner 360 tests for formulas and output structure
+
+Priority 2 - improve model quality
+
+- redefine churn target and retrain a better churn model
+- add calibrated probability outputs
+- upgrade 30-day forecast to seasonal model where history supports it
+- prefer real AR credit view everywhere and reduce reliance on proxies
+
+Priority 3 - improve action quality
+
+- blend peer-gap score, association-rule score, stock availability, and margin into one action score
+- add rep feedback loop to Partner 360 itself
+- add "expected profit upside", not just revenue upside
+- add product availability and supply risk constraints
+
+Priority 4 - improve business usability
+
+- trend spark lines
+- confidence bands
+- reasons-for-score panel
+- last 3 interaction notes
+- collections action suggestions for risky accounts
+
+
+22. Recommended Additions
+-------------------------
+These would make Partner 360 materially stronger:
+
+- margin-weighted health score
+- repayment trend chart
+- account ownership / rep summary
+- last touchpoint and next action date
+- quote conversion history
+- complaint / issue history from primary_dashboard_issue
+- order fill-rate and stockout history
+- state-adjusted and category-adjusted peer gaps
+
+
+23. Business Impact
+-------------------
+If used well, Partner 360 can improve:
+
+23.1 Retention
+
+- catches declining partners early
+- gives sales teams a recovery narrative
+
+23.2 Revenue expansion
+
+- surfaces white-space cross-sell opportunities
+- identifies which partners should receive premium growth motion
+
+23.3 Credit protection
+
+- flags risky accounts before revenue collapse becomes obvious
+- supports safer selling and collections prioritization
+
+23.4 Sales productivity
+
+- reduces manual analysis time
+- gives reps ready-to-use talking points
+- helps managers coach with data
+
+23.5 Management visibility
+
+- one-page view of revenue, churn, forecast, and risk
+- easier prioritization across accounts
+
+
+24. Final Assessment
+--------------------
+Partner 360 in this project is best understood as:
+
+- an interpretable account intelligence cockpit
+- built for business action first
+- using pragmatic heuristics where advanced ML is not yet production-ready
+
+That is a valid design choice.
+
+For many teams, this is better than a more complex black-box system because:
+
+- users can understand it
+- users can trust it
+- users can act on it
+
+The next evolution should not throw away explainability.
+It should keep the current business logic layer, while gradually improving:
+
+- churn modeling
+- forecasting
+- credit risk calibration
+- recommendation ranking
+- testing and governance
+
