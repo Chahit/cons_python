@@ -1,0 +1,12 @@
+numpy
+pandas
+sqlalchemy
+scikit-learn
+streamlit
+plotly
+psycopg2-binary
+openpyxl
+fpdf2
+mlxtend
+xgboost
+prophet

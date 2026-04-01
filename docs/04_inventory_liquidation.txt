@@ -1,0 +1,152 @@
+================================================================================
+MODULE: INVENTORY LIQUIDATION
+FILE:   frontend/tabs/inventory.py
+ENGINE: ml_engine/competitor_mixin.py + services/data_repository.py
+================================================================================
+
+PURPOSE
+-------
+Inventory Liquidation identifies "dead stock" — products sitting in the warehouse
+for a long time with no or very slow movement — and surfaces the best
+EXISTING PARTNERS to approach for clearing that stock.
+
+Rather than selling dead stock to random buyers at a discount, this module
+finds partners who have PREVIOUSLY purchased that product, giving the sales team
+a warm call list with context.
+
+Dead stock costs the company:
+  - Storage space and handling costs
+  - Risk of expiry, quality degradation, or obsolescence
+  - Tied-up working capital that cannot be redeployed
+
+
+WHAT IT SHOWS
+-------------
+1. Dead Stock Alert Banner   - Count of items needing attention
+2. Product Selector          - Dropdown of all dead stock products
+3. Stock Metrics:
+   - Total Stock Left (units)
+   - Max Age (days since stock was acquired)
+   - Effective Age (accounting for last buyer activity)
+   - Age Percentile (how old this is vs portfolio)
+   - Priority Level (High / Medium / Low)
+   - Exposure Score (0-100)
+4. Target Buyers Table       - Past purchasers sorted by historical quantity
+   - Partner Name, Contact, Past Qty, Last Purchase Date
+
+
+ALGORITHMS & FORMULAS USED
+---------------------------
+
+A. DEAD STOCK IDENTIFICATION (view_ageing_stock)
+-------------------------------------------------
+Source: PostgreSQL view "view_ageing_stock"
+Columns: product_name, total_stock_qty, max_age_days
+
+A product qualifies as "dead stock" when:
+  - max_age_days > 60 days (configurable)   AND
+  - total_stock_qty > 10 units
+
+The max_age_days is the age of the OLDEST batch of that product in stock.
+If a product has multiple batches, the worst (oldest) is used.
+
+View logic:
+  max_age_days = current_date - MIN(date_received) for unsold units
+  total_stock_qty = SUM(unsold quantity) across all batches
+
+
+B. PRIORITY SCORING (get_stock_details)
+-----------------------------------------
+Each dead stock product receives a composite Priority Score (0-100):
+
+Stock Exposure Score components:
+  age_factor   = max_age_days / max_age_days_in_portfolio  (normalized 0-1)
+  qty_factor   = total_stock_qty / max_qty_in_portfolio    (normalized 0-1)
+
+  stock_exposure_score = (0.6 × age_factor + 0.4 × qty_factor) × 100
+
+Priority levels:
+  score >= 70  → "High Priority" (Liquidate Immediately)
+  score >= 40  → "Medium Priority" (Plan Sales Campaign)
+  score < 40   → "Low Priority" (Monitor)
+
+Effective Age vs Max Age:
+  If the product was last PURCHASED by any partner in the last 60 days
+    → effective_age = days since last buyer activity 
+    (there is still demand! reduce urgency slightly)
+  Otherwise:
+    → effective_age = max_age_days (no recent demand)
+
+demand_recency_days = days since last partner purchased this product from us
+age_percentile = percentile of this product's age vs entire portfolio
+
+
+C. TARGET BUYER IDENTIFICATION (view_stock_liquidation_leads)
+--------------------------------------------------------------
+Source: PostgreSQL view "view_stock_liquidation_leads"
+
+Logic:
+  1. Find all partners who have EVER purchased this product
+  2. Rank by their historical purchase quantity (desc)
+  3. Return their contact number and last purchase date
+
+Query structure:
+  SELECT buyer_name, mobile_no, SUM(qty) as buyer_past_purchase_qty,
+         MAX(date) as last_purchase_date
+  FROM transactions
+  WHERE product_name = :selected_product
+  GROUP BY buyer_name, mobile_no
+  ORDER BY buyer_past_purchase_qty DESC
+
+This gives the sales team a PRIORITIZED outreach list — the top buyer for
+dead SSD stock is most likely to want more SSD stock.
+
+The "last_purchase_date" tells the rep how long ago the partner bought this,
+helping them calibrate the conversation:
+  < 3 months ago → "You recently bought X, we have more at a special rate"
+  > 1 year ago   → "You used to carry X — here is a refresh opportunity"
+
+
+D. DATA QUALITY CHECKS
+------------------------
+- If view_ageing_stock returns 0 rows: show green banner "No dead stock"
+- If a product is in ageing stock but NOT in liquidation leads:
+  stock exists but nobody historically bought it → show warning
+  (this is truly dead stock with no natural buyer)
+
+
+DATA FLOW
+---------
+  PostgreSQL → view_ageing_stock (df_stock_stats: product_name, qty, max_age_days)
+             → inventory.py: read df_stock_stats for product list
+             → get_stock_details(product): computes priority, exposure score
+             → get_dead_stock(): reads view_stock_liquidation_leads
+             → Filters to selected product → shows target buyer table
+
+
+IMPROVEMENTS / SUGGESTIONS
+---------------------------
+1. DEMAND FORECASTING FOR CLEARANCE: Instead of just showing historical buyers,
+   predict the PROBABILITY each buyer would purchase NOW based on their
+   recent activity and the product's fit with their current buying pattern.
+
+2. DISCOUNT OPTIMIZATION: Calculate the minimum discount needed to move the
+   stock within a target time window, based on historical price elasticity.
+
+3. BUNDLE CLEARANCE: Use MBA association rules to package dead stock products
+   with fast-moving products as a bundle offer, protecting margin.
+
+4. GEOGRAPHIC DEAD STOCK MAP: Show which warehouse location holds the dead stock
+   and surface buyers in the nearest geography to minimize logistics cost.
+
+5. AUTO-ALERTING: When a product crosses the 60-day threshold OR when the
+   exposure score crosses 70, automatically send a task to the regional manager.
+
+6. RETURN TO VENDOR: If no buyers exist and the product is approaching expiry,
+   flag it for vendor return negotiation.
+
+7. MARKDOWN CALENDAR: Suggest a structured 30-60-90 day markdown schedule
+   (5% → 10% → 15%) rather than a single deep discount upfront.
+
+8. INSURANCE / WRITE-OFF TRACKING: Track the financial impact of dead stock
+   that was ultimately written off, to inform future purchasing decisions.

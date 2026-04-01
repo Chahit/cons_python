@@ -1,0 +1,212 @@
+================================================================================
+MODULE: PARTNER 360 VIEW
+FILE:   frontend/tabs/partner_360.py
+ENGINE: ml_engine/churn_credit_mixin.py
+================================================================================
+
+PURPOSE
+-------
+Partner 360 is the core health dashboard for individual B2B partners. It gives
+sales teams a single pane of glass showing exactly how healthy a partner is,
+their churn risk, credit standing, revenue trend, and what product to pitch next.
+It is designed for daily use by account managers before customer calls.
+
+
+WHAT IT SHOWS
+-------------
+1. Health Status Card    - Overall health label (Healthy / At Risk / Critical)
+2. Revenue Metrics       - Recent 90-day vs previous 90-day revenue, drop %
+3. Churn Risk Score      - Probability (0-100%) the partner stops buying
+4. Churn Risk Band       - Low / Medium / High based on configurable thresholds
+5. Survival Analysis     - How many days until the partner is expected to churn
+6. SHAP Explanation      - Top features driving this partner's churn risk
+7. Credit Risk Score     - Payment behavior and outstanding amount risk
+8. Forecast (30-day)     - Predicted revenue for next 30 days
+9. Top Affinity Pitch    - Best product to cross-sell based on purchase patterns
+10. Export (PDF / Excel) - Full partner report download
+
+
+ALGORITHMS & FORMULAS USED
+---------------------------
+
+A. HEALTH SCORING (base_loader_mixin.py → _add_health_scores)
+--------------------------------------------------------------
+Health score is a weighted composite of 4 normalized signals:
+
+  health_score = (0.35 × revenue_strength)
+               + (0.30 × growth_trend)
+               + (0.20 × recency_activity)
+               + (0.15 × stability)
+
+Where:
+  revenue_strength  = normalize(log1p(recent_90_revenue))
+  growth_trend      = normalize(growth_rate_90d clipped to [-1.0, 1.5])
+  recency_activity  = 1 - normalize(recency_days)
+  stability         = 1 - normalize(log1p(revenue_volatility))
+
+All values are normalized to [0, 1] using min-max normalization across partners.
+
+Health segments assigned from score:
+  score >= 0.8 AND drop < 10%    → Champion (Healthy Growing)
+  score >= 0.6 AND drop < threshold → Healthy (Stable)
+  score >= 0.4                   → At Risk (Degrowth)
+  recent_90 == 0 AND prev_90 > 0 → Critical (Churned Risk)
+  score < 0.4                    → Critical (Immediate Action)
+
+Revenue degrowth threshold is STATE-SPECIFIC:
+  degrowth_threshold_pct = 70th percentile of positive revenue drops in that state
+  (clipped between 10% and 40%)
+
+This makes the system adaptive — a 20% drop in Tamil Nadu (competitive market)
+may be normal, but in UP it flags as critical.
+
+
+B. REVENUE DROP %
+-----------------
+  revenue_drop_pct = ((prev_90_revenue - recent_90_revenue) / prev_90_revenue) × 100
+  Only calculated when prev_90_revenue > 0 AND recent_90_revenue < prev_90_revenue.
+
+
+C. CHURN MODEL (churn_credit_mixin.py → _train_churn_model)
+------------------------------------------------------------
+Algorithm: LightGBM (Gradient Boosted Trees) with Platt scaling calibration
+Fallback:  Logistic Regression (if LightGBM not installed)
+
+TRAINING DATA CONSTRUCTION (_build_churn_training_data):
+  Uses temporal sliding window approach. For each partner at multiple anchor dates:
+  - Features computed from TRAILING window (the "past")
+  - Label = did the partner have zero revenue in the NEXT horizon_days (90 days)?
+
+Feature Set (12 features):
+  1.  recent_90_revenue      - Revenue in last 90 days
+  2.  prev_90_revenue        - Revenue in previous 90 days  
+  3.  recent_txns            - Transaction count last 90 days
+  4.  prev_txns              - Transaction count previous 90 days
+  5.  recency_days           - Days since last purchase
+  6.  growth_rate_90d        - (recent - prev) / prev revenue ratio
+  7.  revenue_drop_pct       - % revenue decline
+  8.  avg_order_value        - recent_90_revenue / recent_txns
+  9.  aov_trend              - (current AOV - prev AOV) / prev AOV
+  10. category_count         - Distinct product groups bought (last 90 days)
+  11. category_diversity_change - category_count - category_count_prev
+  12. engagement_velocity     - recent_txns / prev_txns (capped at 10)
+
+Model pipeline:
+  RobustScaler → LightGBMClassifier(n_estimators=300, learning_rate=0.05) → CalibratedClassifierCV
+
+Calibration ensures the output probability is TRUE probability, not just a score.
+
+Evaluation metrics tracked: ROC-AUC, Average Precision (PR-AUC)
+
+Churn risk bands (configurable via env):
+  churn_probability >= 0.65  → High Risk
+  churn_probability >= 0.35  → Medium Risk
+  churn_probability < 0.35   → Low Risk
+
+
+D. SHAP EXPLAINABILITY (_compute_shap_importance)
+-------------------------------------------------
+After training, SHAP (SHapley Additive exPlanations) values are computed:
+- Global: bar chart of mean |SHAP| values per feature (feature importance)
+- Per-partner: SHAP waterfall — which feature pushed risk UP or DOWN
+
+SHAP formula (conceptually):
+  For each feature i, SHAP value φ_i measures the average marginal contribution
+  of feature i across all possible orderings of features, weighted by how much
+  including feature i changes the prediction.
+
+Why SHAP over feature importance?
+  - Directional: shows if recency_days is INCREASING or DECREASING churn risk
+  - Locally accurate: each partner's explanation sums to their exact prediction
+  - Consistent: larger feature effects always get larger SHAP values
+
+
+E. SURVIVAL ANALYSIS (_fit_survival_model)
+------------------------------------------
+Two models are fit:
+
+E1. Kaplan-Meier (non-parametric)
+  - Estimates probability of "not churning" at each time point
+  - No assumptions about underlying distribution
+  - Used for the survival curve visualization
+
+E2. Cox Proportional Hazards Model (semi-parametric)
+  h(t|X) = h₀(t) × exp(β₁x₁ + β₂x₂ + ... + βₙxₙ)
+  
+  Where:
+    h(t|X)  = hazard rate at time t for partner with features X
+    h₀(t)   = baseline hazard (estimated non-parametrically)
+    β values = learned coefficients (how each feature affects churn speed)
+
+  Median time-to-churn is estimated as the time when partner's survival
+  probability crosses 0.50 on their individual survival curve.
+
+Why survival analysis in addition to classification?
+  A binary churn model tells you IF someone will churn.
+  Survival analysis tells you WHEN — which helps prioritize outreach.
+
+
+F. CREDIT RISK SCORING (_load_credit_risk_features, _score_credit_risk)
+------------------------------------------------------------------------
+Input signals:
+  - outstanding_amount: current unpaid invoices
+  - overdue_ratio: proportion of invoices past due date
+  - credit_utilization: outstanding / credit_limit (if available)
+
+Credit risk score is a weighted combination:
+  credit_risk_score = w1 × overdue_ratio + w2 × credit_utilization
+                    + w3 × outstanding_amount_normalized
+
+Risk bands:
+  score >= 0.67 → High Credit Risk
+  score >= 0.40 → Medium Credit Risk
+  score < 0.40  → Low Credit Risk
+
+
+G. REVENUE FORECAST (_build_partner_forecast)
+---------------------------------------------
+Simple exponential smoothing applied per partner using their monthly revenue history.
+Forecast horizon: next 30 days.
+
+forecast_next_30d = weighted average extrapolation of last N months
+                    (more recent months weighted higher)
+
+Why simple smoothing instead of ARIMA?
+  Many partners have short or sparse history. Complex autoregressive models
+  require minimum 24 months of data. Exponential smoothing works with 3-6 months.
+
+
+DATA FLOW
+---------
+  PostgreSQL → view_ml_input (df_ml)
+             → fact_sales_intelligence (df_fact, indexed by company_name)
+             → _build_partner_features / _build_partner_features_from_views (df_partner_features)
+             → ChurnCreditMixin: training data → model → predictions merged into df_partner_features
+             → Partner 360 tab reads from df_partner_features.loc[selected_partner]
+
+
+IMPROVEMENTS / SUGGESTIONS
+---------------------------
+1. PROPHET FORECASTING: Replace exponential smoothing with Meta's Prophet for
+   better handling of seasonality (quarterly patterns, festival spikes in India).
+
+2. ENSEMBLE CHURN MODEL: Combine LightGBM predictions with survival analysis
+   hazard scores using a stacking layer for higher accuracy.
+
+3. PAYMENT BEHAVIOR FEATURES: Add "payment regularity score" — standard deviation
+   of days-to-pay across invoices. Irregular payers churn faster.
+
+4. COHORT ANALYSIS: Show which "batch" (acquisition year) the partner belongs to
+   and whether that cohort is collectively churning.
+
+5. GEOGRAPHIC RISK OVERLAY: If multiple partners in the same city/pin are
+   churning simultaneously, flag it as a territory-level risk.
+
+6. REAL-TIME ALERTS: Push WhatsApp/email alert the moment a partner's churn
+   probability crosses the High Risk threshold.
+
+7. NPS / SATISFACTION SIGNAL: Integrate annual partner satisfaction survey scores
+   as an input feature into the churn model.
+
+8. COMPETITOR SIGNAL: If a competitor is underpricing in a specific state, flag
+   partners in that state automatically as elevated churn risk.

@@ -1,0 +1,210 @@
+================================================================================
+MODULE: PRODUCT BUNDLES (MARKET BASKET ANALYSIS)
+FILE:   frontend/tabs/market_basket.py
+ENGINE: ml_engine/associations_mixin.py
+================================================================================
+
+PURPOSE
+-------
+Market Basket Analysis (MBA) discovers which products are frequently purchased
+TOGETHER by the same partner in the same billing cycle. This powers:
+  - Cross-sell pitch scripts for sales reps
+  - Bundle recommendations per partner
+  - Identifying natural product families customers self-create
+
+For example: "Partners who buy CASTROL GTX also tend to buy oil filters within
+30 days — suggest the filter proactively."
+
+
+WHAT IT SHOWS
+-------------
+1. Association Rules Table - Ranked list of product pairs with metrics
+2. Confidence / Lift / Support filters - Adjustable thresholds
+3. Product-specific rules - Search by product name
+4. Sales Script Generator - Auto-written pitch script for selected rule
+5. Cross-category upgrades - Detect premium product → follow-on category patterns
+6. Sequential patterns - Detect product A → product B over time
+7. Export (PDF / Excel)
+
+
+ALGORITHMS & FORMULAS USED
+---------------------------
+
+A. APRIORI CONCEPTS (Foundation)
+---------------------------------
+Three core metrics define every association rule A → B:
+
+  Support(A)   = (transactions containing A) / (total transactions)
+  Support(A∪B) = (transactions containing both A and B) / total
+  
+  Confidence(A→B) = Support(A∪B) / Support(A)
+    → "Of all partners who bought A, what % also bought B?"
+    → Range: 0 to 1. Threshold: 0.15 (configurable via MBA_MIN_CONFIDENCE env)
+
+  Lift(A→B) = Confidence(A→B) / Support(B)
+    → "How much MORE likely is B purchased WITH A vs randomly?"
+    → Lift > 1.0 = positive association (desirable)
+    → Lift < 1.0 = negative association (buying A makes B LESS likely)
+    → Threshold: 1.0 (configurable via MBA_MIN_LIFT env)
+
+  Support count = raw count of baskets containing both A and B
+    → Minimum configurable via MBA_MIN_SUPPORT (default: 5 transactions)
+
+
+B. FP-GROWTH ALGORITHM (mine_fpgrowth_rules)
+---------------------------------------------
+FP-Growth (Frequent Pattern Growth) is used instead of Apriori because:
+  - Apriori generates candidate sets — O(2^n) memory for n products
+  - FP-Growth compresses the transaction database into a prefix tree (FP-tree)
+  - Only 2 database scans needed regardless of dataset size
+  - ~10-100x faster than Apriori on large catalogs
+
+Steps:
+  1. Load all transactions for last N months (MBA_LOOKBACK_MONTHS, default 12)
+  2. Each "basket" = all products bought by one partner per invoice
+  3. Build FP-tree from frequent items
+  4. Mine conditional pattern bases recursively
+  5. Generate rules from frequent itemsets using confidence and lift filters
+  6. Return top rules ranked by lift × confidence combined score
+
+Implementation uses: mlxtend library (if available) with fallback to manual counting
+
+
+C. TEMPORAL DECAY WEIGHTING (mine_temporally_weighted_rules)
+-------------------------------------------------------------
+Standard MBA treats all historical transactions equally.
+Temporal decay gives HIGHER weight to recent co-purchases:
+
+  w(t) = exp(-λ × age_days)   where λ = ln(2) / half_life_days
+
+  half_life_days = 90 (configurable): weight halves every 90 days
+  
+  Effective support of a basket = sum of w(t) for all matching transactions
+
+This means a product pair bought together 3 times in the last month
+beats a pair bought together 10 times two years ago.
+
+Why this matters: Product catalogs change. Old associations may reflect
+discontinued products or past promotions.
+
+
+D. SEQUENTIAL PATTERN MINING (mine_sequential_patterns)
+-------------------------------------------------------
+Unlike standard MBA (same basket), sequential patterns detect:
+  "Partner buys product A, THEN buys product B within N days"
+
+Algorithm:
+  1. Sort all partner transactions by date
+  2. For each purchase of product A, find subsequent purchases of product B
+     within max_gap_days (default: 30 days) by the SAME partner
+  3. Count these A→B sequences across all partners
+  4. Compute sequential confidence = count(A then B) / count(A)
+
+Example: 60% of partners who buy "Construction Primer" buy "Waterproofing
+Compound" within 30 days → this is a strong sequential signal.
+
+min_support_count: 3 sequences (configurable)
+min_confidence:    0.10 (lower than standard MBA since sequences are rarer)
+
+
+E. CROSS-CATEGORY UPGRADES (mine_cross_category_upgrades)
+----------------------------------------------------------
+Detects when a partner buying a PREMIUM product in category X tends to
+subsequently purchase a product in category Y:
+
+  "Premium lubricant buyer → buys industrial greases within 60 days"
+
+Algorithm:
+  1. Identify "premium" products: those in top 25th percentile by unit price
+  2. For each premium product purchase, scan next 60 days of partner activity
+  3. Count cross-category follow-on purchases
+  4. Filter by min_support_count and min_confidence
+
+Use case: Helps identify natural "gateway products" that open doors to new
+categories. Sales reps can use these to expand wallet share.
+
+
+F. ENHANCED ASSOCIATIONS (get_enhanced_associations)
+-----------------------------------------------------
+Combines all four mining methods into one ranked result:
+
+  1. Standard FP-Growth rules (highest precision)
+  2. Temporal decay rules  (recency-weighted)
+  3. Sequential patterns   (time-ordered)
+  4. Cross-category upgrades (category expansion)
+
+Deduplication: If the same A→B pair appears in multiple methods, it is merged
+and scored higher (consensus signal across methods = stronger rule).
+
+Final ranking: Combined Score = lift × confidence × recency_weight
+
+
+G. RULE QUALITY DECORATION (_decorate_rule_quality)
+----------------------------------------------------
+Each rule gets a quality label:
+  "High"   → confidence >= 0.50 AND lift >= 2.0
+  "Medium" → confidence >= 0.25 AND lift >= 1.5
+  "Low"    → below thresholds but above minimums (flagged for manual review)
+
+Low-support rules (count < min_support) are kept with a warning flag when
+MBA_INCLUDE_LOW_SUPPORT=true — useful for niche product discovery.
+
+
+SALES SCRIPT GENERATION
+------------------------
+For the selected rule (A → B), the UI auto-generates 3 script variants:
+
+Opening Script:
+  "Hello [Partner], I noticed you regularly stock [A]. Many of your peers who
+   carry [A] also find [B] moves well — [Lift]x more likely than average.
+   Would you like to try [B] this cycle?"
+
+Follow-up Script (if initial pitch was not converted):
+  "Hi [Partner], following up from last time — [B] has shown [Confidence]%
+   conversion with partners like you. Happy to send a trial order."
+
+Value Pitch:
+  "Based on purchase patterns across our network, [A] + [B] together drive
+   [Confidence]% higher basket value. I'd love to discuss how this bundle
+   can improve your margins."
+
+Scripts are dynamically filled with actual product names and computed metrics.
+
+
+DATA FLOW
+---------
+  PostgreSQL transactions_dsr + transactions_dsr_products
+    → _load_transaction_baskets (raw partner-product pairs)
+    → mine_fpgrowth_rules / mine_temporally_weighted_rules / etc.
+    → df_assoc_rules stored in engine
+    → view_product_associations (pre-materialized fallback)
+    → market_basket.py tab renders the ruleset with filters
+
+
+IMPROVEMENTS / SUGGESTIONS
+---------------------------
+1. FLASH POINTS: Identify rules that only emerged in the last 30 days
+   (new association) vs rules that have been stable for 12 months.
+   Label these as "Emerging" vs "Established".
+
+2. PARTNER-SPECIFIC FILTERING: Currently shows global rules. Should filter
+   to rules relevant for the SELECTED partner (products they don't buy yet).
+
+3. NEGATIVE ASSOCIATIONS: Surface rules where Lift < 0.5 — these indicate
+   competing products that CANNOT both be pitched to the same partner.
+
+4. MARGIN-WEIGHTED RULES: Weight rules by gross margin, not just frequency.
+   A rule for a low-margin product pair matters less than a high-margin one.
+
+5. REGIONAL RULES: Build separate association rule sets per state. Buying
+   patterns in Maharashtra differ from those in Rajasthan.
+
+6. MLflow TRACKING: Log each mining run with parameters and rule counts.
+   This enables comparing the effect of changing MBA_MIN_CONFIDENCE over time.
+
+7. REAL-TIME BUNDLE ALERTS: When a partner places an order for product A,
+   immediately trigger a WhatsApp alert suggesting product B.
+
+8. PRODUCT FAMILY DISCOVERY: Use hierarchical clustering on the co-purchase
+   matrix to automatically discover "product families" — groups of 3-5 products
+   that are frequently bought together across many partners.

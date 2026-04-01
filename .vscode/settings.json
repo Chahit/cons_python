@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "C:\\Users\\chahi\\anaconda3\\python.exe",
+  "python.analysis.extraPaths": [
+    "./intern-p-main"
+  ]
+}

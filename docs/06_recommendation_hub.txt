@@ -1,0 +1,239 @@
+================================================================================
+MODULE: RECOMMENDATION HUB
+FILE:   frontend/tabs/recommendation_hub.py
+ENGINE: ml_engine/recommendation_mixin.py
+================================================================================
+
+PURPOSE
+-------
+The Recommendation Hub generates per-partner NEXT BEST ACTION plans — a
+prioritized list of specific things the sales team should do for a given partner
+(e.g., "Offer a cash incentive", "Pitch Castrol GTX bundle", "Escalate to manager").
+
+Unlike a generic CRM task, every recommendation is backed by:
+  - The partner's churn risk score
+  - Their credit standing
+  - What their cluster peers buy that they don't
+  - Historical feedback on whether similar actions worked
+  - A reinforcement learning bandit that learns over time what works for each
+    partner type
+
+The system also includes a Natural Language Query interface where a sales manager
+can type plain English ("Show high-margin recommendations for at-risk VIPs in Delhi")
+and get a filtered, ranked recommendation list back.
+
+
+WHAT IT SHOWS
+-------------
+1. Partner Selector          - Filter by state then partner
+2. Recommendation Plan       - Top N ranked actions for this partner
+3. AI Pitch Script           - GPT-4o generated sales conversation for each action
+4. NL Query Interface        - Plain English recommendation search
+5. Collaborative Filtering   - Products peers buy that this partner doesn't
+6. Next Best Action (Journey)- Adapts if previous action was accepted/rejected
+7. Multi-step Journey View   - What to do after accepted/rejected/lost
+8. Export (PDF / Excel)
+
+
+ALGORITHMS & FORMULAS USED
+---------------------------
+
+A. DETERMINISTIC RULE ENGINE (Core Recommendation Logic)
+---------------------------------------------------------
+The system starts with hard business rules before any ML:
+
+Rules sorted by priority score (0-100):
+
+Rule 1: CRITICAL CHURN INTERVENTION (priority 90)
+  Triggered: churn_probability > 0.65
+  Action: "Emergency retention call — offer loyalty discount or priority delivery"
+  Priority formula: 50 + (40 × churn_probability) + (10 if degrowth_flag else 0)
+
+Rule 2: CREDIT RISK ESCALATION (priority 85)
+  Triggered: credit_risk_band == "High" AND outstanding_amount > threshold
+  Action: "Escalate to credit manager — discuss payment plan before next order"
+
+Rule 3: PRODUCT BUNDLE UPSELL (priority 70)
+  Triggered: top_affinity_pitch is available (MBA confidence > 0.15, lift > 1.0)
+  Action: "Pitch [product B] — [lift]x more likely given they buy [product A]"
+  Priority formula: 40 + (20 × confidence) + (15 × min(lift, 3.0)/3.0)
+
+Rule 4: CATEGORY EXPANSION (priority 65)
+  Triggered: partner's category_diversity < cluster_median_diversity
+  Action: "Introduce [missing category] — their cluster peers already buy it"
+
+Rule 5: REVENUE RECOVERY (priority 75)
+  Triggered: revenue_drop_pct > degrowth_threshold_pct
+  Action: "Revenue dropped [X]% in 90 days — investigate root cause, offer incentive"
+  Priority: 45 + (30 × min(revenue_drop_pct, 60)/60)
+
+Rule 6: FORECAST-BASED STOCKING (priority 55)
+  Triggered: forecast_next_30d > prev_90_revenue/3 × 1.2 (20% above expected)
+  Action: "Pre-load partner with higher stock — forecast shows demand surge"
+
+All rules generate a candidate action. Final selection: top N by priority score.
+
+
+B. COLLABORATIVE FILTERING (_build_collaborative_recommendations)
+-----------------------------------------------------------------
+Finds products that CLUSTER PEERS buy but this partner doesn't:
+
+Algorithm:
+  1. Identify partner's cluster from ai.matrix
+  2. Build spend vector: partner vs all cluster peers
+     spend_vector[group] = total spend on product group
+  3. Compute cosine similarity to each peer:
+     sim(A, B) = (A·B) / (||A|| × ||B||)
+  4. Take top-K most similar peers (K=5)
+  5. For each top peer, find product groups they buy heavily that THIS partner
+     has zero or minimal spend on
+  6. Rank gap products by: peer_spend × similarity_weight
+
+  Output: "Partners similar to you buy [Product X] — you haven't tried it yet"
+
+Why this works: Birds of a feather flock together. If 4 out of 5 similar-profile
+partners buy construction chemicals heavily but you don't, you are leaving
+potential revenue on the table.
+
+
+C. CONTEXTUAL BANDIT (Thompson Sampling) — _bandit_select_action
+-----------------------------------------------------------------
+Over time, the system learns which ACTION TYPES work best:
+  - "Offer cash incentive" → What % of times did the partner actually buy more?
+  - "Bundle pitch" → What % converted?
+  - "Escalate to manager" → What % resolved credit issues?
+
+Thompson Sampling implementation:
+  For each action type, maintain Beta distribution parameters:
+    α (alpha) = 1 + number of successes (outcome: won, accepted)
+    β (beta)  = 1 + number of failures (outcome: rejected, lost)
+
+  At recommendation time:
+    For each candidate action, sample one value from Beta(α, β)
+    Select actions with highest sampled values
+
+  Why Beta distribution?
+    - Models probability of success for a binary outcome (accepted/not)
+    - Starts with α=β=1 (uniform prior: 50/50 initially)
+    - Updates automatically with every new piece of feedback
+    - Naturally trades off EXPLORATION (new action types) vs EXPLOITATION
+      (known winners) — this is the "bandit" problem
+
+  Reward mapping from sales feedback:
+    "Won" outcome     → reward = 1.0  (full positive)
+    "Accepted"        → reward = 0.5  (positive but not converted to sale)
+    "Rejected"        → reward = 0.0  (no impact)
+    "Lost"            → reward = -0.5 (negative — action backfired)
+
+
+D. DIVERSITY ENFORCEMENT (_enforce_diversity)
+---------------------------------------------
+After scoring, the system enforces output diversity:
+  - Minimum 2 distinct action types in top N recommendations
+  - Maximum 2 recommendations of the same type (avoid 5 "bundle pitches")
+  - Novelty penalty: if the partner previously rejected an offer, reduce
+    priority of re-recommending the exact same offer type
+
+Novelty score reduction:
+  novely_penalty = 0.5 × number_of_prior_rejections_for_this_action_type
+
+
+E. MULTI-STEP JOURNEY (get_partner_next_best_action)
+-----------------------------------------------------
+Recommendation adapts based on what happened last time:
+
+  Previous: Bundle Pitch → Outcome: Won
+    → Next: Premium upsell ("Since you tried [B], consider also [C]")
+    
+  Previous: Retention Call → Outcome: Accepted (but not converted)
+    → Next: Follow-up with concrete offer ("Ready to send trial stock?")
+    
+  Previous: Credit Escalation → Outcome: Rejected
+    → Next: Lower barrier ("Would a payment plan help? 30-60-90 day split")
+    
+  Previous: None (first contact)
+    → Standard recommendation plan (Rule Engine + Bandit)
+
+Journey logic uses a state machine:
+  State = (previous_action_type, previous_outcome)
+  Transition table maps states to next recommended action type
+
+
+F. AI PITCH SCRIPT GENERATION (_call_gemini_recommendation → now OpenAI gpt-4o)
+----------------------------------------------------------------------------------
+For each top recommendation, a GPT-4o call generates a personalized pitch script.
+
+Prompt construction includes:
+  - Partner name, state, health status
+  - Recommended action and product
+  - Revenue context (recent vs previous)
+  - Cluster peers' behavior
+  - Credit standing
+
+Model: gpt-4o (switched from Gemini, now using OpenAI)
+Temperature: 0.2 (low — factual, not creative)
+Max tokens: 700
+
+Output: A natural-language sales script the rep can read verbatim or adapt.
+
+
+G. NATURAL LANGUAGE QUERY (_build_structured_filters_from_nl)
+-------------------------------------------------------------
+Two-layer NL parsing:
+
+Layer 1: Heuristic Parser (_heuristic_parse_nl_query)
+  Rule-based pattern matching using regex and keyword dictionaries:
+    "at risk" → health_segments = ["At Risk", "Critical"]
+    "Delhi" → state = "Delhi"
+    "high margin" → margin_rate_min = 0.20
+    "top 10" → top_n = 10
+
+Layer 2 (optional): GPT-4o NL Parser (_parse_nl_query_with_genai)
+  If use_genai=True, sends query to GPT-4o:
+  Prompt: "Convert this query to JSON filters: {user_query}"
+  Returns structured filters that are MERGED with heuristic output.
+
+Why two layers?
+  - Heuristic parser is instant and free (no API cost)
+  - GPT-4o layer handles ambiguous or complex queries
+  - Both results are merged: heuristic wins on explicit fields,
+    GPT-4o fills in what heuristic missed
+
+
+DATA FLOW
+---------
+  Partner selected → ensure_clustering() + ensure_churn_forecast() + ensure_associations()
+  → get_partner_intelligence(partner) → full facts dict
+  → Rule Engine generates candidates
+  → Collaborative filtering generates peers' recommendations
+  → Bandit selects and ranks
+  → Diversity enforced
+  → GPT-4o generates pitch scripts for top N
+  → recommendation_hub.py renders results
+
+
+IMPROVEMENTS / SUGGESTIONS
+---------------------------
+1. FEEDBACK LOOP UI: Add a thumbs up/down button on each recommendation so
+   sales reps can instantly signal outcome. This feeds the bandit model.
+
+2. QUOTA-AWARE RECOMMENDATIONS: If a rep has a monthly quota on lubricants,
+   bias recommendations toward pitching lubricants near month-end.
+
+3. MEETING AGENDA GENERATOR: From the top 3 recommendations, auto-generate
+   a full 10-minute meeting agenda for the partner visit.
+
+4. COMPETITOR-AWARE PITCHING: If a competitor is undercutting on product A,
+   automatically shift the pitch to our stronger product B.
+
+5. A/B TESTING FRAMEWORK: Run different recommendation strategies on different
+   sub-groups of partners and measure conversion difference statistically.
+
+6. VOICE SCRIPT OUTPUT: Generate audio version of the pitch script using
+   text-to-speech (e.g., Google TTS), ready for reps on the go.
+
+7. WhatsApp INTEGRATION: One-click send the pitch script directly as a
+   formatted WhatsApp message to the partner's registered number.
+
+8. RECOMMENDATION EXPLAINABILITY: Show the sales rep exactly WHY each
+   action was recommended ("Churn risk 72% + 3 missed orders" not just "Call them").

@@ -1,0 +1,240 @@
+================================================================================
+MODULE: CLUSTER INTELLIGENCE
+FILE:   frontend/tabs/clustering.py
+ENGINE: ml_engine/clustering_mixin.py
+================================================================================
+
+PURPOSE
+-------
+Cluster Intelligence automatically groups Consistent's 1200+ partners into
+meaningful segments based on their buying behavior — without human-defined rules.
+Unlike manual segmentation (e.g., "Top 20% by revenue"), this uses unsupervised
+machine learning to find NATURAL groupings from actual purchasing patterns.
+
+Business use cases:
+  - Tailor promotions to each cluster (VIP vs At Risk vs Growth)
+  - Identify underpenetrated clusters (healthy partners buying few categories)
+  - Spot geographic concentration within clusters
+  - Benchmark a partner's performance against their cluster peers
+
+
+WHAT IT SHOWS
+-------------
+1. Cluster Summary Table    - Count and avg revenue per cluster
+2. 3D Partner DNA Map       - PCA-reduced interactive scatter plot
+3. Cluster Type Labels      - VIP / Growth / Standard / Outlier
+4. Strategic Tags           - Per-cluster action labels
+5. Quality Metrics          - Silhouette score, Calinski-Harabasz score, ARI
+6. Business Validation      - Revenue concentration, cluster balance checks
+7. Export (PDF / Excel)
+
+
+ALGORITHMS & FORMULAS USED
+---------------------------
+
+A. FEATURE ENGINEERING
+-----------------------
+Six feature groups are computed before clustering:
+
+A1. CATEGORY MIX (Primary Signal — behavior-first)
+  Each partner's spend SHARE per product group (not raw amount):
+    mix_[group] = spend_on_group / total_spend
+  Range per column: 0.0 to 1.0
+  This makes two partners with different revenue levels comparable
+  if they buy the same product mix.
+
+A2. RFM FEATURES (_load_rfm_features)
+  Classic Recency-Frequency-Monetary model:
+    recency_days  = days since last purchase
+    frequency     = count of distinct transactions in lookback window
+    monetary      = total net spend
+
+A3. PURCHASE VELOCITY (_load_purchase_velocity)
+  Inter-purchase gap statistics per partner:
+    mean_gap_days: average days between consecutive orders
+    std_gap_days:  variability in ordering cadence
+    velocity_trend = recent_avg_gap (last 90d) / overall_avg_gap
+      < 1.0 = Partner is accelerating (ordering more frequently)
+      > 1.0 = Partner is slowing down (potential churn signal)
+
+A4. CATEGORY ENTROPY (_compute_category_entropy)
+  Shannon entropy of category spend distribution:
+    H = -Σ pᵢ × log(pᵢ)   where pᵢ = spend_share on category i
+  High entropy → diverse buyer (buys across many categories)
+  Low entropy  → concentrated buyer (focused on 1-2 categories)
+
+A5. SEASONALITY FEATURES (_load_seasonality_features)
+  monthly_cv = std(monthly_revenue) / mean(monthly_revenue)
+    High CV → seasonal buyer (spikes in certain months)
+  dominant_quarter: quarter with most spend (1-hot encoded)
+  seasonal_amplitude = (max_quarter_spend - min_quarter_spend) / mean
+
+A6. NETWORK / PEER SIMILARITY (_compute_network_features)
+  Cosine similarity between each pair of partners' spend vectors:
+    sim(A,B) = (A · B) / (||A|| × ||B||)
+  For each partner:
+    mean_peer_sim:    avg similarity to top-5 most similar partners
+    max_peer_sim:     similarity to closest peer
+    network_centrality: avg similarity to ALL other partners (hub score)
+
+
+B. FEATURE PREPROCESSING
+--------------------------
+Log transformation: log1p(x) applied to all monetary/count features
+  → Compresses high-variance distributions; prevents large revenue
+    partners from dominating distance calculations
+
+RobustScaler: Scales using median and IQR instead of mean/std
+  → Resilient to outliers (handles 10x revenue differences)
+  → When a VIP partner spends 50x the average, RobustScaler
+    prevents them from collapsing all others into the same cluster
+
+
+C. MULTI-ALGORITHM CONSENSUS CLUSTERING
+-----------------------------------------
+Three algorithms run in parallel on the same feature matrix:
+
+C1. HDBSCAN (Hierarchical Density-Based Spatial Clustering)
+  - Finds clusters of varying density
+  - Partners not fitting any cluster → labeled -1 (Outlier)
+  - Key parameter: min_cluster_size (auto-tuned based on partner count)
+  - Best for: finding irregular-shaped clusters, handling outliers
+
+C2. GAUSSIAN MIXTURE MODEL (GMM)
+  - Assumes data generated from K Gaussian distributions
+  - Soft assignment: each partner has probability of belonging to each cluster
+  - K selected by minimizing BIC (Bayesian Information Criterion):
+      BIC = k × ln(n) - 2 × ln(L̂)
+      where k = parameters, n = data points, L̂ = maximum likelihood
+  - K range tested: 2 to min(15, n_partners/10)
+  - Best for: elliptical, overlapping clusters
+
+C3. SPECTRAL CLUSTERING
+  - Builds a similarity graph (k-NN graph) from partner feature vectors
+  - Performs eigendecomposition of the graph Laplacian
+  - K-means on the eigenvectors gives the final labels
+  - K selected by highest silhouette score across tested values
+  - Best for: non-convex, ring-shaped clusters
+
+D. CONSENSUS MATRIX (_build_consensus_matrix)
+----------------------------------------------
+Instead of picking one algorithm's output, a consensus matrix is built:
+
+  C[i,j] = fraction of runs where partners i and j share the same cluster
+
+For M algorithms × R random restarts (stability runs):
+  C[i,j] = Σ(run_r: same_cluster(i,j)) / (M × R)
+
+Range: 0.0 (never co-clustered) to 1.0 (always co-clustered)
+
+This is a robust co-association matrix that captures agreement across methods.
+
+Final labels from consensus (_consensus_labels):
+  Convert C to distance: D[i,j] = 1 - C[i,j]
+  → Hierarchical Ward clustering on D
+  → Cut dendrogram at target K (chosen by silhouette on consensus)
+
+
+E. HUNGARIAN ALGORITHM FOR LABEL MATCHING
+------------------------------------------
+When clustering runs on refresh, cluster labels are arbitrary (Cluster 0, 1, 2...).
+To maintain consistent naming across runs, the Hungarian algorithm matches
+new labels to previous labels:
+
+  Cost matrix: C[new, old] = 1 - Jaccard similarity of partner sets
+  Hungarian: Minimizes total mismatching cost in O(n³)
+
+This ensures "VIP Cluster" stays labeled "VIP" across daily refreshes.
+
+
+F. CLUSTER TYPE CLASSIFICATION
+--------------------------------
+Each cluster is business-validated and labeled as one of:
+  VIP:      avg revenue in top 80th percentile AND cluster_revenue_share > 20%
+  Growth:   positive velocity_trend, younger tenure
+  Standard: core middle-tier partners
+  Outlier:  HDBSCAN -1 label or failed quality checks
+
+Strategic tags are assigned based on rules:
+  "Expand Wallet"     → healthy cluster, low category entropy
+  "Retention Focus"   → declining velocity_trend
+  "Premium Upsell"    → VIP cluster with few categories
+  "Activate"          → low frequency, recent first purchase
+
+
+G. QUALITY METRICS
+-------------------
+Three unsupervised quality metrics computed after clustering:
+
+Silhouette Score:
+  s(i) = (b(i) - a(i)) / max(a(i), b(i))
+  where a(i) = avg distance to SAME cluster, b(i) = avg distance to NEAREST cluster
+  Range: -1 to 1. Higher = better-separated clusters.
+  
+Calinski-Harabasz Score (Variance Ratio):
+  CH = [Between-cluster variance / (K-1)] / [Within-cluster variance / (N-K)]
+  Higher = better-defined, compact clusters.
+
+ARI (Adjusted Rand Index) for stability estimation:
+  - Clustering is run multiple times with bootstrapped data subsets
+  - ARI measures agreement between runs: 0 = random, 1 = identical
+  - ARI < 0.6 triggers a stability warning
+
+
+H. PCA VISUALIZATION (clustering.py)
+--------------------------------------
+The 3D scatter plot uses Principal Component Analysis for dimensionality reduction:
+
+  1. Select all numeric spend columns (category mix + RFM)
+  2. Apply log1p transformation
+  3. PCA to 3 components (PC1, PC2, PC3)
+
+PCA finds the 3 orthogonal directions of maximum variance:
+  PC1 captures the largest variance (usually total revenue scale)
+  PC2 captures the next largest (often category mix pattern)
+  PC3 captures the third (often recency/velocity)
+
+Partners are plotted as 3D scatter points:
+  Color = cluster label
+  Symbol = cluster type (VIP / Growth / Standard)
+  Hover = partner name, state, strategic tag
+
+
+DATA FLOW
+---------
+  PostgreSQL → _load_temporal_group_spend (pivot of category spend per partner)
+             → _build_cluster_features (6 feature groups combined)
+             → RobustScaler → HDBSCAN + GMM + Spectral
+             → _build_consensus_matrix → _consensus_labels
+             → _match_clusters_hungarian (label persistence)
+             → matrix DataFrame stored in ai.matrix (indexed by company_name)
+             → clustering.py renders with PCA + st.dataframe
+
+
+IMPROVEMENTS / SUGGESTIONS
+---------------------------
+1. DYNAMIC K SELECTION: Currently K range is fixed. Use Gap Statistic or
+   elbow method with cross-validation to auto-select optimal K.
+
+2. INCREMENTAL CLUSTERING: Rather than re-clustering all 1200+ partners
+   on every refresh, only update clusters for partners with changed features
+   using partial_fit approaches.
+
+3. CLUSTER DRIFT ALERTING: If a partner moves from VIP to At Risk cluster
+   between refreshes, generate an automatic alert.
+
+4. GEOGRAPHIC CLUSTERING: Add map-based visualization showing which states
+   each cluster is concentrated in.
+
+5. TIME-SERIES CLUSTER EVOLUTION: Track which cluster each partner was in
+   month-by-month and visualize their journey (Champion → At Risk → Churned).
+
+6. CLUSTER-LEVEL BENCHMARKING: For a selected partner, show how they compare
+   to their cluster median on each feature.
+
+7. SEMI-SUPERVISED SEEDING: Allow sales manager to tag 5-10 known VIP partners.
+   Use these as seeds to guide the clustering toward business-meaningful groups.
+
+8. DEEP EMBEDDING: Replace manual feature engineering with an autoencoder
+   (neural network that learns compressed representations of buying patterns).
+   This can capture non-linear relationships the hand-crafted features miss.
