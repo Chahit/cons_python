@@ -113,19 +113,18 @@ class BaseLoaderMixin:
         self._clustering_loaded_at = time.time()
 
     def _merge_cluster_labels_to_features(self):
-        """
-        Bridge: push cluster_label, cluster_type, cluster, and strategic_tag from
-        self.matrix into self.df_partner_features after every clustering run.
-
-        Without this step, df_partner_features keeps default empty cluster columns
-        (set during _load_partner_features) and all tabs show blank cluster info.
-
-        Called by ensure_clustering() so it runs automatically after clustering.
-        """
         if self.matrix is None or self.matrix.empty:
             return
         if self.df_partner_features is None or self.df_partner_features.empty:
             return
+
+        # ── Deduplicate both indices before reindex to prevent ValueError ──
+        if self.matrix.index.duplicated().any():
+            self.matrix = self.matrix[~self.matrix.index.duplicated(keep="last")]
+        if self.df_partner_features.index.duplicated().any():
+            self.df_partner_features = self.df_partner_features[
+                ~self.df_partner_features.index.duplicated(keep="last")
+            ]
 
         cluster_cols = ["cluster_label", "cluster_type", "cluster", "strategic_tag"]
         for col in cluster_cols:
@@ -134,8 +133,6 @@ class BaseLoaderMixin:
                     self.matrix[col].reindex(self.df_partner_features.index)
                 )
 
-        # Partners not covered by clustering (new, inactive, or <3 transactions)
-        # get neutral defaults so downstream code never sees NaN.
         if "cluster_label" in self.df_partner_features.columns:
             self.df_partner_features["cluster_label"] = (
                 self.df_partner_features["cluster_label"].fillna("Uncategorized")
@@ -144,6 +141,7 @@ class BaseLoaderMixin:
             self.df_partner_features["cluster_type"] = (
                 self.df_partner_features["cluster_type"].fillna("Growth")
             )
+
 
     def ensure_churn_forecast(self):
         if self._churn_ready and not self._is_stale(
@@ -246,18 +244,36 @@ class BaseLoaderMixin:
     def _build_recent_matrix(self):
         if self.df_recent_group_spend is None or self.df_recent_group_spend.empty:
             return pd.DataFrame()
+        if "group_name" not in self.df_recent_group_spend.columns:
+            return pd.DataFrame()
+
+        _val_col = next(
+            (c for c in ["total_spend", "total_revenue"] if c in self.df_recent_group_spend.columns),
+            None,
+        )
+        if _val_col is None:
+            return pd.DataFrame()
 
         matrix_recent = self.df_recent_group_spend.pivot_table(
             index="company_name",
             columns="group_name",
-            values="total_spend",
+            values=_val_col,
+            aggfunc="sum",
             fill_value=0,
         )
-        matrix_recent["state"] = (
-            self.df_recent_group_spend[["company_name", "state"]]
-            .drop_duplicates("company_name")
-            .set_index("company_name")["state"]
-        )
+        # Deduplicate index (safety guard)
+        matrix_recent = matrix_recent[~matrix_recent.index.duplicated(keep="last")]
+
+        if "state" in self.df_recent_group_spend.columns:
+            matrix_recent["state"] = (
+                self.df_recent_group_spend[["company_name", "state"]]
+                .drop_duplicates("company_name")
+                .set_index("company_name")["state"]
+                .reindex(matrix_recent.index)
+                .fillna("Unknown")
+            )
+        else:
+            matrix_recent["state"] = "Unknown"
         return matrix_recent
 
     def _run_data_quality_checks(self, df_ml):

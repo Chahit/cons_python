@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Inventory Liquidation — Technical Brief</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root {
+    --primary: #f59e0b;  --primary-light: #fffbeb; --primary-dark: #78350f;
+    --green:   #059669;  --green-light:   #d1fae5;
+    --red:     #dc2626;  --red-light:     #fee2e2;
+    --orange:  #ea580c;  --orange-light:  #fff7ed;
+    --blue:    #2563eb;  --blue-light:    #dbeafe;
+    --purple:  #7c3aed;  --purple-light:  #ede9fe;
+    --text: #111827; --text-secondary: #4b5563; --text-muted: #9ca3af;
+    --border: #e5e7eb; --bg: #f9fafb; --card: #ffffff; --code-bg: #0f172a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.75; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
+
+  .cover { background: linear-gradient(135deg, #1c0a00 0%, #92400e 55%, #f59e0b 100%); color: #fff; padding: 72px 80px 60px; }
+  .cover-badge { display: inline-block; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 20px; padding: 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 24px; }
+  .cover h1 { font-size: 42px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.15; margin-bottom: 14px; }
+  .cover h1 span { color: #fde68a; }
+  .cover .subtitle { font-size: 16px; color: #fef3c7; max-width: 640px; margin-bottom: 40px; line-height: 1.6; }
+  .cover-meta { display: flex; gap: 32px; flex-wrap: wrap; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 28px; }
+  .cover-meta-item { font-size: 12px; color: #fde68a; }
+  .cover-meta-item strong { display: block; color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+
+  .container { max-width: 900px; margin: 0 auto; padding: 56px 40px; }
+  .intro-box { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 10px 10px 0; padding: 20px 24px; margin-bottom: 48px; font-size: 14.5px; color: var(--primary-dark); line-height: 1.7; }
+
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 48px; }
+  .toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; margin-bottom: 16px; }
+  .toc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; }
+  .toc-item { font-size: 13.5px; color: var(--primary-dark); font-weight: 500; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .toc-num { color: var(--text-muted); font-weight: 400; margin-right: 6px; font-size: 12px; }
+
+  .section { margin-bottom: 60px; }
+  .section-header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 2px solid var(--border); }
+  .section-num { background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .section h2 { font-size: 21px; font-weight: 700; color: var(--text); }
+  .section-file { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--code-bg); color: #fcd34d; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
+
+  h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 26px 0 10px; }
+  p  { margin-bottom: 14px; color: var(--text-secondary); font-size: 14.5px; }
+
+  .formula { background: var(--code-bg); border-radius: 10px; padding: 18px 22px; margin: 16px 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #e2e8f0; line-height: 1.9; overflow-x: auto; white-space: pre; }
+  .formula .comment { color: #334155; }
+  .formula .var { color: #fcd34d; }
+  .formula .good { color: #34d399; }
+  .formula .bad  { color: #f87171; }
+
+  .callout { border-radius: 10px; padding: 16px 20px; margin: 18px 0; font-size: 14px; display: flex; gap: 12px; align-items: flex-start; }
+  .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.5; }
+  .callout-body strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+  .callout.why  { background: var(--primary-light); color: var(--primary-dark); }
+  .callout.tip  { background: var(--green-light); color: #064e3b; }
+  .callout.alt  { background: var(--orange-light); color: #7c2d12; }
+  .callout.info { background: var(--blue-light); color: #1e3a8a; }
+  .callout.warn { background: var(--red-light); color: #7f1d1d; }
+
+  .table-wrap { overflow-x: auto; margin: 18px 0; border-radius: 10px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead tr { background: #fffbeb; }
+  th { padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--primary-dark); border-bottom: 2px solid #fcd34d; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #fffbeb; }
+  td code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; background: var(--primary-light); padding: 1px 5px; border-radius: 3px; color: var(--primary-dark); }
+  td strong { color: var(--text); font-weight: 600; }
+
+  /* Age bucket colour band */
+  .age-bands { display: flex; gap: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); margin: 20px 0; }
+  .age-band { flex: 1; padding: 18px 14px; text-align: center; }
+  .age-band.g0  { background: #14532d; color: #86efac; }
+  .age-band.g1  { background: #713f12; color: #fde68a; }
+  .age-band.g2  { background: #7c2d12; color: #fdba74; }
+  .age-band.g3  { background: #7f1d1d; color: #fca5a5; }
+  .age-band-label { font-size: 13px; font-weight: 700; display: block; margin-bottom: 4px; }
+  .age-band-action { font-size: 11px; opacity: 0.85; line-height: 1.4; }
+
+  /* Exposure score visual bar */
+  .exp-row { display: flex; align-items: center; gap: 10px; margin: 7px 0; }
+  .exp-label { width: 180px; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); text-align: right; flex-shrink: 0; }
+  .exp-track { flex: 1; background: #fef3c7; border-radius: 4px; height: 18px; }
+  .exp-fill { height: 18px; border-radius: 4px; background: var(--primary); }
+  .exp-pct { font-size: 12px; font-weight: 700; color: var(--primary-dark); min-width: 40px; }
+
+  /* Audience type cards */
+  .audience-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 20px 0; }
+  .audience-card { border-radius: 10px; padding: 18px 20px; border: 1px solid var(--border); }
+  .audience-card.past { background: var(--blue-light); border-color: #93c5fd; }
+  .audience-card.lookalike { background: var(--purple-light); border-color: #c4b5fd; }
+  .audience-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+  .audience-badge { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; padding: 2px 8px; border-radius: 10px; margin-bottom: 8px; }
+  .audience-card.past .audience-badge { background: var(--blue); color: #fff; }
+  .audience-card.lookalike .audience-badge { background: var(--purple); color: #fff; }
+  .audience-body { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+
+  /* Data flow */
+  .flow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 16px 0; }
+  .flow-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 12px; font-weight: 600; color: var(--text); }
+  .flow-box.src { background: #fffbeb; border-color: #fcd34d; color: var(--primary-dark); }
+  .flow-box.out { background: var(--green-light); border-color: #86efac; color: #064e3b; }
+  .flow-arrow { font-size: 14px; color: var(--primary); font-weight: 700; }
+
+  /* Priority colours */
+  .priority-critical { display: inline-block; background: var(--red-light); color: var(--red); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.7px; }
+  .priority-high     { display: inline-block; background: #fff7ed; color: var(--orange); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.7px; }
+  .priority-medium   { display: inline-block; background: #fefce8; color: #854d0e; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.7px; }
+  .priority-low      { display: inline-block; background: var(--green-light); color: var(--green); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.7px; }
+
+  .env-tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--primary-dark); background: var(--primary-light); padding: 2px 7px; border-radius: 4px; }
+
+  .footer { text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 12px; border-top: 1px solid var(--border); margin-top: 16px; }
+  .footer strong { color: var(--text-secondary); }
+
+  @media (max-width: 640px) {
+    .cover { padding: 40px 24px; } .cover h1 { font-size: 28px; }
+    .container { padding: 32px 20px; }
+    .toc-grid, .audience-grid { grid-template-columns: 1fr; }
+    .age-bands { flex-wrap: wrap; }
+    .age-band { min-width: 45%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-badge">Inventory Module — Internal Technical Brief</div>
+  <h1>Inventory<br/><span>Liquidation Engine</span></h1>
+  <p class="subtitle">
+    How the system identifies dead and slow-moving stock using age-bucket analysis and a composite exposure score,
+    then surfaces the most likely buyers — including cluster-derived lookalike audiences —
+    so your team can run targeted clearance campaigns directly from the dashboard.
+  </p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><strong>UI File</strong>inventory.py (218 lines)</div>
+    <div class="cover-meta-item"><strong>Engine</strong>monitoring_mixin.py → get_stock_details()</div>
+    <div class="cover-meta-item"><strong>Data Source</strong>df_stock_stats + df_dead_stock views</div>
+    <div class="cover-meta-item"><strong>April 2026</strong>Version 2.4</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="intro-box">
+    Unsold inventory is silent money. Every unit sitting in a warehouse is working capital that can't be deployed elsewhere — and in a distribution business handling lubricants, paints, and construction chemicals, stock doesn't stay fresh forever. This module does two things that most inventory systems don't: it tells you not just <em>what</em> is dead stock, but <em>who should buy it</em> — using past purchase history and ML-derived cluster lookalike audiences to build a ready-to-use outreach list that your sales team can download and call from the same dashboard.
+  </div>
+
+  <div class="toc">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-item"><span class="toc-num">01</span>Data Sources — Two Stock Views</div>
+      <div class="toc-item"><span class="toc-num">06</span>Lookalike Audience Discovery</div>
+      <div class="toc-item"><span class="toc-num">02</span>Age-Bucket Classification</div>
+      <div class="toc-item"><span class="toc-num">07</span>Capital Locked Calculation</div>
+      <div class="toc-item"><span class="toc-num">03</span>State-Wise Dead Stock Heatmap</div>
+      <div class="toc-item"><span class="toc-num">08</span>Campaign List Export</div>
+      <div class="toc-item"><span class="toc-num">04</span>Stock Exposure Score (0–100)</div>
+      <div class="toc-item"><span class="toc-num">09</span>Priority Classification</div>
+      <div class="toc-item"><span class="toc-num">05</span>Past-Buyer Lead Generation</div>
+      <div class="toc-item"><span class="toc-num">10</span>Limitations &amp; Improvements</div>
+    </div>
+  </div>
+
+  <!-- S1 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">01</div>
+      <h2>Data Sources — Two Stock Views</h2>
+    </div>
+    <p>The Inventory module draws from two pre-computed database views. Neither is computed at runtime — both are materialised views in the database that summarise stock position and buyer history. This makes the tab fast even for large product catalogues.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Data Source</th><th>What it contains</th><th>Used for</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>df_stock_stats</code><br/><span style="font-size:11px; color:var(--text-muted);">(view_stock_stats or equivalent)</span></td>
+            <td>One row per SKU. Columns: <code>product_name</code>, <code>total_stock_qty</code>, <code>max_age_days</code>, optionally <code>age_0_30</code> / <code>age_31_60</code> / <code>age_61_90</code> / <code>age_90_plus</code> (pre-bucketed quantity cols)</td>
+            <td>Portfolio ageing distribution chart, stock KPI cards (units to clear, capital locked, max age), exposure score calculation</td>
+          </tr>
+          <tr>
+            <td><code>df_dead_stock</code><br/><span style="font-size:11px; color:var(--text-muted);">(view_stock_liquidation_leads)</span></td>
+            <td>One row per (item, potential buyer) pair. Columns: <code>dead_stock_item</code>, <code>potential_buyer</code>, <code>mobile_no</code>, <code>buyer_past_purchase_qty</code>, <code>last_purchase_date</code>, optional <code>state</code>, <code>category</code></td>
+            <td>Target buyer list per product, mobile number for direct outreach, state heatmap, campaign export</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flow">
+      <div class="flow-box src">view_stock_stats</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box">Age buckets + KPIs</div>
+      <span class="flow-arrow">+</span>
+      <div class="flow-box src">view_stock_liquidation_leads</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box">Past buyers per SKU</div>
+      <span class="flow-arrow">+</span>
+      <div class="flow-box">Cluster labels (df_partner_features)</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box out">Lookalike audience + Campaign list</div>
+    </div>
+
+    <div class="callout why">
+      <div class="callout-icon">🗄️</div>
+      <div class="callout-body">
+        <strong>Why use pre-computed views rather than querying transactions directly?</strong>
+        Computing stock age from raw goods-receipt and sales transaction tables on every page load would require a complex multi-table join across potentially millions of rows. By using a materialised view, the heavy SQL aggregation runs once (typically nightly or on a schedule) and results are served instantly. The tradeoff is that stock position could be up to 24 hours old — acceptable for a weekly clearance planning workflow, but would need real-time joins for live warehouse systems.
+      </div>
+    </div>
+  </div>
+
+  <!-- S2 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">02</div>
+      <h2>Age-Bucket Classification</h2>
+      <span class="section-file">inventory.py → Portfolio Ageing Distribution</span>
+    </div>
+    <p>Every unit of stock is classified into one of four age buckets based on how long it has been in the warehouse. The buckets prioritise urgency — old stock in the 90+ days band is the most urgent liquidation target.</p>
+
+    <div class="age-bands">
+      <div class="age-band g0">
+        <span class="age-band-label">0–30 Days</span>
+        <div class="age-band-action">Fresh stock. Normal replenishment range. No action needed.</div>
+      </div>
+      <div class="age-band g1">
+        <span class="age-band-label">31–60 Days</span>
+        <div class="age-band-action">Watch list. Start monitoring sell-through velocity – if slow, prepare bundling.</div>
+      </div>
+      <div class="age-band g2">
+        <span class="age-band-label">61–90 Days</span>
+        <div class="age-band-action">Action needed. Initiate targeted outreach to past buyers. Apply promotional pricing.</div>
+      </div>
+      <div class="age-band g3">
+        <span class="age-band-label">90+ Days</span>
+        <div class="age-band-action">Dead stock. Liquidate immediately. Flash sale, clearance bundle, or write-off planning.</div>
+      </div>
+    </div>
+
+    <h3>Two Bucketing Methods — With Automatic Fallback</h3>
+    <div class="formula"><span class="comment">Method 1 (preferred): Pre-bucketed columns from the DB view</span>
+IF age_0_30, age_31_60, age_61_90, age_90_plus exist in df_stock_stats:
+    → Use them directly: sum each column across all SKUs to get bucket totals
+    → Most accurate: DB view computes per-batch age at source
+
+<span class="comment">Method 2 (fallback): Derive buckets from max_age_days if pre-bucketed cols missing</span>
+IF only max_age_days is available:
+    → Use max_age_days as a proxy for the oldest open batch for that SKU
+    → Classify each SKU into a bucket based on its maximum warehouse age
+    → Count units (total_stock_qty) per bucket
+
+<span class="comment">Fallback logic:</span>
+age_0_30  = sum(qty) WHERE max_age_days <= 30
+age_31_60 = sum(qty) WHERE max_age_days > 30 AND <= 60
+age_61_90 = sum(qty) WHERE max_age_days > 60 AND <= 90
+age_90plus = sum(qty) WHERE max_age_days > 90
+
+<span class="comment">Note: if NO qty column exists, fallback counts SKUs instead of units.</span>
+<span class="comment">(Total SKUs in each bucket rather than total warehouse units.)</span></div>
+  </div>
+
+  <!-- S3 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">03</div>
+      <h2>State-Wise Dead Stock Heatmap</h2>
+      <span class="section-file">inventory.py → lines 82–104</span>
+    </div>
+    <p>When state and category data is available in the dead stock view, the module renders a stacked bar chart showing which states have the highest quantity of at-risk inventory and which product categories are driving it. This is a geographic demand signal — if a state has more dead stock than others, it might simply be that the assigned rep isn't visiting those partners frequently enough, or demand in that region for that category has dropped.</p>
+
+    <div class="formula"><span class="comment">Group logic:</span>
+state_agg = df_dead.groupby([state_col, category_col])[qty_col].sum()
+
+<span class="comment">Column detection (fault-tolerant — tries alternate column names):</span>
+state_col = first found from: ["state", "partner_state", "buyer_state"]
+cat_col   = first found from: ["category", "product_category", "dead_stock_item"]
+qty_col   = first found from: ["buyer_past_purchase_qty", "total_qty", "qty"]
+
+<span class="comment">Stacked bar chart: X = State, Y = Total Qty at Risk, Color = Category</span>
+<span class="comment">Allows management to see: "Maharashtra has 3,400 units of dead Epoxy Primer"</span>
+<span class="comment">vs. "Gujarat has 800 units of dead Synthetic Enamel"</span>
+<span class="comment">This shapes whether the response is category-wide or territory-specific</span></div>
+  </div>
+
+  <!-- S4 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">04</div>
+      <h2>Stock Exposure Score (0–100)</h2>
+      <span class="section-file">monitoring_mixin.py → get_stock_details()</span>
+    </div>
+    <p>For each product selected in the drilldown, a composite exposure score is computed to quantify the financial urgency of clearing that specific item. The score combines four independent signals, each capturing a different dimension of inventory risk.</p>
+
+    <div class="formula"><span class="comment">Four weighted components:</span>
+
+<span class="var">age_component</span>        = min(max_age_days / 180, 1.0) × 55
+<span class="comment">  Primary signal. Stock at 180 days = maximum age risk contribution (55 pts).</span>
+<span class="comment">  180 days chosen as the "full risk" threshold — beyond this, the stock is</span>
+<span class="comment">  typically unrecoverable through normal sales channels in a B2B context.</span>
+
+<span class="var">percentile_component</span> = min(age_percentile, 100) / 100 × 20
+<span class="comment">  Relative position of this SKU's age vs all other SKUs in the portfolio.</span>
+<span class="comment">  A product at the 90th percentile of age = 18 out of 20 pts.</span>
+<span class="comment">  Catches products that are old even for this business's norms.</span>
+
+<span class="var">qty_component</span>        = min(total_stock_qty / 100, 1.0) × 15
+<span class="comment">  Volume of unsold units. 100+ units = maximum volume risk (15 pts).</span>
+<span class="comment">  A product with 500 old units is a bigger problem than one with 5 old units.</span>
+
+<span class="var">recency_component</span>    = min(demand_recency_days / 180, 1.0) × 10
+<span class="comment">  Days since the last known purchase of this product by any buyer.</span>
+<span class="comment">  Only used when demand_recency_days is available from df_dead_stock.</span>
+<span class="comment">  180+ days since last buyer = maximum demand dryness signal (10 pts).</span>
+
+<span class="var">stock_exposure_score</span> = age_component + percentile_component + qty_component + recency_component
+<span class="comment">  Maximum possible: 55 + 20 + 15 + 10 = 100</span></div>
+
+    <div style="margin: 22px 0;">
+      <div class="exp-row"><div class="exp-label">Age (max_age_days)</div><div class="exp-track"><div class="exp-fill" style="width:55%"></div></div><div class="exp-pct">55 pts</div></div>
+      <div class="exp-row"><div class="exp-label">Relative Age Percentile</div><div class="exp-track"><div class="exp-fill" style="width:20%; background:#92400e;"></div></div><div class="exp-pct">20 pts</div></div>
+      <div class="exp-row"><div class="exp-label">Stock Quantity</div><div class="exp-track"><div class="exp-fill" style="width:15%; background:#92400e;"></div></div><div class="exp-pct">15 pts</div></div>
+      <div class="exp-row"><div class="exp-label">Demand Recency</div><div class="exp-track"><div class="exp-fill" style="width:10%; background:#78350f;"></div></div><div class="exp-pct">10 pts</div></div>
+    </div>
+
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>Why does stock age carry 55% of the weight?</strong>
+        Old inventory is the root problem in distribution — the longer stock sits, the more warehouse space it occupies, the more interest cost it incurs on working capital, and the more it depreciates (especially for seasonal or technical products). A product with 500 units sitting for 10 days is less urgent than one with 20 units sitting for 200 days. The 55% weight on age ensures the score reflects this financial reality rather than treating all large-quantity stock as equally urgent.
+      </div>
+    </div>
+
+    <h3>How age_percentile is computed</h3>
+    <div class="formula"><span class="var">age_series</span> = df_stock_stats["max_age_days"] (cleaned, no nulls)
+
+<span class="var">age_percentile</span> = fraction of all SKUs with max_age_days <= this_product's_age × 100
+
+<span class="comment">Example:</span>
+<span class="comment">  Product X has max_age_days = 120</span>
+<span class="comment">  60% of all SKUs have max_age_days <= 120</span>
+<span class="comment">  → age_percentile = 60.0 → percentile_component = (60/100) × 20 = 12 pts</span>
+
+<span class="comment">Fallback: if age_series is empty or null, age_percentile = 50.0 (median assumed)</span></div>
+  </div>
+
+  <!-- S5 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">05</div>
+      <h2>Past-Buyer Lead Generation</h2>
+      <span class="section-file">inventory.py → leads = df_dead[df_dead["dead_stock_item"] == selected_item]</span>
+    </div>
+    <p>When a dead stock item is selected, the system pulls all rows from <code>df_dead_stock</code> where <code>dead_stock_item</code> matches. Each row represents a partner who has purchased that product at least once in the past — making them the highest-probability buyer for a clearance offer. The leads are sorted by <code>buyer_past_purchase_qty</code> descending — partners who bought the most of this product historically appear first.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Column</th><th>Meaning</th><th>Sales use</th></tr></thead>
+        <tbody>
+          <tr><td><strong>potential_buyer</strong></td><td>Company name of the partner who previously bought this SKU</td><td>Who to call</td></tr>
+          <tr><td><strong>mobile_no</strong></td><td>Contact number from the partner master, if available</td><td>Call directly from the record — no cross-tab lookup</td></tr>
+          <tr><td><strong>buyer_past_purchase_qty</strong></td><td>Total units of this product this partner has bought historically</td><td>Prioritise high-qty buyers — they have demonstrated capacity to absorb volume</td></tr>
+          <tr><td><strong>last_purchase_date</strong></td><td>When they last bought this specific product</td><td>Recency context — a buyer who bought 30 days ago is a hotter lead than one who bought 18 months ago</td></tr>
+          <tr><td><strong>Audience Type</strong></td><td>System-assigned: "Past Buyer" or "Lookalike (Cluster: X)"</td><td>Distinguishes proven buyers from predicted likely buyers — lets the sales team prioritise accordingly</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- S6 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">06</div>
+      <h2>Lookalike Audience Discovery — Cluster-Powered</h2>
+      <span class="section-file">inventory.py → lines 174–191</span>
+    </div>
+    <p>This is the feature that makes the Inventory module unique. After identifying past buyers, the system identifies which cluster(s) those buyers belong to — then surfaces other partners in the same cluster who have <em>not yet bought this product</em>. These are lookalike audiences: partners who behave like your past buyers, making them likely candidates for the same product.</p>
+
+    <div class="audience-grid">
+      <div class="audience-card past">
+        <div class="audience-badge">Past Buyer</div>
+        <div class="audience-title">Proven Demand — High Priority</div>
+        <div class="audience-body">
+          Partners who specifically purchased this SKU before. Their historical purchase quantity is shown. These are your warmest leads — they know the product, they've bought it, and the conversation is "we have stock at a discount, are you interested?" Not an education sell.
+        </div>
+      </div>
+      <div class="audience-card lookalike">
+        <div class="audience-badge">Lookalike</div>
+        <div class="audience-title">Cluster-Derived — New Opportunity</div>
+        <div class="audience-body">
+          Partners in the same cluster as past buyers who haven't bought this product. They share similar revenue profile, product category mix, and buying behaviour with the actual buyers. Sorted by <code>recent_90_revenue</code> (most active partners first) and capped at 10 per cluster.
+        </div>
+      </div>
+    </div>
+
+    <div class="formula"><span class="comment">Lookalike discovery algorithm (step-by-step):</span>
+
+1. Extract cluster labels of all past buyers for this SKU:
+   <span class="var">buyer_clusters</span> = leads["cluster_label"].dropna().unique()
+
+2. Filter the full partner features matrix:
+   <span class="var">lookalikes</span> = df_partner_features WHERE:
+       cluster_label IN buyer_clusters       <span class="comment">← same cluster as a real buyer</span>
+       AND company_name NOT IN past_buyers   <span class="comment">← hasn't already bought this SKU</span>
+
+3. Sort by recent_90_revenue descending — most active partners first
+4. Take top 10 lookalikes (prevents overwhelming the leads table)
+
+5. Append to leads table with:
+   potential_buyer  = company_name
+   mobile_no        = "Lookalike"  (not in dead_stock view, shown as a label)
+   buyer_past_purchase_qty = 0     (no prior purchase of this SKU)
+   last_purchase_date = "Never"
+   Audience Type    = "Lookalike (Cluster: VIP Stable)" etc.
+
+<span class="comment">Combined table: past buyers sorted first (high qty DESC), then lookalikes appended</span>
+<span class="comment">Sales team strategy: call past buyers first, then lookalikes as expansion targets</span></div>
+
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>Why use cluster membership as the lookalike signal instead of product category overlap?</strong>
+        Category overlap tells you "this partner buys paints, therefore pitch Epoxy Primer" — which is too broad. Cluster membership tells you "this partner behaves like the three specific partners who actually bought this exact dead stock item." The clustering algorithm has already found multi-dimensional similarity covering revenue level, buying frequency, category mix, and recency. It's a richer, more specific signal than a single category match.
+      </div>
+    </div>
+  </div>
+
+  <!-- S7 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">07</div>
+      <h2>Capital Locked Calculation</h2>
+      <span class="section-file">inventory.py → lines 124–140</span>
+    </div>
+    <p>One of the four KPI cards on the product detail view shows the total capital currently locked in the unsold stock of the selected item. This turns a warehouse unit count into a rupee figure that finance and management can act on.</p>
+
+    <div class="formula"><span class="var">capital_locked</span> = total_stock_qty × cost_price
+
+<span class="comment">Cost price resolution order (with fallback chain):</span>
+1. stock_details.get("cost_price")           <span class="comment">← from df_stock_stats view (preferred)</span>
+2. df_master_products lookup by product_name  <span class="comment">← master product catalogue</span>
+   - Tries column names: ["cost_price", "unit_cost", "purchase_price"]
+3. Fallback: cost_price = Rs 1,000 (estimate)
+             cost_label = " (est.)"           <span class="comment">← shown in UI to signal it's approximate</span>
+
+<span class="comment">The fallback prevents a division error or missing value from blocking the UI.</span>
+<span class="comment">The "(est.)" label ensures transparency — management knows it's an estimate,</span>
+<span class="comment">not a verified figure from the accounting system.</span>
+
+<span class="comment">Example:</span>
+<span class="comment">  total_stock_qty = 240 units</span>
+<span class="comment">  cost_price = Rs 850 per unit</span>
+<span class="comment">  capital_locked = Rs 2,04,000</span></div>
+
+    <div class="callout alt">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>The Rs 1,000 fallback is a known gap</strong>
+        If the cost price is not available from either the stock view or the master products table, the system defaults to Rs 1,000 per unit as a guess. For products where the actual cost is significantly different (e.g., a specialised industrial adhesive at Rs 8,500/unit), this severely underestimates the capital at risk and could cause management to underweight the urgency of clearing that item. This is flagged for improvement: the master products table should always have a <code>cost_price</code> column, and it should be a mandatory non-null field.
+      </div>
+    </div>
+  </div>
+
+  <!-- S8 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">08</div>
+      <h2>Campaign List Export</h2>
+      <span class="section-file">inventory.py → st.download_button()</span>
+    </div>
+    <p>The full target buyer list — both past buyers and lookalike partners — can be downloaded as a CSV with one click, named automatically after the selected product. This is the operational handoff from the dashboard to the sales team: the manager exports the list, forwards it to the relevant repswith their targets, and the calls can begin without any separate CRM setup.</p>
+
+    <div class="formula"><span class="comment">Export columns (all available columns that exist):</span>
+["potential_buyer", "mobile_no", "buyer_past_purchase_qty",
+ "Audience Type", "last_purchase_date"]
+
+<span class="comment">Filename pattern:</span>
+leads_{product_name_with_underscores}.csv
+e.g.: leads_Epoxy_Primer_1L.csv
+
+<span class="comment">Audience Type column tells the sales rep:</span>
+<span class="good">"Past Buyer"</span>        → "You've sold this to them before — warm call, easy open"
+<span class="bad">"Lookalike (Cluster: VIP Stable)"</span> → "Similar profile to buyers, first time pitch this product"
+
+<span class="comment">Mobile number column: directly actionable for WhatsApp or phone outreach.</span>
+<span class="comment">Lookalike rows show "Lookalike" in mobile column — rep must look up number separately.</span></div>
+  </div>
+
+  <!-- S9 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">09</div>
+      <h2>KPI Cards — What the Manager Sees</h2>
+    </div>
+    <p>Four KPI cards appear at the top of the product detail view, giving an instant snapshot before diving into the buyer list:</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Card</th><th>Value shown</th><th>Decision it enables</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Units to Clear</strong></td>
+            <td><code>total_stock_qty</code> from stock view</td>
+            <td>How large is the problem? 5 units is a non-issue. 500 units warrants emergency clearance.</td>
+          </tr>
+          <tr>
+            <td><strong>Capital Locked</strong></td>
+            <td><code>total_stock_qty × cost_price</code></td>
+            <td>Finance impact. Converts units into money — the language management responds to fastest.</td>
+          </tr>
+          <tr>
+            <td><strong>Max Age in WH</strong></td>
+            <td><code>max_age_days</code> from stock view</td>
+            <td>Urgency level. "240 days in warehouse" triggers immediate escalation without the manager needing to calculate anything.</td>
+          </tr>
+          <tr>
+            <td><strong>Priority</strong></td>
+            <td>Derived from <code>stock_exposure_score</code></td>
+            <td>Summarises all four signals into one action label. <span class="priority-critical">Critical</span> = act today. <span class="priority-high">High</span> = this week. <span class="priority-medium">Medium</span> = this month. <span class="priority-low">Low</span> = monitor.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Priority Threshold Reference</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Score Range</th><th>Priority</th><th>Recommended Action</th></tr></thead>
+        <tbody>
+          <tr><td>&geq; 80</td><td><span class="priority-critical">Critical</span></td><td>Immediate Action — emergency flash sale, direct calls today, consider write-off planning</td></tr>
+          <tr><td>60 – 79</td><td><span class="priority-high">High</span></td><td>Plan Sales — run the campaign list this week, apply 15–25% discount</td></tr>
+          <tr><td>35 – 59</td><td><span class="priority-medium">Medium</span></td><td>Monitor Weekly — create bundle offer, include in next rep visit</td></tr>
+          <tr><td>&lt; 35</td><td><span class="priority-low">Low</span></td><td>Monitor Monthly — appears on radar, no immediate action</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- S10 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">10</div>
+      <h2>Limitations &amp; Improvements</h2>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Limitation</th><th>Impact</th><th>Improvement path</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><strong>Cost price fallback to Rs 1,000</strong></td>
+            <td>Capital Locked metric is wrong for products not in the master catalogue. Finance decisions based on an incorrect capital figure could under-prioritise urgent clearance.</td>
+            <td>Enforce a non-null <code>cost_price</code> field in <code>master_products</code>. Add a data quality check that flags products in stock_stats with no matching master record.</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><strong>Stock view can be up to 24 hours stale</strong></td>
+            <td>A product sold this morning might still appear as "240 units dead stock" if the view refreshes nightly. A clearance campaign might launch for stock that's already sold.</td>
+            <td>Trigger a view refresh on demand (a "Refresh Stock Data" button in the UI) or switch to a streaming view for warehouse data where real-time accuracy matters.</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><strong>Lookalike mobile numbers not available</strong></td>
+            <td>Lookalike partners show "Lookalike" as their mobile number — the sales rep has to look up the contact number separately, adding friction to the outreach workflow.</td>
+            <td>Join the lookalike results back to the partner master table to include the mobile number. This is a straightforward data join that requires partner contact info to be in the system.</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><strong>No discount recommendation engine</strong></td>
+            <td>The manager must decide what discount to offer. A 10% discount might not move 300-day-old stock, but a 30% discount might clear it in a week.</td>
+            <td>Add a discount calculator: given the product's daily holding cost (interest rate × capital locked ÷ 365), compute the break-even discount at which it's better to clear at a loss than continue holding. Show this as the "minimum viable clearance price."</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td><strong>No campaign outcome tracking</strong></td>
+            <td>There's no way to know whether the exported campaign list resulted in sales. The module surfaces leads but doesn't close the loop.</td>
+            <td>After a clearance campaign runs, check if the partner appeared in new transactions for that product within 14 days. Build a "clearance conversion rate" metric per campaign — this teaches the system which audience types (past buyers vs lookalikes) convert better.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <strong>Inventory Liquidation Engine — Technical Brief</strong> &nbsp;·&nbsp; Inventory Module &nbsp;·&nbsp; April 2026<br/>
+  Files: inventory.py (UI) · monitoring_mixin.py → get_stock_details(), get_dead_stock()<br/>
+  Data: view_stock_stats (df_stock_stats) · view_stock_liquidation_leads (df_dead_stock) · df_partner_features (cluster labels for lookalike engine)<br/>
+  Methods: Fault-tolerant age-bucket derivation · 4-component composite exposure score · cluster-based lookalike audience generation · capital-locked calculation with fallback chain
+</div>
+
+</body>
+</html>

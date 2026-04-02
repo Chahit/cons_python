@@ -343,10 +343,22 @@ class ClusteringMixin:
         if subset_df.empty:
             return pd.DataFrame(), pd.DataFrame(), pd.Series(dtype=str)
 
+        # Resolve spend column — name varies by load path
+        _spend_col = next(
+            (c for c in ["total_spend", "total_revenue", "net_amt"] if c in subset_df.columns),
+            None,
+        )
+        if _spend_col is None:
+            _num_cols = subset_df.select_dtypes(include="number").columns.tolist()
+            _spend_col = _num_cols[0] if _num_cols else None
+        if _spend_col is None or "group_name" not in subset_df.columns:
+            return pd.DataFrame(), pd.DataFrame(), pd.Series(dtype=str)
+
         pivot = subset_df.pivot_table(
             index="company_name",
             columns="group_name",
-            values="total_spend",
+            values=_spend_col,
+            aggfunc="sum",
             fill_value=0.0,
         )
         if pivot.empty:
@@ -357,13 +369,20 @@ class ClusteringMixin:
         if not self.strict_view_only:
             for d in windows:
                 dfw = self._load_temporal_group_spend(d)
-                if dfw is not None and not dfw.empty:
-                    windows[d] = dfw.pivot_table(
-                        index="company_name",
-                        columns="group_name",
-                        values="total_spend",
-                        fill_value=0.0,
+                if dfw is not None and not dfw.empty and "group_name" in dfw.columns:
+                    _w_col = next(
+                        (c for c in ["total_spend", "total_revenue", "net_amt"] if c in dfw.columns),
+                        dfw.select_dtypes(include="number").columns[0]
+                        if not dfw.select_dtypes(include="number").empty else None,
                     )
+                    if _w_col:
+                        windows[d] = dfw.pivot_table(
+                            index="company_name",
+                            columns="group_name",
+                            values=_w_col,
+                            aggfunc="sum",
+                            fill_value=0.0,
+                        )
 
         base_cols = set(pivot.columns.tolist())
         for d, w in windows.items():
@@ -404,13 +423,16 @@ class ClusteringMixin:
         ag_365 = (scale_base > 0).sum(axis=1).astype(float)
         scale["scale::active_group_momentum"] = ag_90 - ag_365
 
-        state_map = (
-            subset_df[["company_name", "state"]]
-            .drop_duplicates("company_name")
-            .set_index("company_name")["state"]
-            .reindex(pivot.index)
-            .fillna("Unknown")
-        )
+        if "state" in subset_df.columns:
+            state_map = (
+                subset_df[["company_name", "state"]]
+                .drop_duplicates("company_name")
+                .set_index("company_name")["state"]
+                .reindex(pivot.index)
+                .fillna("Unknown")
+            )
+        else:
+            state_map = pd.Series("Unknown", index=pivot.index, name="state")
 
         # --- RFM Features ---
         rfm_features = pd.DataFrame(index=pivot.index)
@@ -1209,8 +1231,15 @@ class ClusteringMixin:
         if len(common) < 3:
             return {}
 
+        # Ensure no duplicate index labels before reindex
+        prev_labels = prev_labels[~prev_labels.index.duplicated(keep="last")]
+        new_labels  = new_labels[~new_labels.index.duplicated(keep="last")]
+        common = prev_labels.index.intersection(new_labels.index)
+        if len(common) < 3:
+            return {}
+
         prev_sub = prev_labels.reindex(common).dropna()
-        new_sub = new_labels.reindex(common).dropna()
+        new_sub  = new_labels.reindex(common).dropna()
         common_clean = prev_sub.index.intersection(new_sub.index)
         if len(common_clean) < 3:
             return {}
@@ -1278,9 +1307,13 @@ class ClusteringMixin:
         prev_labels = prev["cluster_label"].astype(str)
         new_labels = current_matrix["cluster_label"].astype(str)
 
+        # ── Deduplicate: index must be unique for reindex/intersection to work ──
+        prev_labels = prev_labels[~prev_labels.index.duplicated(keep="last")]
+        new_labels  = new_labels[~new_labels.index.duplicated(keep="last")]
+
         # Match clusters via Hungarian algorithm
         mapping = self._match_clusters_hungarian(
-            prev_labels, new_labels, prev.index, current_matrix.index
+            prev_labels, new_labels, prev_labels.index, new_labels.index
         )
         report["cluster_mapping"] = mapping
 
@@ -1400,7 +1433,12 @@ class ClusteringMixin:
             return {}
 
         meta_cols = {"state", "cluster", "cluster_type", "cluster_label", "strategic_tag"}
-        product_cols = [c for c in matrix.columns if c not in meta_cols]
+        # Strictly numeric only — matrix can contain date/object cols from view_ml_input
+        product_cols = [
+            c for c in matrix.columns
+            if c not in meta_cols
+            and pd.api.types.is_numeric_dtype(matrix[c])
+        ]
         if not product_cols:
             return {}
 
@@ -1899,9 +1937,26 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
         if self.df_ml is None:
             self.ensure_core_loaded()
 
-        partner_totals = (
-            self.df_ml.groupby("company_name")["total_spend"].sum().sort_values(ascending=False)
+        # Resolve the revenue column — df_ml column set varies by load path
+        _rev_col = next(
+            (c for c in ["total_spend", "total_revenue"] if c in self.df_ml.columns),
+            None,
         )
+        if _rev_col:
+            partner_totals = (
+                self.df_ml.groupby("company_name")[_rev_col].sum().sort_values(ascending=False)
+            )
+        else:
+            # df_ml is already pivoted (columns = product groups) — sum all numeric cols per partner
+            _num = self.df_ml.select_dtypes(include="number")
+            partner_totals = (
+                self.df_ml[["company_name"]]
+                .join(_num)
+                .groupby("company_name")
+                .sum()
+                .sum(axis=1)
+                .sort_values(ascending=False)
+            )
         n_partners = int(len(partner_totals))
         if n_partners == 0:
             self.matrix = pd.DataFrame()
@@ -1943,17 +1998,37 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
         growth_meta, growth_report = self._process_segment(df_mass, method="hdbscan")
         cluster_meta = pd.concat([vip_meta, growth_meta], axis=0)
 
-        self.matrix = self.df_ml.pivot_table(
-            index="company_name",
-            columns="group_name",
-            values="total_spend",
-            fill_value=0,
+        _pivot_val = _rev_col or (
+            self.df_ml.select_dtypes(include="number").columns[0]
+            if not self.df_ml.select_dtypes(include="number").empty
+            else None
         )
-        self.matrix["state"] = (
-            self.df_ml[["company_name", "state"]]
-            .drop_duplicates("company_name")
-            .set_index("company_name")["state"]
-        )
+        if _pivot_val and "group_name" in self.df_ml.columns:
+            self.matrix = self.df_ml.pivot_table(
+                index="company_name",
+                columns="group_name",
+                values=_pivot_val,
+                aggfunc="sum",
+                fill_value=0,
+            )
+        else:
+            # df_ml already structured as a wide matrix — use it directly
+            self.matrix = (
+                self.df_ml.set_index("company_name")
+                if "company_name" in self.df_ml.columns
+                else self.df_ml.copy()
+            )
+        # Attach state — column may not exist in all DB schemas
+        if "state" in self.df_ml.columns and "company_name" in self.df_ml.columns:
+            self.matrix["state"] = (
+                self.df_ml[["company_name", "state"]]
+                .drop_duplicates("company_name")
+                .set_index("company_name")["state"]
+                .reindex(self.matrix.index)
+                .fillna("Unknown")
+            )
+        else:
+            self.matrix["state"] = "Unknown"
 
         self.matrix["cluster"] = (
             cluster_meta["cluster"].reindex(self.matrix.index).fillna(-1).astype(int)
