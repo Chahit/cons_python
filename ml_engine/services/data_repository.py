@@ -10,7 +10,20 @@ class DataRepository:
     def fetch_view_ml_input(self):
         query = """
         SELECT
-            v.*,
+            v.company_name,
+            v.party_id,
+            v.total_revenue,
+            v.order_count,
+            v.avg_order_value,
+            v.product_diversity,
+            v.avg_payment_days,
+            -- Cast last_order_date to text so pandas reads it uniformly
+            CAST(v.last_order_date AS TEXT) AS last_order_date,
+            -- Cast recency_days to INTEGER (interval causes object dtype in some pandas versions)
+            CASE
+                WHEN v.last_order_date IS NULL THEN NULL
+                ELSE (CURRENT_DATE - v.last_order_date)::INTEGER
+            END AS recency_days,
             COALESCE(ms.state_name, 'Unknown') AS state
         FROM view_ml_input v
         LEFT JOIN master_party mp ON mp.company_name = v.company_name
@@ -19,8 +32,19 @@ class DataRepository:
         try:
             return pd.read_sql(query, self.engine)
         except Exception:
-            # Fallback: return without state if join fails
-            return pd.read_sql("SELECT * FROM view_ml_input", self.engine)
+            # Fallback: bare SELECT with safe casts
+            fallback = """
+            SELECT
+                company_name, party_id, total_revenue, order_count,
+                avg_order_value, product_diversity, avg_payment_days,
+                CAST(last_order_date AS TEXT) AS last_order_date,
+                CASE WHEN last_order_date IS NULL THEN NULL
+                     ELSE (CURRENT_DATE - last_order_date)::INTEGER
+                END AS recency_days
+            FROM view_ml_input
+            """
+            return pd.read_sql(fallback, self.engine)
+
 
 
     def fetch_fact_sales_intelligence(self):

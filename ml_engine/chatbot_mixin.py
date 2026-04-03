@@ -2,14 +2,12 @@
 Universal AI Chatbot Mixin — powered by OpenAI gpt-4o.
 
 DATA STRATEGY:
-  On the FIRST chat, _ensure_all_modules() is called ONCE to pre-load all 8 modules:
+  On the FIRST chat, _ensure_all_modules() is called ONCE to pre-load all modules:
     Partner 360   → ensure_churn_forecast() + ensure_credit_risk()
     Clusters      → ensure_clustering()
     MBA           → ensure_associations()
     Product Life  → ensure_product_lifecycle()
     Inventory     → df_stock_stats (already in core)
-    Competitors   → get_competitor_summary()
-    Monitoring    → get_cluster_quality_report()
     Sales Rep     → ensure_sales_rep_data()
 
   Subsequent calls are instant — data is already in memory.
@@ -17,20 +15,29 @@ DATA STRATEGY:
 """
 
 import os
+import re
 
 
 class ChatbotMixin:
 
     _chatbot_all_loaded: bool = False
 
-    # ── Helpers ────────────────────────────────────────────────────────
+    # ── Helpers ────────────────────────────────────────────────────────────────
     def _sf(self, v, default=0.0):
         try:
             return float(v)
         except Exception:
             return default
 
-    # ── One-time pre-load ALL module data ─────────────────────────────
+    def _spend_col(self, df):
+        """Return the first revenue-like column found in df."""
+        return next(
+            (c for c in ["total_spend", "total_revenue", "monthly_revenue", "net_amt"]
+             if c in df.columns),
+            None,
+        )
+
+    # ── One-time pre-load ALL module data ─────────────────────────────────────
     def _ensure_all_modules(self):
         """Load every module's computed data once so the chatbot always has full context."""
         if self._chatbot_all_loaded:
@@ -53,7 +60,7 @@ class ChatbotMixin:
                 pass
         self._chatbot_all_loaded = True
 
-    # ── Partner name fuzzy finder ──────────────────────────────────────
+    # ── Partner name fuzzy finder ──────────────────────────────────────────────
     def _find_partners(self, q: str) -> list:
         sources = []
         if self.df_partner_features is not None and not self.df_partner_features.empty:
@@ -61,15 +68,68 @@ class ChatbotMixin:
         elif self.df_ml is not None and not self.df_ml.empty and "company_name" in self.df_ml.columns:
             sources = list(self.df_ml["company_name"].unique())
         q_low = q.lower()
+
+        # Exact substring match
         exact = [p for p in sources if p.lower() in q_low]
         if exact:
             return exact[:3]
+
+        # Word-level scoring
         words = [w.strip("'\".,!?") for w in q_low.split() if len(w) >= 4]
-        scored = sorted([(sum(1 for w in words if w in p.lower()), p) for p in sources], key=lambda x: -x[0])
+        scored = sorted(
+            [(sum(1 for w in words if w in p.lower()), p) for p in sources],
+            key=lambda x: -x[0],
+        )
         return [p for score, p in scored if score > 0][:3]
 
-    # ── Full partner profile (same data path as Partner 360 page) ─────
+    # ── Detect date / month mentions in query ──────────────────────────────────
+    def _extract_month_filter(self, q: str):
+        """
+        Returns (year, month) tuple or None.
+        Handles: 'january 2026', 'jan 2026', '2026-01', '01/2026'
+        """
+        import pandas as pd
+        month_map = {
+            "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+            "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+            "january": 1, "february": 2, "march": 3, "april": 4, "june": 6,
+            "july": 7, "august": 8, "september": 9, "october": 10,
+            "november": 11, "december": 12,
+        }
+        q_low = q.lower()
+
+        # Pattern: 'january 2026' or 'jan 2026'
+        for name, num in month_map.items():
+            m = re.search(rf"\b{name}\b.*?\b(20\d\d)\b", q_low)
+            if m:
+                return (int(m.group(1)), num)
+            m = re.search(rf"\b(20\d\d)\b.*?\b{name}\b", q_low)
+            if m:
+                return (int(m.group(1)), num)
+
+        # Pattern: '2026-01' or '01/2026'
+        m = re.search(r"\b(20\d\d)[/-](\d{1,2})\b", q_low)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+
+        return None
+
+    # ── Extract state/city from query ──────────────────────────────────────────
+    def _find_state_in_query(self, q: str) -> str | None:
+        """Return a matching state name if mentioned in the query."""
+        pf = self.df_partner_features
+        if pf is None or pf.empty or "state" not in pf.columns:
+            return None
+        all_states = [s for s in pf["state"].dropna().unique() if s != "Unknown"]
+        q_low = q.lower()
+        for s in all_states:
+            if s.lower() in q_low:
+                return s
+        return None
+
+    # ── Full partner profile ───────────────────────────────────────────────────
     def _get_full_partner_context(self, partner: str) -> str:
+        import pandas as pd
         lines = [f"PARTNER PROFILE — {partner}:"]
         report = None
         try:
@@ -78,40 +138,39 @@ class ChatbotMixin:
             pass
 
         ALL_FIELDS = [
-            ("state",                          "State",                      "text"),
-            ("health_status",                  "Health Status",              "text"),
-            ("health_segment",                 "Segment",                    "text"),
-            ("health_score",                   "Health Score",               "score"),
-            ("cluster_label",                  "Cluster",                    "text"),
-            ("cluster_type",                   "Cluster Type",               "text"),
-            ("lifetime_revenue",               "Lifetime Revenue",           "money"),
-            ("recent_90_revenue",              "Revenue (Last 90d)",         "money"),
-            ("prev_90_revenue",                "Revenue (Prev 90d)",         "money"),
-            ("revenue_drop_pct",               "Revenue Drop %",             "pct"),
-            ("estimated_monthly_loss",         "Est. Monthly Loss",          "money"),
-            ("recency_days",                   "Days Since Last Order",      "int"),
-            ("avg_order_value",                "Avg Order Value",            "money"),
-            ("category_count",                 "Active Product Categories",  "int"),
-            ("churn_probability",              "Churn Probability",          "pct100"),
-            ("churn_risk_band",                "Churn Risk Band",            "text"),
-            ("expected_revenue_at_risk_90d",   "Revenue At Risk (90d)",      "money"),
-            ("expected_revenue_at_risk_monthly","Revenue At Risk / month",   "money"),
-            ("forecast_next_30d",              "PROJECTED REVENUE (Next 30d)","money"),
-            ("forecast_trend_pct",             "Forecast Trend %",           "pct"),
-            ("forecast_confidence",            "Forecast Confidence",        "score"),
-            ("credit_risk_score",              "Credit Risk Score",          "score"),
-            ("credit_risk_band",               "Credit Risk Band",           "text"),
-            ("credit_utilization",             "Credit Utilization",         "pct100"),
-            ("overdue_ratio",                  "Overdue Ratio",              "pct100"),
-            ("outstanding_amount",             "Outstanding Amount",         "money"),
-            ("credit_adjusted_risk_value",     "Credit Adj. Risk Value",     "money"),
-            ("top_affinity_pitch",             "Best Product to Cross-sell", "text"),
-            ("pitch_confidence",               "Pitch Confidence",           "pct100"),
-            ("pitch_lift",                     "Pitch Lift",                 "float2"),
+            ("state",                           "State",                      "text"),
+            ("health_status",                   "Health Status",              "text"),
+            ("health_segment",                  "Segment",                    "text"),
+            ("health_score",                    "Health Score",               "score"),
+            ("cluster_label",                   "Cluster",                    "text"),
+            ("cluster_type",                    "Cluster Type",               "text"),
+            ("lifetime_revenue",                "Lifetime Revenue",           "money"),
+            ("recent_90_revenue",               "Revenue (Last 90d)",         "money"),
+            ("prev_90_revenue",                 "Revenue (Prev 90d)",         "money"),
+            ("revenue_drop_pct",                "Revenue Drop %",             "pct"),
+            ("estimated_monthly_loss",          "Est. Monthly Loss",          "money"),
+            ("recency_days",                    "Days Since Last Order",      "int"),
+            ("avg_order_value",                 "Avg Order Value",            "money"),
+            ("category_count",                  "Active Product Categories",  "int"),
+            ("churn_probability",               "Churn Probability",          "pct100"),
+            ("churn_risk_band",                 "Churn Risk Band",            "text"),
+            ("expected_revenue_at_risk_90d",    "Revenue At Risk (90d)",      "money"),
+            ("expected_revenue_at_risk_monthly","Revenue At Risk / month",    "money"),
+            ("forecast_next_30d",               "PROJECTED REVENUE (Next 30d)","money"),
+            ("forecast_trend_pct",              "Forecast Trend %",           "pct"),
+            ("forecast_confidence",             "Forecast Confidence",        "score"),
+            ("credit_risk_score",               "Credit Risk Score",          "score"),
+            ("credit_risk_band",                "Credit Risk Band",           "text"),
+            ("credit_utilization",              "Credit Utilization",         "pct100"),
+            ("overdue_ratio",                   "Overdue Ratio",              "pct100"),
+            ("outstanding_amount",              "Outstanding Amount",         "money"),
+            ("credit_adjusted_risk_value",      "Credit Adj. Risk Value",     "money"),
+            ("top_affinity_pitch",              "Best Product to Cross-sell", "text"),
+            ("pitch_confidence",                "Pitch Confidence",           "pct100"),
+            ("pitch_lift",                      "Pitch Lift",                 "float2"),
         ]
 
         data_source = report if report else {}
-        # Also merge df_partner_features if report missing fields
         try:
             pf = self.df_partner_features
             if pf is not None and not pf.empty and partner in pf.index:
@@ -119,7 +178,7 @@ class ChatbotMixin:
                 if hasattr(row, "iloc"):
                     row = row.iloc[0]
                 pf_dict = row.to_dict() if hasattr(row, "to_dict") else {}
-                merged = {**pf_dict, **data_source}  # report wins on conflicts
+                merged = {**pf_dict, **data_source}
             else:
                 merged = data_source
         except Exception:
@@ -153,43 +212,49 @@ class ChatbotMixin:
                 except Exception:
                     pass
 
-        # Monthly revenue history
+        # ── FULL monthly revenue history (all months available) ────────────────
         try:
             mr = self.df_monthly_revenue
             if mr is not None and not mr.empty and "company_name" in mr.columns:
-                import pandas as pd
                 pmr = mr[mr["company_name"] == partner].copy()
                 if not pmr.empty:
                     total = pmr["monthly_revenue"].sum()
                     lines.append(f"  Total Revenue (all months): Rs {total:,.0f}")
                     if "sale_month" in pmr.columns:
                         pmr["sale_month"] = pd.to_datetime(pmr["sale_month"], errors="coerce")
-                        for _, mrow in pmr.sort_values("sale_month").tail(4).iterrows():
+                        pmr = pmr.sort_values("sale_month")
+                        lines.append(f"  Monthly Revenue History ({len(pmr)} months):")
+                        for _, mrow in pmr.iterrows():
                             m = str(mrow["sale_month"])[:7]
-                            lines.append(f"  Revenue {m}: Rs {mrow['monthly_revenue']:,.0f}")
+                            lines.append(f"    - {m}: Rs {mrow['monthly_revenue']:,.0f}")
         except Exception:
             pass
 
-        # Product groups
+        # ── Product groups ─────────────────────────────────────────────────────
         try:
             rgs = self.df_recent_group_spend
             if rgs is not None and not rgs.empty and "company_name" in rgs.columns:
                 prgs = rgs[rgs["company_name"] == partner]
-                if not prgs.empty and "group_name" in prgs.columns:
+                sc = self._spend_col(prgs) if not prgs.empty else None
+                if not prgs.empty and "group_name" in prgs.columns and sc:
                     lines.append("  Top product groups purchased:")
-                    for _, row in prgs.sort_values("total_spend", ascending=False).head(8).iterrows():
-                        lines.append(f"    - {row['group_name']}: Rs {row['total_spend']:,.0f}")
+                    for _, row in prgs.sort_values(sc, ascending=False).head(8).iterrows():
+                        lines.append(f"    - {row['group_name']}: Rs {row[sc]:,.0f}")
         except Exception:
             pass
 
         return "\n".join(lines)
 
-    # ── Main context builder ───────────────────────────────────────────
+    # ── Main context builder ───────────────────────────────────────────────────
     def _build_chat_context(self, question: str) -> str:
+        import pandas as pd
         q = question.lower()
         sections = []
 
-        # ── Business snapshot ──────────────────────────────────────────
+        month_filter = self._extract_month_filter(q)
+        state_filter = self._find_state_in_query(q)
+
+        # ── Business snapshot ──────────────────────────────────────────────────
         try:
             snap = []
             pf = self.df_partner_features
@@ -207,23 +272,72 @@ class ChatbotMixin:
             if mr is not None and not mr.empty and "monthly_revenue" in mr.columns:
                 snap.append(f"Total all-time revenue: Rs {mr['monthly_revenue'].sum():,.0f}")
                 if "sale_month" in mr.columns:
-                    import pandas as pd
                     mr2 = mr.copy()
                     mr2["sale_month"] = pd.to_datetime(mr2["sale_month"], errors="coerce")
                     cutoff = mr2["sale_month"].max() - pd.DateOffset(months=12)
                     snap.append(f"Revenue last 12 months: Rs {mr2[mr2['sale_month'] >= cutoff]['monthly_revenue'].sum():,.0f}")
+                    snap.append(f"Latest data month: {str(mr2['sale_month'].max())[:7]}")
             if snap:
                 sections.append("BUSINESS SNAPSHOT:\n" + "\n".join(f"  - {l}" for l in snap))
         except Exception:
             pass
 
-        # ── MODULE 1: Partner 360 — Specific partner query ─────────────
+        # ── Specific month / date-range query ──────────────────────────────────
+        if month_filter:
+            yr, mo = month_filter
+            try:
+                mr = self.df_monthly_revenue
+                if mr is not None and not mr.empty and "sale_month" in mr.columns:
+                    mr2 = mr.copy()
+                    mr2["sale_month"] = pd.to_datetime(mr2["sale_month"], errors="coerce")
+                    mask = (mr2["sale_month"].dt.year == yr) & (mr2["sale_month"].dt.month == mo)
+                    filtered = mr2[mask]
+                    if not filtered.empty:
+                        month_total = filtered["monthly_revenue"].sum()
+                        sections.append(f"REVENUE FOR {yr}-{mo:02d}: Rs {month_total:,.0f}")
+                        top10 = (
+                            filtered.groupby("company_name")["monthly_revenue"]
+                            .sum()
+                            .sort_values(ascending=False)
+                            .head(10)
+                        )
+                        lines = [f"  {i+1}. {n}: Rs {r:,.0f}" for i, (n, r) in enumerate(top10.items())]
+                        sections.append(f"TOP PARTNERS IN {yr}-{mo:02d}:\n" + "\n".join(lines))
+                    else:
+                        sections.append(f"NO DATA for {yr}-{mo:02d} — data may not cover this period.")
+            except Exception:
+                pass
+
+        # ── State/region filter ────────────────────────────────────────────────
+        if state_filter:
+            try:
+                pf = self.df_partner_features
+                if pf is not None and not pf.empty and "state" in pf.columns:
+                    state_partners = pf[pf["state"] == state_filter]
+                    if not state_partners.empty:
+                        rev_c = next((c for c in ["lifetime_revenue", "recent_90_revenue"] if c in state_partners.columns), None)
+                        lines = []
+                        for i, (name, row) in enumerate(state_partners.head(20).iterrows()):
+                            line = f"  {i+1}. {name}"
+                            if rev_c:
+                                line += f": Rs {self._sf(row.get(rev_c, 0)):,.0f}"
+                            if "health_segment" in row:
+                                line += f" [{row['health_segment']}]"
+                            lines.append(line)
+                        sections.append(f"PARTNERS IN {state_filter.upper()} ({len(state_partners)} total):\n" + "\n".join(lines))
+                        if rev_c:
+                            total_state = self._sf(state_partners[rev_c].sum())
+                            sections.append(f"  Total revenue from {state_filter}: Rs {total_state:,.0f}")
+            except Exception:
+                pass
+
+        # ── Specific partner query ─────────────────────────────────────────────
         mentioned = self._find_partners(q)
         if mentioned:
             for partner in mentioned:
                 sections.append(self._get_full_partner_context(partner))
 
-        # ── MODULE 1+3: Partner list / top partners ────────────────────
+        # ── Partner list / top partners ────────────────────────────────────────
         if any(w in q for w in ["partner", "customer", "company", "account", "dealer", "top", "list", "all"]):
             try:
                 mr = self.df_monthly_revenue
@@ -238,7 +352,7 @@ class ChatbotMixin:
             except Exception:
                 pass
 
-        # ── MODULE 1: Churn risk ───────────────────────────────────────
+        # ── Churn risk ─────────────────────────────────────────────────────────
         if any(w in q for w in ["churn", "at risk", "losing", "retention", "leaving", "risk"]):
             try:
                 pf = self.df_partner_features
@@ -255,10 +369,9 @@ class ChatbotMixin:
             except Exception:
                 pass
 
-        # ── MODULE 1: Revenue & Forecast ──────────────────────────────
-        if any(w in q for w in ["revenue", "sales", "monthly", "trend", "annual", "year", "growth", "forecast", "project", "predict"]):
+        # ── Revenue & Forecast ─────────────────────────────────────────────────
+        if any(w in q for w in ["revenue", "sales", "monthly", "trend", "annual", "year", "growth", "forecast", "project", "predict", "6 month", "six month"]):
             try:
-                import pandas as pd
                 mr = self.df_monthly_revenue
                 if mr is not None and not mr.empty and "sale_month" in mr.columns:
                     mr2 = mr.copy()
@@ -284,8 +397,8 @@ class ChatbotMixin:
             except Exception:
                 pass
 
-        # ── MODULE 1: Credit risk ─────────────────────────────────────
-        if any(w in q for w in ["credit", "payment", "overdue", "outstanding", "due", "debt"]):
+        # ── Credit risk ────────────────────────────────────────────────────────
+        if any(w in q for w in ["credit", "payment", "overdue", "outstanding", "due", "debt", "pending"]):
             try:
                 pf = self.df_partner_features
                 if pf is not None and not pf.empty and "credit_risk_band" in pf.columns:
@@ -299,7 +412,7 @@ class ChatbotMixin:
             except Exception:
                 pass
 
-        # ── MODULE 1: Health / degrowth ────────────────────────────────
+        # ── Health / degrowth ──────────────────────────────────────────────────
         if any(w in q for w in ["degrowth", "declining", "health", "unhealthy", "critical", "stable", "champion", "vip"]):
             try:
                 pf = self.df_partner_features
@@ -322,7 +435,7 @@ class ChatbotMixin:
             except Exception:
                 pass
 
-        # ── MODULE 2: Market Basket / Product Bundles ─────────────────
+        # ── Market Basket / Product Bundles ────────────────────────────────────
         if any(w in q for w in ["bundle", "associat", "cross", "pitch", "together", "basket", "often", "combo"]):
             try:
                 rules = self.get_associations(limit=20)
@@ -340,31 +453,31 @@ class ChatbotMixin:
             except Exception:
                 pass
 
-        # ── MODULE 3: Cluster Intelligence ────────────────────────────
+        # ── Cluster Intelligence ───────────────────────────────────────────────
         if any(w in q for w in ["cluster", "segment", "tier", "group of partner", "cluster partner"]):
             try:
                 matrix = getattr(self, "matrix", None)
                 if matrix is not None and not matrix.empty and "cluster_label" in matrix.columns:
-                    summary = matrix.groupby(["cluster_label", "cluster_type"] if "cluster_type" in matrix.columns else ["cluster_label"]).size()
+                    grp_cols = ["cluster_label", "cluster_type"] if "cluster_type" in matrix.columns else ["cluster_label"]
+                    summary = matrix.groupby(grp_cols).size()
                     lines = [f"  {'/'.join(str(x) for x in (label if isinstance(label, tuple) else [label]))}: {cnt} partners"
                              for label, cnt in summary.sort_values(ascending=False).items()]
                     sections.append("CLUSTER SUMMARY (ALL CLUSTERS):\n" + "\n".join(lines))
                     if "cluster_type" in matrix.columns:
                         n_vip = (matrix["cluster_type"] == "VIP").sum()
                         sections.append(f"  VIP partners count: {int(n_vip)}")
-                    quality = None
                     try:
                         quality = self.get_cluster_quality_report()
+                        if quality and isinstance(quality, dict):
+                            sil = quality.get("silhouette_score", quality.get("silhouette", None))
+                            if sil is not None:
+                                sections.append(f"  Cluster quality silhouette score: {sil:.3f}")
                     except Exception:
                         pass
-                    if quality and isinstance(quality, dict):
-                        sil = quality.get("silhouette_score", quality.get("silhouette", None))
-                        if sil is not None:
-                            sections.append(f"  Cluster quality silhouette score: {sil:.3f}")
             except Exception:
                 pass
 
-        # ── MODULE 4: Inventory / Dead Stock ──────────────────────────
+        # ── Inventory / Dead Stock ─────────────────────────────────────────────
         if any(w in q for w in ["inventory", "stock", "dead", "liquid", "ageing", "old", "slow", "unsold"]):
             try:
                 ds = self.df_stock_stats
@@ -391,9 +504,10 @@ class ChatbotMixin:
             except Exception:
                 pass
 
-        # ── MODULE 5: Product Lifecycle ───────────────────────────────
+        # ── Product Lifecycle ──────────────────────────────────────────────────
         if any(w in q for w in ["lifecycle", "product lifecycle", "growing product", "declining product",
-                                  "end of life", "eol", "cannibal", "velocity", "product growth", "product trend"]):
+                                  "end of life", "eol", "cannibal", "velocity", "product growth", "product trend",
+                                  "growing", "declining"]):
             try:
                 vel = self.get_velocity_data()
                 if vel is not None and not vel.empty:
@@ -422,19 +536,8 @@ class ChatbotMixin:
                     sections.append("PRODUCTS APPROACHING END OF LIFE:\n" + "\n".join(lines))
             except Exception:
                 pass
-            try:
-                cannibal = self.get_cannibalization_data()
-                if cannibal is not None and not cannibal.empty:
-                    lines = []
-                    for _, row in cannibal.head(8).iterrows():
-                        gp = row.get("growing_product", "?")
-                        dp = row.get("declining_product", "?")
-                        lines.append(f"  - {gp} is replacing {dp}")
-                    sections.append("PRODUCT CANNIBALIZATION DETECTED:\n" + "\n".join(lines))
-            except Exception:
-                pass
 
-        # ── MODULE 6: Recommendations ─────────────────────────────────
+        # ── Recommendations ────────────────────────────────────────────────────
         if any(w in q for w in ["recommend", "action", "next best", "what should", "pitch", "suggest"]):
             try:
                 pf = self.df_partner_features
@@ -447,9 +550,7 @@ class ChatbotMixin:
             except Exception:
                 pass
 
-        # Competitor intelligence removed
-
-        # ── MODULE 8: Model Monitoring ─────────────────────────────────
+        # ── Model Monitoring ───────────────────────────────────────────────────
         if any(w in q for w in ["model", "accuracy", "auc", "monitor", "drift", "quality", "train", "performance"]):
             try:
                 report = self.get_churn_model_report() if hasattr(self, "get_churn_model_report") else None
@@ -469,8 +570,9 @@ class ChatbotMixin:
             except Exception:
                 pass
 
-        # ── MODULE 9: Sales Rep Performance ────────────────────────────
-        if any(w in q for w in ["rep", "salesman", "sales person", "performance", "tour", "expense", "issue", "leaderboard", "roi", "cost per order"]):
+        # ── Sales Rep Performance ──────────────────────────────────────────────
+        if any(w in q for w in ["rep", "salesman", "sales person", "performance", "tour", "expense",
+                                  "issue", "leaderboard", "roi", "cost per order"]):
             try:
                 df_rep = getattr(self, "df_sales_rep", None)
                 if df_rep is not None and not df_rep.empty:
@@ -481,32 +583,35 @@ class ChatbotMixin:
                         exp = row.get("total_expenses", 0)
                         issues = row.get("issues_logged", 0)
                         cost = row.get("expense_per_order", 0)
-                        lines.append(f"  - {name}: {int(orders)} orders, Rs {self._sf(exp):,.0f} expenses, Cost/Order: Rs {self._sf(cost):,.0f}, {int(issues)} issues logged")
+                        lines.append(f"  - {name}: {int(orders)} orders, Rs {self._sf(exp):,.0f} expenses, Cost/Order: Rs {self._sf(cost):,.0f}, {int(issues)} issues")
                     sections.append("SALES REP LEADERBOARD (Top by Orders):\n" + "\n".join(lines))
             except Exception:
                 pass
 
-        # ── Product group revenue (for product-level questions) ────────
-        if any(w in q for w in ["product", "group", "categor", "item", "what do we sell"]):
+        # ── Product group revenue ──────────────────────────────────────────────
+        if any(w in q for w in ["product", "group", "categor", "item", "what do we sell", "which product", "castrol", "paint", "grease", "lubricant"]):
             try:
                 rgs = self.df_recent_group_spend
                 if rgs is not None and not rgs.empty and "group_name" in rgs.columns:
-                    top_groups = rgs.groupby("group_name")["total_spend"].sum().sort_values(ascending=False)
-                    lines = [f"  {i+1}. {n}: Rs {r:,.0f}" for i, (n, r) in enumerate(top_groups.items())]
-                    sections.append("PRODUCT GROUPS BY TOTAL REVENUE:\n" + "\n".join(lines))
+                    sc = self._spend_col(rgs)
+                    if sc:
+                        top_groups = rgs.groupby("group_name")[sc].sum().sort_values(ascending=False)
+                        lines = [f"  {i+1}. {n}: Rs {r:,.0f}" for i, (n, r) in enumerate(top_groups.items())]
+                        sections.append("PRODUCT GROUPS BY TOTAL REVENUE:\n" + "\n".join(lines))
 
-                    q_words = [w.strip("'\".,!?") for w in q.split() if len(w) >= 3]
-                    matched = [g for g in top_groups.index if any(w in g.lower() for w in q_words)][:2]
-                    for mg in matched:
-                        buyers = rgs[rgs["group_name"] == mg].sort_values("total_spend", ascending=False).head(15)
-                        if not buyers.empty:
-                            blines = [f"  {i+1}. {row['company_name']}: Rs {row['total_spend']:,.0f}"
-                                      for i, (_, row) in enumerate(buyers.iterrows())]
-                            sections.append(f"TOP BUYERS OF '{mg}':\n" + "\n".join(blines))
+                        # Specific product group buyers
+                        q_words = [w.strip("'\".,!?") for w in q.split() if len(w) >= 3]
+                        matched = [g for g in top_groups.index if any(w in g.lower() for w in q_words)][:2]
+                        for mg in matched:
+                            buyers = rgs[rgs["group_name"] == mg].sort_values(sc, ascending=False).head(15)
+                            if not buyers.empty:
+                                blines = [f"  {i+1}. {row['company_name']}: Rs {row[sc]:,.0f}"
+                                          for i, (_, row) in enumerate(buyers.iterrows())]
+                                sections.append(f"TOP BUYERS OF '{mg}':\n" + "\n".join(blines))
             except Exception:
                 pass
 
-        # ── Fallback: top partners if context is thin ──────────────────
+        # ── Fallback: top partners if context is thin ──────────────────────────
         if len(sections) <= 1 and not mentioned:
             try:
                 mr = self.df_monthly_revenue
@@ -526,7 +631,7 @@ class ChatbotMixin:
             return "Data is loading. Please try again in a moment."
         return "\n\n".join(sections)
 
-    # ── OpenAI gpt-4o call ─────────────────────────────────────────────
+    # ── OpenAI gpt-4o call ─────────────────────────────────────────────────────
     def chat_with_ai(self, question: str, history: list | None = None) -> str:
         # Pre-load all modules on first call
         self._ensure_all_modules()
@@ -542,34 +647,51 @@ class ChatbotMixin:
         model = os.getenv("OPENAI_MODEL", "gpt-4o")
         context = self._build_chat_context(question)
 
+        # Compute latest data month for the prompt
+        latest_month = "unknown"
+        try:
+            import pandas as pd
+            mr = self.df_monthly_revenue
+            if mr is not None and not mr.empty and "sale_month" in mr.columns:
+                mr_tmp = mr.copy()
+                mr_tmp["sale_month"] = pd.to_datetime(mr_tmp["sale_month"], errors="coerce")
+                latest_month = str(mr_tmp["sale_month"].max())[:7]
+        except Exception:
+            pass
+
         system_prompt = f"""You are a senior business intelligence assistant for CONSISTENT — a B2B distributor of lubricants, paints, greases, construction chemicals, and industrial products across India.
 
-You have DIRECT ACCESS to live production data from all 7 modules of the application, queried moments ago:
-  Module 1: Partner 360         — individual partner health, churn, credit, forecasts
-  Module 2: Market Basket       — product bundle/cross-sell rules
+You have DIRECT ACCESS to live production data from all modules of the application. The database is updated to {latest_month}.
+
+Modules available:
+  Module 1: Partner 360         — individual partner health, churn probability, credit risk, revenue forecasts
+  Module 2: Market Basket       — product bundle/cross-sell association rules
   Module 3: Clusters            — partner segments (VIP, Growth, Standard, At Risk)
-  Module 4: Inventory           — dead stock items and liquidation leads
+  Module 4: Inventory           — dead stock and liquidation leads
   Module 5: Product Lifecycle   — product growth velocity, EOL predictions, cannibalization
-  Module 6: Recommendations     — best actions and pitches per partner
+  Module 6: Recommendations     — best cross-sell pitches per partner
   Module 7: Sales Rep           — rep performance, tours, expenses, partner issues logged
   Revenue Pipeline Tracker      — partner health segmented across Champion/Healthy/At Risk/Critical
 
 ═══ STRICT RULES ═══
-1. ONLY use data provided below. NEVER invent names, numbers, or figures.
-2. "PROJECTED REVENUE (Next 30d)" in a partner profile = their forecast. Quote it directly.
-3. Churn probability is a decimal — multiply by 100 for percentage display.
-4. Format currency as Rs X,XX,XXX (Indian number format).
-5. If a partner is not found: "I couldn't find [name] — please check exact spelling."
-6. Answer directly in simple business language. No "I can see in the data..."
-7. Keep responses under 300 words. Lead with the most important number.
+1. ONLY use data provided in the LIVE DATA section below. NEVER invent names, numbers, or figures.
+2. If data for a specific month is not in the context, say: "Data for [month] is not available in the current dataset."
+3. "PROJECTED REVENUE (Next 30d)" in a partner profile = their ML forecast. Quote it directly.
+4. Churn probability is a decimal (0-1) — multiply by 100 to display as percentage.
+5. Format all currency as Rs X,XX,XXX (Indian number format with commas at lakh/crore positions).
+6. If a partner is not found: "I couldn't find [name] — please check exact spelling or try a partial name."
+7. Answer in simple business language. Lead with the most important number or insight.
+8. Keep responses under 350 words unless the user asks for a full breakdown.
+9. For monthly revenue questions: use the MONTHLY TOTAL REVENUE table to answer, not estimates.
+10. For state-specific questions: use the state filter data provided.
 
-═══ LIVE DATA FROM ALL 9 MODULES ═══
+═══ LIVE DATA FROM ALL MODULES ═══
 {context}
 """
 
         messages = [{"role": "system", "content": system_prompt}]
         if history:
-            messages.extend(history[-8:])
+            messages.extend(history[-10:])  # Keep more history for better context
         messages.append({"role": "user", "content": question})
 
         try:
@@ -578,16 +700,49 @@ You have DIRECT ACCESS to live production data from all 7 modules of the applica
                 model=model,
                 messages=messages,
                 temperature=0.05,
-                max_tokens=600,
+                max_tokens=700,
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
             return f"❌ OpenAI API error: {e}"
 
+    # ── Dynamic quick insights (data-driven, not static) ──────────────────────
     def get_quick_insights(self) -> list[str]:
-        return [
+        insights = []
+        try:
+            pf = self.df_partner_features
+            mr = self.df_monthly_revenue
+
+            # Latest data month
+            if mr is not None and not mr.empty and "sale_month" in mr.columns:
+                import pandas as pd
+                mr2 = mr.copy()
+                mr2["sale_month"] = pd.to_datetime(mr2["sale_month"], errors="coerce")
+                latest = str(mr2["sale_month"].max())[:7]
+                insights.append(f"What was our total revenue in {latest}?")
+
+            # Top churn risk
+            if pf is not None and not pf.empty and "churn_probability" in pf.columns:
+                top_churn = pf["churn_probability"].idxmax()
+                insights.append(f"What is the churn risk for {top_churn}?")
+
+            # Specific state if available
+            if pf is not None and not pf.empty and "state" in pf.columns:
+                top_state = pf[pf["state"] != "Unknown"]["state"].value_counts().idxmax() if not pf[pf["state"] != "Unknown"].empty else None
+                if top_state:
+                    insights.append(f"Show me all partners in {top_state}")
+        except Exception:
+            pass
+
+        # Always include these fallbacks
+        defaults = [
             "What is the projected revenue for our top partners?",
             "Who are the top performing sales reps?",
             "Show me all dead stock items",
             "Which products are growing and which are declining?",
         ]
+        for d in defaults:
+            if d not in insights:
+                insights.append(d)
+
+        return insights[:5]

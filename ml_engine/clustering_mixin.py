@@ -1937,20 +1937,32 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
         if self.df_ml is None:
             self.ensure_core_loaded()
 
-        # Resolve the revenue column — df_ml column set varies by load path
+        # ── Choose clustering data source ──────────────────────────────────────
+        # df_recent_group_spend is long-format (company_name × group_name × total_spend)
+        # which _build_cluster_features requires for category-mix features.
+        # df_ml (view_ml_input) is a partner-level summary — no group_name column.
+        _cluster_src = None
+        if (
+            self.df_recent_group_spend is not None
+            and not self.df_recent_group_spend.empty
+            and "group_name" in self.df_recent_group_spend.columns
+        ):
+            _cluster_src = self.df_recent_group_spend
+
+        # Revenue ranking: use cluster_src if available, else df_ml
+        _rank_src = _cluster_src if _cluster_src is not None else self.df_ml
         _rev_col = next(
-            (c for c in ["total_spend", "total_revenue"] if c in self.df_ml.columns),
+            (c for c in ["total_spend", "total_revenue"] if c in _rank_src.columns),
             None,
         )
         if _rev_col:
             partner_totals = (
-                self.df_ml.groupby("company_name")[_rev_col].sum().sort_values(ascending=False)
+                _rank_src.groupby("company_name")[_rev_col].sum().sort_values(ascending=False)
             )
         else:
-            # df_ml is already pivoted (columns = product groups) — sum all numeric cols per partner
-            _num = self.df_ml.select_dtypes(include="number")
+            _num = _rank_src.select_dtypes(include="number")
             partner_totals = (
-                self.df_ml[["company_name"]]
+                _rank_src[["company_name"]]
                 .join(_num)
                 .groupby("company_name")
                 .sum()
@@ -1991,37 +2003,42 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
             vip_names = partner_totals.head(forced_vip_n).index
             mass_names = partner_totals.index.difference(vip_names)
 
-        df_vip = self.df_ml[self.df_ml["company_name"].isin(vip_names)]
-        df_mass = self.df_ml[self.df_ml["company_name"].isin(mass_names)]
+        # Use long-format group spend for clustering (has group_name + total_spend)
+        _src = _cluster_src if _cluster_src is not None else self.df_ml
+        df_vip = _src[_src["company_name"].isin(vip_names)]
+        df_mass = _src[_src["company_name"].isin(mass_names)]
 
         vip_meta, vip_report = self._process_segment(df_vip, method="kmeans")
         growth_meta, growth_report = self._process_segment(df_mass, method="hdbscan")
         cluster_meta = pd.concat([vip_meta, growth_meta], axis=0)
 
-        _pivot_val = _rev_col or (
-            self.df_ml.select_dtypes(include="number").columns[0]
-            if not self.df_ml.select_dtypes(include="number").empty
-            else None
+        # Build matrix from the long-format source (group_name → columns, spend → values)
+        _matrix_src = _cluster_src if _cluster_src is not None else self.df_ml
+        _pivot_val = next(
+            (c for c in ["total_spend", "total_revenue"] if c in _matrix_src.columns),
+            None,
         )
-        if _pivot_val and "group_name" in self.df_ml.columns:
-            self.matrix = self.df_ml.pivot_table(
+        if _pivot_val and "group_name" in _matrix_src.columns:
+            self.matrix = _matrix_src.pivot_table(
                 index="company_name",
                 columns="group_name",
                 values=_pivot_val,
                 aggfunc="sum",
                 fill_value=0,
             )
+            # Deduplicate matrix index
+            self.matrix = self.matrix[~self.matrix.index.duplicated(keep="last")]
         else:
-            # df_ml already structured as a wide matrix — use it directly
             self.matrix = (
-                self.df_ml.set_index("company_name")
-                if "company_name" in self.df_ml.columns
-                else self.df_ml.copy()
+                _matrix_src.set_index("company_name")
+                if "company_name" in _matrix_src.columns
+                else _matrix_src.copy()
             )
-        # Attach state — column may not exist in all DB schemas
-        if "state" in self.df_ml.columns and "company_name" in self.df_ml.columns:
+        # Attach state — prefer df_ml (joined with master_state) over cluster_src
+        _state_src = self.df_ml if "state" in self.df_ml.columns else _matrix_src
+        if "state" in _state_src.columns and "company_name" in _state_src.columns:
             self.matrix["state"] = (
-                self.df_ml[["company_name", "state"]]
+                _state_src[["company_name", "state"]]
                 .drop_duplicates("company_name")
                 .set_index("company_name")["state"]
                 .reindex(self.matrix.index)

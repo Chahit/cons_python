@@ -330,9 +330,26 @@ class BaseLoaderMixin:
             if c in self.df_ml.columns
         })
         if "last_order_date" in self.df_ml.columns:
-            agg_cols["last_order_date"] = "max"
+            # Force datetime — psycopg2 may return date objects as object dtype
+            try:
+                self.df_ml["last_order_date"] = pd.to_datetime(
+                    self.df_ml["last_order_date"], errors="coerce"
+                )
+                agg_cols["last_order_date"] = "max"
+            except Exception:
+                pass  # skip if not coercible
         if "recency_days" in self.df_ml.columns:
-            agg_cols["recency_days"] = "min"  # min = most recently active
+            # Force numeric — PostgreSQL interval may come in as object/timedelta
+            try:
+                col = self.df_ml["recency_days"]
+                if col.dtype == object or str(col.dtype).startswith("timedelta"):
+                    self.df_ml["recency_days"] = pd.to_numeric(
+                        col.apply(lambda x: x.days if hasattr(x, "days") else x),
+                        errors="coerce",
+                    )
+                agg_cols["recency_days"] = "min"  # min = most recently active
+            except Exception:
+                pass  # skip if not coercible
 
         features = self.df_ml.groupby("company_name", as_index=False).agg(agg_cols)
         features["state"] = features["state"].fillna("Unknown") if "state" in features.columns else "Unknown"
