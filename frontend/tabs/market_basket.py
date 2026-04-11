@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from styles import apply_global_styles, section_header, page_caption, page_header, skeleton_loader
@@ -68,21 +67,6 @@ def render(ai):
     st.subheader("🛠️ Bundle Builder Simulator")
     st.caption("Select a base product to instantly see the best items to bundle with it.")
     
-    # ── Immediate nuclear sanitisation of all numeric columns ─────────────
-    # Must happen BEFORE any widget accesses df_assoc, including the Bundle Builder.
-    # PostgreSQL NUMERIC/Decimal types in Arrow cause React #185 if any column
-    # is passed to Streamlit widgets (including st.success, itertuples, etc.)
-    if not df_assoc.empty:
-        for _sc in df_assoc.columns:
-            if df_assoc[_sc].dtype == object:
-                df_assoc[_sc] = df_assoc[_sc].fillna("").astype(str)
-            else:
-                # Convert ALL numeric to Python float first — eliminates Decimal
-                try:
-                    df_assoc[_sc] = df_assoc[_sc].astype(float)
-                except Exception:
-                    df_assoc[_sc] = df_assoc[_sc].fillna("").astype(str)
-
     unique_products = sorted(list(set(df_assoc["product_a"].dropna().unique()) | set(df_assoc["product_b"].dropna().unique()))) if not df_assoc.empty else []
     
     base_product = st.selectbox("Select Base Product", [""] + unique_products)
@@ -116,64 +100,72 @@ def render(ai):
         if df_assoc.empty:
             st.warning("No association rules match the current filters.")
         else:
-            def _rs(v):
-                try: return f"Rs {int(float(v)):,}"
-                except Exception: return "—"
-            def _pct(v):
-                try: return f"{float(v):.0%}"
-                except Exception: return "—"
-            def _num(v, dec=2):
-                try: return f"{float(v):.{dec}f}"
-                except Exception: return "—"
-
-            # Only include columns that actually exist in df_assoc
-            _wanted_cols = [
-                "product_a", "product_b", "times_bought_together",
-                "support_a", "support_b", "confidence_a_to_b", "lift_a_to_b",
-                "rule_strength", "low_support_flag",
-                "expected_gain_weekly", "expected_gain_monthly", "expected_gain_yearly",
-                "expected_margin_weekly", "expected_margin_monthly", "expected_margin_yearly",
-                "margin_rate", "expected_revenue_gain", "expected_margin_gain",
-            ]
-            _avail_cols = [c for c in _wanted_cols if c in df_assoc.columns]
-            disp_assoc = df_assoc[_avail_cols].copy()
-
-            # ── Nuclear sanitisation: format every column as a plain string ──
-            # This completely eliminates React #185 (caused by decimal.Decimal /
-            # mixed-type Arrow columns from PostgreSQL NUMERIC fields).
-            _money_set = {"expected_gain_weekly","expected_gain_monthly","expected_gain_yearly",
-                          "expected_margin_weekly","expected_margin_monthly","expected_margin_yearly",
-                          "expected_revenue_gain","expected_margin_gain"}
-            _pct_set   = {"confidence_a_to_b", "support_a", "support_b", "margin_rate"}
-            _num_set   = {"lift_a_to_b", "times_bought_together"}
-            for _c in disp_assoc.columns:
-                if _c in _money_set:
-                    disp_assoc[_c] = disp_assoc[_c].apply(_rs)
-                elif _c in _pct_set:
-                    disp_assoc[_c] = disp_assoc[_c].apply(_pct)
-                elif _c in _num_set:
-                    disp_assoc[_c] = disp_assoc[_c].apply(lambda v: _num(v, 0))
-                else:
-                    disp_assoc[_c] = disp_assoc[_c].fillna("").astype(str).replace("nan","").replace("None","")
-
-            # Rename for display
-            _rename = {
-                "product_a":"If they buy...", "product_b":"...pitch this",
-                "times_bought_together":"Frequency",
-                "support_a":"Support A", "support_b":"Support B",
-                "confidence_a_to_b":"Confidence", "lift_a_to_b":"Lift",
-                "rule_strength":"Rule Strength", "low_support_flag":"Low Support?",
-                "expected_gain_weekly":"Gain Weekly","expected_gain_monthly":"Gain Monthly",
-                "expected_gain_yearly":"Gain Yearly",
-                "expected_margin_weekly":"Margin Weekly","expected_margin_monthly":"Margin Monthly",
-                "expected_margin_yearly":"Margin Yearly",
-                "margin_rate":"Margin Rate",
-                "expected_revenue_gain":"Gain Base","expected_margin_gain":"Margin Base",
-            }
-            disp_assoc = disp_assoc.rename(columns={k:v for k,v in _rename.items() if k in disp_assoc.columns})
-
-            # Render — no column_config, all columns are already plain strings
-            st.dataframe(disp_assoc, use_container_width=True, hide_index=True)
+            st.dataframe(
+                df_assoc[
+                    [
+                        "product_a",
+                        "product_b",
+                        "times_bought_together",
+                        "support_a",
+                        "support_b",
+                        "confidence_a_to_b",
+                        "lift_a_to_b",
+                        "rule_strength",
+                        "low_support_flag",
+                        "expected_gain_weekly",
+                        "expected_gain_monthly",
+                        "expected_gain_yearly",
+                        "expected_margin_weekly",
+                        "expected_margin_monthly",
+                        "expected_margin_yearly",
+                        "margin_rate",
+                        "expected_revenue_gain",
+                        "expected_margin_gain",
+                    ]
+                ],
+                column_config={
+                    "product_a": "If they buy...",
+                    "product_b": "...pitch this",
+                    "times_bought_together": st.column_config.NumberColumn("Frequency"),
+                    "support_a": st.column_config.NumberColumn("Support A"),
+                    "support_b": st.column_config.NumberColumn("Support B"),
+                    "confidence_a_to_b": st.column_config.NumberColumn(
+                        "Confidence", format="%.2f"
+                    ),
+                    "lift_a_to_b": st.column_config.NumberColumn("Lift", format="%.2f"),
+                    "rule_strength": "Rule Strength",
+                    "low_support_flag": "Low Support?",
+                    "expected_gain_weekly": st.column_config.NumberColumn(
+                        "Expected Gain Weekly (i)", format="Rs %d"
+                    ),
+                    "expected_gain_monthly": st.column_config.NumberColumn(
+                        "Expected Gain Monthly (i)", format="Rs %d"
+                    ),
+                    "expected_gain_yearly": st.column_config.NumberColumn(
+                        "Expected Gain Yearly (i)", format="Rs %d"
+                    ),
+                    "expected_margin_weekly": st.column_config.NumberColumn(
+                        "Expected Margin Weekly (i)", format="Rs %d"
+                    ),
+                    "expected_margin_monthly": st.column_config.NumberColumn(
+                        "Expected Margin Monthly (i)", format="Rs %d"
+                    ),
+                    "expected_margin_yearly": st.column_config.NumberColumn(
+                        "Expected Margin Yearly (i)", format="Rs %d"
+                    ),
+                    "margin_rate": st.column_config.NumberColumn(
+                        "Margin Rate", format="%.2f"
+                    ),
+                    "expected_revenue_gain": st.column_config.NumberColumn(
+                        "Expected Gain Base", format="Rs %d"
+                    ),
+                    "expected_margin_gain": st.column_config.NumberColumn(
+                        "Expected Margin Base", format="Rs %d"
+                    ),
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
 
     with right:
         st.markdown("**📞 Sales Script**")
@@ -184,12 +176,7 @@ def render(ai):
             prod_b = str(top_row.get("product_b", "Product B"))
             conf = float(top_row.get("confidence_a_to_b", 0))
             lift = float(top_row.get("lift_a_to_b", 0))
-            # Safe extraction: gain_m might be a pre-formatted string like "Rs 1,234"
-            _raw_gain = top_row.get("expected_gain_monthly", 0)
-            try:
-                gain_m = float(str(_raw_gain).replace("Rs", "").replace(",", "").strip())
-            except Exception:
-                gain_m = 0
+            gain_m = top_row.get("expected_gain_monthly", 0)
 
             # Confidence indicator
             if conf >= 0.6:
@@ -228,10 +215,8 @@ def render(ai):
         else:
             st.info("Select a rule from the table to generate a sales script.")
 
-
-
+    st.markdown("---")
     st.subheader("Partner-Specific Recommendations")
-
     if ai.strict_view_only:
         st.info(
             "STRICT_VIEW_ONLY is ON. Partner-specific recommendations use view-backed history."
@@ -262,45 +247,45 @@ def render(ai):
     if partner_recos.empty:
         st.warning("No cross-sell opportunities found for this partner with current filters.")
     else:
-        def _rs2(v):
-            try: return f"Rs {int(float(v)):,}"
-            except Exception: return "—"
-        def _pct2(v):
-            try: return f"{float(v):.0%}"
-            except Exception: return "—"
-        def _num2(v, dec=2):
-            try: return f"{float(v):.{dec}f}"
-            except Exception: return "—"
-
-        pr_disp = partner_recos.copy()
-        # Nuclear sanitisation: format every column to plain string
-        _money_set2 = {"expected_gain_weekly","expected_gain_monthly","expected_gain_yearly",
-                       "expected_margin_weekly","expected_margin_monthly","expected_margin_yearly",
-                       "expected_revenue_gain","expected_margin_gain"}
-        _pct_set2   = {"confidence", "support_a", "support_b", "margin_rate"}
-        _num_set2   = {"lift", "frequency"}
-        for _c2 in pr_disp.columns:
-            if _c2 in _money_set2:
-                pr_disp[_c2] = pr_disp[_c2].apply(_rs2)
-            elif _c2 in _pct_set2:
-                pr_disp[_c2] = pr_disp[_c2].apply(_pct2)
-            elif _c2 in _num_set2:
-                pr_disp[_c2] = pr_disp[_c2].apply(lambda v: _num2(v, 1))
-            else:
-                pr_disp[_c2] = pr_disp[_c2].fillna("").astype(str).replace("nan","").replace("None","")
-
-        _rename2 = {
-            "trigger_product":"Bought Product","recommended_product":"Recommended Product",
-            "confidence":"Confidence","lift":"Lift","frequency":"Frequency",
-            "rule_strength":"Rule Strength","low_support_flag":"Low Support?",
-            "expected_gain_weekly":"Gain Weekly","expected_gain_monthly":"Gain Monthly",
-            "expected_gain_yearly":"Gain Yearly",
-            "expected_margin_weekly":"Margin Weekly","expected_margin_monthly":"Margin Monthly",
-            "expected_margin_yearly":"Margin Yearly",
-            "margin_rate":"Margin Rate","expected_revenue_gain":"Gain Base","expected_margin_gain":"Margin Base",
-        }
-        pr_disp = pr_disp.rename(columns={k:v for k,v in _rename2.items() if k in pr_disp.columns})
-        st.dataframe(pr_disp, use_container_width=True, hide_index=True)
+        st.dataframe(
+            partner_recos,
+            column_config={
+                "trigger_product": "Bought Product",
+                "recommended_product": "Recommended Product",
+                "confidence": st.column_config.NumberColumn("Confidence", format="%.2f"),
+                "lift": st.column_config.NumberColumn("Lift", format="%.2f"),
+                "frequency": st.column_config.NumberColumn("Frequency"),
+                "rule_strength": "Rule Strength",
+                "low_support_flag": "Low Support?",
+                "expected_gain_weekly": st.column_config.NumberColumn(
+                    "Expected Gain Weekly (i)", format="Rs %d"
+                ),
+                "expected_gain_monthly": st.column_config.NumberColumn(
+                    "Expected Gain Monthly (i)", format="Rs %d"
+                ),
+                "expected_gain_yearly": st.column_config.NumberColumn(
+                    "Expected Gain Yearly (i)", format="Rs %d"
+                ),
+                "expected_margin_weekly": st.column_config.NumberColumn(
+                    "Expected Margin Weekly (i)", format="Rs %d"
+                ),
+                "expected_margin_monthly": st.column_config.NumberColumn(
+                    "Expected Margin Monthly (i)", format="Rs %d"
+                ),
+                "expected_margin_yearly": st.column_config.NumberColumn(
+                    "Expected Margin Yearly (i)", format="Rs %d"
+                ),
+                "margin_rate": st.column_config.NumberColumn("Margin Rate", format="%.2f"),
+                "expected_revenue_gain": st.column_config.NumberColumn(
+                    "Expected Gain Base", format="Rs %d"
+                ),
+                "expected_margin_gain": st.column_config.NumberColumn(
+                    "Expected Margin Base", format="Rs %d"
+                ),
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
 
     # ======================================================================
     # Enhanced Association Mining (FP-Growth, Sequential, Cross-Category)
@@ -370,18 +355,18 @@ def render(ai):
                                 "pattern", "sequence_count", "support_a",
                                 "confidence_a_then_b", "lift",
                             ] if c in seq_df.columns]
-                            seq_disp = seq_df[show_cols].copy()
-                            for _sc in ["sequence_count", "support_a"]:
-                                if _sc in seq_disp.columns:
-                                    seq_disp[_sc] = seq_disp[_sc].apply(lambda v: str(int(float(v))) if v==v else "0")
-                            if "confidence_a_then_b" in seq_disp.columns:
-                                seq_disp["confidence_a_then_b"] = seq_disp["confidence_a_then_b"].apply(lambda v: f"{float(v):.2f}" if v==v else "—")
-                            if "lift" in seq_disp.columns:
-                                seq_disp["lift"] = seq_disp["lift"].apply(lambda v: f"{float(v):.2f}" if v==v else "—")
-                            for _sc2 in seq_disp.select_dtypes(include=["object"]).columns:
-                                seq_disp[_sc2] = seq_disp[_sc2].fillna("").astype(str)
-                            seq_disp = seq_disp.rename(columns={"pattern":"Pattern","sequence_count":"Count","support_a":"Support A","confidence_a_then_b":"Confidence","lift":"Lift"})
-                            st.dataframe(seq_disp, use_container_width=True, hide_index=True)
+                            st.dataframe(
+                                seq_df[show_cols],
+                                column_config={
+                                    "pattern": "Pattern",
+                                    "sequence_count": st.column_config.NumberColumn("Count"),
+                                    "support_a": st.column_config.NumberColumn("Support A"),
+                                    "confidence_a_then_b": st.column_config.NumberColumn("Confidence", format="%.2f"),
+                                    "lift": st.column_config.NumberColumn("Lift", format="%.2f"),
+                                },
+                                use_container_width=True,
+                                hide_index=True,
+                            )
                             # Show partner names for a selected pattern
                             if "partner_names" in seq_df.columns:
                                 st.markdown("---")
@@ -425,18 +410,18 @@ def render(ai):
                                 "pattern", "upgrade_count", "partners_in_x",
                                 "confidence", "lift",
                             ] if c in cc_df.columns]
-                            cc_disp = cc_df[show_cols].copy()
-                            for _cc in ["upgrade_count", "partners_in_x"]:
-                                if _cc in cc_disp.columns:
-                                    cc_disp[_cc] = cc_disp[_cc].apply(lambda v: str(int(float(v))) if v==v else "0")
-                            if "confidence" in cc_disp.columns:
-                                cc_disp["confidence"] = cc_disp["confidence"].apply(lambda v: f"{float(v):.2f}" if v==v else "—")
-                            if "lift" in cc_disp.columns:
-                                cc_disp["lift"] = cc_disp["lift"].apply(lambda v: f"{float(v):.2f}" if v==v else "—")
-                            for _cc2 in cc_disp.select_dtypes(include=["object"]).columns:
-                                cc_disp[_cc2] = cc_disp[_cc2].fillna("").astype(str)
-                            cc_disp = cc_disp.rename(columns={"pattern":"Upgrade Pattern","upgrade_count":"Count","partners_in_x":"Partners in X","confidence":"Confidence","lift":"Lift"})
-                            st.dataframe(cc_disp, use_container_width=True, hide_index=True)
+                            st.dataframe(
+                                cc_df[show_cols],
+                                column_config={
+                                    "pattern": "Upgrade Pattern",
+                                    "upgrade_count": st.column_config.NumberColumn("Count"),
+                                    "partners_in_x": st.column_config.NumberColumn("Partners in X"),
+                                    "confidence": st.column_config.NumberColumn("Confidence", format="%.2f"),
+                                    "lift": st.column_config.NumberColumn("Lift", format="%.2f"),
+                                },
+                                use_container_width=True,
+                                hide_index=True,
+                            )
                             # Show partner names for a selected cross-category pattern
                             if "partner_names" in cc_df.columns:
                                 st.markdown("---")

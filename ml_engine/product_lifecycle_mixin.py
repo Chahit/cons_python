@@ -1,16 +1,11 @@
 """
 Product Lifecycle Intelligence mixin for the SalesIntelligenceEngine.
-Provides growth velocity scoring, cannibalization detection, end-of-life prediction,
-and Prophet-powered time-series forecasting with seasonality.
+Provides growth velocity scoring, cannibalization detection, and end-of-life prediction.
 """
 
-import logging
 import time
-import warnings
 import numpy as np
 import pandas as pd
-
-logger = logging.getLogger(__name__)
 
 
 class ProductLifecycleMixin:
@@ -211,80 +206,8 @@ class ProductLifecycleMixin:
             })
 
         result = pd.DataFrame(records)
-        if result.empty:
-            return result
-
-        # ── Data-driven lifecycle stage classification ───────────────────────
-        # WHY: Fixed thresholds (e.g. velocity >= 0.3) do not adapt to the actual
-        # spread of products in this dataset. If all products are declining, fixed
-        # thresholds push everyone into "End-of-Life" or vice versa.
-        # Using percentiles of the computed velocity_score and growth_3m_pct gives
-        # stage boundaries that reflect THIS dataset's actual distribution.
-        v_scores = result["velocity_score"]
-        g_scores = result["growth_3m_pct"]
-
-        # Compute percentile boundaries
-        v_p80 = float(v_scores.quantile(0.80))  # Top 20% = Growing
-        v_p50 = float(v_scores.quantile(0.50))  # Median    = Mature
-        v_p25 = float(v_scores.quantile(0.25))  # Bottom 25% = Declining start
-        v_p10 = float(v_scores.quantile(0.10))  # Bottom 10% = End-of-Life
-
-        g_p70 = float(g_scores.quantile(0.70))  # Top 30% growth rate
-        g_p30 = float(g_scores.quantile(0.30))  # Below 30th = weak growth
-
-        # Clamp percentile thresholds so they remain interpretable:
-        # Growing must have positive velocity; End-of-Life must be negative.
-        v_p80 = max(v_p80, 0.05)   # Growing floor
-        v_p10 = min(v_p10, -0.05)  # EOL ceiling
-
-        def _classify_stage(row):
-            v = row["velocity_score"]
-            g = row["growth_3m_pct"]      # slope: rate of change in recent 3 months
-            peak_dist = row["peak_distance_pct"]
-            # Acceleration proxy: difference between recent slope (3m) and longer slope (6m/90d)
-            # If growth is accelerating (3m > 6m), the product is gaining momentum.
-            # If decelerating (3m < 6m), even positive growth may be plateauing.
-            g_90 = float(row.get("growth_rate_90d", 0.0) or 0.0) * 100.0  # normalise to %
-            accel = g - g_90  # positive = accelerating, negative = decelerating
-
-            # End-of-Life: slope strongly negative AND product hasn't been ordered recently
-            # Roadmap definition: slope << 0 AND recency > 180 days
-            recency_d = float(row.get("recency_days", 0.0) or 0.0)
-            if v < v_p10 and recency_d > 180:
-                return "End-of-Life"
-
-            # Growing: top velocity AND positive slope AND accelerating
-            # Roadmap: slope > 0 AND acceleration > 0
-            if v >= v_p80 and g >= g_p70 and accel >= 0:
-                return "Growing"
-
-            # Mature: above median velocity AND slope near zero AND low volatility
-            # Roadmap: slope ≈ 0 AND low volatility
-            # We use: g in bottom-to-top 30-70th range AND peak_dist < 20
-            if v >= v_p50 and g >= g_p30 and peak_dist < 20:
-                return "Mature"
-
-            # Plateauing: slope near zero BUT high volatility (decelerating)
-            # Roadmap: slope ≈ 0 AND high volatility
-            if v >= v_p25 and peak_dist < 30 and accel < 0:
-                return "Plateauing"
-
-            # Declining: slope < 0 (negative recent growth)
-            # Roadmap: slope < 0
-            if v >= v_p10 or g < g_p30:
-                return "Declining"
-
-            # Fallback End-of-Life
-            return "End-of-Life"
-
-        result["lifecycle_stage"] = result.apply(_classify_stage, axis=1)
-
-        print(
-            f"[Lifecycle] Data-driven thresholds: v_p80={v_p80:.3f}, v_p50={v_p50:.3f}, "
-            f"v_p25={v_p25:.3f}, v_p10={v_p10:.3f} | g_p70={g_p70:.1f}%, g_p30={g_p30:.1f}%"
-        )
-
-        result = result.sort_values("velocity_score", ascending=False).reset_index(drop=True)
+        if not result.empty:
+            result = result.sort_values("velocity_score", ascending=False).reset_index(drop=True)
         return result
 
     # -----------------------------------------------------------------------
@@ -540,139 +463,3 @@ class ProductLifecycleMixin:
         if df is None or df.empty:
             return pd.DataFrame()
         return df[df["product_name"] == product_name].sort_values("sale_month")
-
-    # -----------------------------------------------------------------------
-    # Prophet Forecasting
-    # -----------------------------------------------------------------------
-
-    def _prophet_forecast_product(
-        self,
-        product_name: str,
-        periods: int = 6,
-    ) -> pd.DataFrame:
-        """
-        Fit a Prophet model on a product's monthly revenue and return a forecast.
-
-        Returns a DataFrame with columns:
-            ds, yhat, yhat_lower, yhat_upper, type ('actual' | 'forecast')
-
-        Falls back to linear extrapolation if Prophet is unavailable or
-        there are fewer than 6 months of data.
-        """
-        self.ensure_product_lifecycle()
-        df = self.df_product_monthly
-        if df is None or df.empty:
-            return pd.DataFrame()
-
-        sub = (
-            df[df["product_name"] == product_name]
-            .sort_values("sale_month")
-            .dropna(subset=["sale_month", "monthly_revenue"])
-            .copy()
-        )
-        if sub.empty:
-            return pd.DataFrame()
-
-        # Build actual rows for the result
-        actual = sub[["sale_month", "monthly_revenue"]].copy()
-        actual.columns = ["ds", "yhat"]
-        actual["yhat_lower"] = actual["yhat"]
-        actual["yhat_upper"] = actual["yhat"]
-        actual["type"] = "actual"
-        actual["ds"] = pd.to_datetime(actual["ds"])
-
-        # ── Attempt Prophet ──────────────────────────────────────────────────
-        MIN_MONTHS = 6
-        if len(sub) >= MIN_MONTHS:
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    from prophet import Prophet  # type: ignore
-
-                prophet_df = pd.DataFrame({
-                    "ds": pd.to_datetime(sub["sale_month"]),
-                    "y":  sub["monthly_revenue"].astype(float).clip(lower=0),
-                })
-
-                m = Prophet(
-                    yearly_seasonality=True,
-                    weekly_seasonality=False,
-                    daily_seasonality=False,
-                    seasonality_mode="multiplicative",
-                    changepoint_prior_scale=0.1,
-                    interval_width=0.80,
-                    stan_backend="CMDSTANPY" if False else None,  # use default
-                )
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    m.fit(prophet_df)
-
-                future = m.make_future_dataframe(periods=periods, freq="MS")
-                forecast = m.predict(future)
-
-                # Keep only future rows (beyond last actual month)
-                last_actual = prophet_df["ds"].max()
-                future_fc = forecast[forecast["ds"] > last_actual][
-                    ["ds", "yhat", "yhat_lower", "yhat_upper"]
-                ].copy()
-                future_fc["yhat"]       = future_fc["yhat"].clip(lower=0).round(2)
-                future_fc["yhat_lower"] = future_fc["yhat_lower"].clip(lower=0).round(2)
-                future_fc["yhat_upper"] = future_fc["yhat_upper"].clip(lower=0).round(2)
-                future_fc["type"]       = "forecast"
-
-                return pd.concat([actual, future_fc], ignore_index=True)
-
-            except Exception as exc:
-                logger.debug("Prophet failed for %s, using linear: %s", product_name, exc)
-
-        # ── Fallback: linear extrapolation ───────────────────────────────────
-        sub2 = sub.copy()
-        sub2["month_idx"] = np.arange(len(sub2))
-        try:
-            coeffs = np.polyfit(sub2["month_idx"].values,
-                                sub2["monthly_revenue"].astype(float).values, 1)
-            slope, intercept = coeffs[0], coeffs[1]
-        except Exception:
-            slope, intercept = 0.0, float(sub["monthly_revenue"].mean())
-
-        last_date = pd.to_datetime(sub["sale_month"].max())
-        forecast_rows = []
-        for i in range(1, periods + 1):
-            next_ds = last_date + pd.DateOffset(months=i)
-            pred = max(0.0, slope * (len(sub2) + i - 1) + intercept)
-            forecast_rows.append({
-                "ds": next_ds, "yhat": round(pred, 2),
-                "yhat_lower": round(pred * 0.85, 2),
-                "yhat_upper": round(pred * 1.15, 2),
-                "type": "forecast",
-            })
-
-        return pd.concat([actual, pd.DataFrame(forecast_rows)], ignore_index=True)
-
-    def get_product_prophet_forecast(self, product_name: str, periods: int = 6) -> dict:
-        """
-        Public API: return Prophet (or linear) forecast for a product.
-
-        Returns a dict with:
-            product_name, method, periods, data (list of dicts)
-        """
-        fc = self._prophet_forecast_product(product_name, periods=periods)
-        if fc.empty:
-            return {"product_name": product_name, "method": "none", "periods": 0, "data": []}
-
-        # Detect which method was used
-        try:
-            from prophet import Prophet  # noqa: F401
-            method = "prophet" if len(self.df_product_monthly[
-                self.df_product_monthly["product_name"] == product_name
-            ]) >= 6 else "linear"
-        except ImportError:
-            method = "linear"
-
-        fc["ds"] = fc["ds"].astype(str)
-        return {
-            "product_name": product_name,
-            "method": method,
-            "periods": int((fc["type"] == "forecast").sum()),
-            "data": fc.to_dict(orient="records"),
-        }

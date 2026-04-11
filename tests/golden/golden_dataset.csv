@@ -1,0 +1,21 @@
+company_name,group_name,total_spend,state,recent_90_revenue,prev_90_revenue,recency_days,revenue_drop_pct,growth_rate_90d,revenue_volatility,recent_txns,prev_txns,active_months
+Alpha Distributors,Lubricants,85000,Maharashtra,28000,22000,12,0.0,0.27,1800,8,6,18
+Alpha Distributors,Paints,42000,Maharashtra,28000,22000,12,0.0,0.27,1800,8,6,18
+Beta Traders,Lubricants,12000,Gujarat,3000,9000,95,66.7,-0.67,3500,1,5,9
+Beta Traders,Construction Chemicals,8000,Gujarat,3000,9000,95,66.7,-0.67,3500,1,5,9
+Gamma Enterprises,Lubricants,55000,Rajasthan,18000,17000,8,0.0,0.06,900,6,6,14
+Gamma Enterprises,Greases,31000,Rajasthan,18000,17000,8,0.0,0.06,900,6,6,14
+Gamma Enterprises,Paints,24000,Rajasthan,18000,17000,8,0.0,0.06,900,6,6,14
+Delta Corp,Construction Chemicals,78000,Maharashtra,22000,21000,20,0.0,0.05,1100,7,7,22
+Delta Corp,Lubricants,19000,Maharashtra,22000,21000,20,0.0,0.05,1100,7,7,22
+Epsilon Stores,Lubricants,0,Kerala,0,15000,280,100.0,-1.0,4000,0,4,6
+Epsilon Stores,Paints,0,Kerala,0,15000,280,100.0,-1.0,4000,0,4,6
+Zeta Industrial,Greases,94000,Gujarat,31000,28000,5,0.0,0.11,1200,9,8,24
+Zeta Industrial,Lubricants,67000,Gujarat,31000,28000,5,0.0,0.11,1200,9,8,24
+Zeta Industrial,Paints,45000,Gujarat,31000,28000,5,0.0,0.11,1200,9,8,24
+Eta Supplies,Lubricants,22000,Tamil Nadu,7000,8000,35,12.5,-0.13,600,3,4,10
+Eta Supplies,Construction Chemicals,15000,Tamil Nadu,7000,8000,35,12.5,-0.13,600,3,4,10
+Theta Partners,Lubricants,110000,Maharashtra,36000,32000,3,0.0,0.13,2000,10,9,30
+Theta Partners,Greases,88000,Maharashtra,36000,32000,3,0.0,0.13,2000,10,9,30
+Theta Partners,Paints,70000,Maharashtra,36000,32000,3,0.0,0.13,2000,10,9,30
+Iota Wholesale,Construction Chemicals,5000,Rajasthan,1500,2000,130,25.0,-0.25,800,1,2,5

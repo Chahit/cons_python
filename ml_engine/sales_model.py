@@ -8,6 +8,7 @@ from .associations_mixin import AssociationsMixin
 from .base_loader_mixin import BaseLoaderMixin
 from .churn_credit_stub_mixin import ChurnCreditStubMixin
 from .clustering_mixin import ClusteringMixin
+from .graph_embeddings_mixin import GraphEmbeddingsMixin
 from .monitoring_mixin import MonitoringMixin
 from .product_lifecycle_mixin import ProductLifecycleMixin
 from .recommendation_mixin import RecommendationMixin
@@ -23,6 +24,7 @@ class SalesIntelligenceEngine(
     BaseLoaderMixin,
     ChurnCreditStubMixin,
     ClusteringMixin,
+    GraphEmbeddingsMixin,
     AssociationsMixin,
     RecommendationMixin,
     RealtimeMixin,
@@ -53,6 +55,44 @@ class SalesIntelligenceEngine(
             # Keep startup resilient even if .env has formatting issues.
             pass
 
+    def _validate_config(self):
+        """
+        Fail-closed startup validation.
+        Raises EnvironmentError listing every missing required configuration variable.
+        Optional AI keys emit warnings only — they do not block startup.
+        """
+        missing_critical = []
+        # DB connection: either full URL, or all individual parts
+        has_url = bool((os.getenv("SALES_DB_URL") or "").strip())
+        if not has_url:
+            for var in ("SALES_DB_USER", "SALES_DB_PASSWORD", "SALES_DB_HOST",
+                        "SALES_DB_PORT", "SALES_DB_NAME"):
+                val = (os.getenv(var) or "").strip()
+                if not val or val.upper() == "PLACEHOLDER_ONLY":
+                    missing_critical.append(var)
+
+        if missing_critical:
+            raise EnvironmentError(
+                "[SalesIntelligenceEngine] Missing required environment variables: "
+                + ", ".join(missing_critical)
+                + ". Set them in your .env file or shell environment before starting."
+            )
+
+        # Optional AI keys — warn but don't block
+        ai_vars = {
+            "GEMINI_API_KEY": self.gemini_api_key,
+            "OPENAI_API_KEY": self.openai_api_key,
+            "GROQ_API_KEY": self.groq_api_key,
+        }
+        missing_ai = [k for k, v in ai_vars.items()
+                      if not v or v.strip() in ("", "PLACEHOLDER_ONLY")]
+        if missing_ai:
+            print(
+                f"[SalesIntelligenceEngine] WARNING: AI features disabled — "
+                f"missing optional keys: {', '.join(missing_ai)}. "
+                f"Add them to .env to enable chatbot and LLM labeling."
+            )
+
     def __init__(self):
         self._load_local_env_file()
         # Prefer a full URL from env. Fallback to parts for local development.
@@ -60,11 +100,11 @@ class SalesIntelligenceEngine(
         if env_url:
             self.db_url = env_url
         else:
-            user = os.getenv("SALES_DB_USER", "postgres")
-            password = urllib.parse.quote_plus(os.getenv("SALES_DB_PASSWORD", "CHAHIT123"))
+            user = os.getenv("SALES_DB_USER", "")
+            password = urllib.parse.quote_plus(os.getenv("SALES_DB_PASSWORD", ""))
             host = os.getenv("SALES_DB_HOST", "127.0.0.1")
             port = os.getenv("SALES_DB_PORT", "5432")
-            name = os.getenv("SALES_DB_NAME", "dsr_live_local")
+            name = os.getenv("SALES_DB_NAME", "")
             self.db_url = f"postgresql://{user}:{password}@{host}:{port}/{name}"
 
         self.engine = create_engine(
@@ -196,78 +236,11 @@ class SalesIntelligenceEngine(
         self.nl_query_partner_scan_limit = max(
             20, int(os.getenv("NL_QUERY_PARTNER_SCAN_LIMIT", "300"))
         )
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+        self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        self.groq_api_key = os.getenv("GROQ_API_KEY", "")
+        self.groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
         self.openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        # ── Date range filter (set by the sidebar; persisted on engine instance) ─────
-        self._date_start = None
-        self._date_end = None
-
-    # ────────────────────────────────────────────────────────────────
-    # Date range helpers
-    # ────────────────────────────────────────────────────────────────
-    def set_date_range(self, date_start, date_end):
-        """Called from sidebar. Stores the selected window for downstream filtering.
-
-        Does NOT invalidate the engine cache — the full dataset is loaded once
-        and filtered at query time via get_date_filtered_fact() / get_date_filtered_ml().
-        Adjust gap_lookback_days to match the selected window so peer-gap analysis
-        is always in sync with what the user is looking at.
-        """
-        import datetime
-        import pandas as pd
-
-        if isinstance(date_start, datetime.date):
-            date_start = pd.Timestamp(date_start)
-        if isinstance(date_end, datetime.date):
-            date_end = pd.Timestamp(date_end)
-        self._date_start = date_start
-        self._date_end = date_end
-        # Sync lookback window to the selected range
-        if date_start and date_end:
-            self.gap_lookback_days = max(30, (date_end - date_start).days)
-
-    def get_date_filtered_fact(self):
-        """Return df_fact filtered to the selected date window.
-
-        Falls back to the full df_fact if no date range is set or if the
-        DataFrame has no recognisable date column.
-        """
-        import pandas as pd
-        if self.df_fact is None:
-            return None
-        if self._date_start is None or self._date_end is None:
-            return self.df_fact
-        # Detect the date column (handles different naming conventions)
-        date_col = next(
-            (c for c in ["sale_date", "date", "order_date", "transaction_date", "invoice_date"]
-             if c in self.df_fact.columns),
-            None,
-        )
-        if date_col is None:
-            return self.df_fact
-        df = self.df_fact.copy()
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-        mask = (df[date_col] >= self._date_start) & (df[date_col] <= self._date_end)
-        filtered = df[mask]
-        return filtered if not filtered.empty else self.df_fact
-
-    def get_date_filtered_ml(self):
-        """Return df_ml filtered to the selected date window (last_activity / date column)."""
-        import pandas as pd
-        if self.df_ml is None:
-            return None
-        if self._date_start is None or self._date_end is None:
-            return self.df_ml
-        date_col = next(
-            (c for c in ["last_activity_date", "sale_date", "date", "order_date"]
-             if c in self.df_ml.columns),
-            None,
-        )
-        if date_col is None:
-            return self.df_ml
-        df = self.df_ml.copy()
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-        mask = (df[date_col] >= self._date_start) & (df[date_col] <= self._date_end)
-        filtered = df[mask]
-        return filtered if not filtered.empty else self.df_ml
-
+        self.gemini_model_fallbacks = os.getenv("GEMINI_MODEL_FALLBACKS", "").strip()
+        self._validate_config()

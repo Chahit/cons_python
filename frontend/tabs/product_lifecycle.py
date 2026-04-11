@@ -154,45 +154,24 @@ def render(ai):
                 unsafe_allow_html=True
             )
             
-            lc_disp = stage_df[display_cols].copy()
-            for _col, _fn in [
-                ("velocity_score",      lambda v: f"{float(v):.3f}"),
-                ("growth_3m_pct",       lambda v: f"{float(v):+.1f}%"),
-                ("slope_pct",           lambda v: f"{float(v):+.1f}%"),
-                ("avg_monthly_revenue", lambda v: f"Rs {int(float(v)):,}"),
-                ("current_revenue",     lambda v: f"Rs {int(float(v)):,}"),
-                ("peak_distance_pct",   lambda v: f"{float(v):.1f}%"),
-                ("buyer_trend",         lambda v: f"{float(v):+.2f}"),
-                ("revenue_cv",          lambda v: f"{float(v):.2f}"),
-            ]:
-                if _col in lc_disp.columns:
-                    lc_disp[_col] = lc_disp[_col].apply(lambda v, f=_fn: f(v) if v==v else "—")
-            for _oc in lc_disp.select_dtypes(include=["object"]).columns:
-                if _oc != "revenue_trend":
-                    lc_disp[_oc] = lc_disp[_oc].fillna("").astype(str)
-            lc_disp = lc_disp.rename(columns={
-                "product_name":       "Product",
-                "revenue_trend":      "Revenue Trend",
-                "velocity_score":     "Velocity",
-                "growth_3m_pct":      "3M Growth %",
-                "slope_pct":          "Trend Slope %",
-                "avg_monthly_revenue":"Avg Monthly Rev",
-                "current_revenue":    "Current Rev",
-                "peak_distance_pct":  "From Peak %",
-                "months_since_peak":  "Months Since Peak",
-                "buyer_trend":        "Buyer Trend",
-                "revenue_cv":         "Volatility (CV)",
-            })
-
-            col_cfg = {}
-            if "Revenue Trend" in lc_disp.columns:
-                col_cfg["Revenue Trend"] = st.column_config.LineChartColumn(
-                    "Revenue Trend",
-                    width="medium",
-                    help="Monthly revenue over last 18 months",
-                )
-
-            st.dataframe(lc_disp, use_container_width=True, hide_index=True, column_config=col_cfg)
+            st.dataframe(
+                stage_df[display_cols],
+                column_config={
+                    "product_name": "Product",
+                    "revenue_trend": st.column_config.LineChartColumn("Trend (18m)", y_min=0),
+                    "velocity_score": st.column_config.NumberColumn("Velocity", format="%.3f"),
+                    "growth_3m_pct": st.column_config.NumberColumn("3M Growth %", format="%+.1f%%"),
+                    "slope_pct": st.column_config.NumberColumn("Trend Slope %", format="%+.1f%%"),
+                    "avg_monthly_revenue": st.column_config.NumberColumn("Avg Monthly Rev", format="Rs %.0f"),
+                    "current_revenue": st.column_config.NumberColumn("Current Rev", format="Rs %.0f"),
+                    "peak_distance_pct": st.column_config.NumberColumn("From Peak %", format="%.1f%%"),
+                    "months_since_peak": "Months Since Peak",
+                    "buyer_trend": st.column_config.NumberColumn("Buyer Trend", format="%+.2f"),
+                    "revenue_cv": st.column_config.NumberColumn("Volatility (CV)", format="%.2f"),
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
 
     # ------------------------------------------------------------------
     # Individual Product Trend Drilldown
@@ -256,26 +235,21 @@ def render(ai):
             "victim_growth_3m_pct", "association_confidence", "association_lift",
             "cannibalization_score", "estimated_revenue_shift",
         ] if c in cannibal_df.columns]
-        can_disp = cannibal_df[display_cols].copy()
-        for _col, _fn in [
-            ("cannibal_growth_3m_pct",  lambda v: f"{float(v):+.1f}%"),
-            ("victim_growth_3m_pct",    lambda v: f"{float(v):+.1f}%"),
-            ("association_confidence",  lambda v: f"{float(v):.2f}"),
-            ("association_lift",        lambda v: f"{float(v):.2f}"),
-            ("cannibalization_score",   lambda v: f"{float(v):.3f}"),
-            ("estimated_revenue_shift", lambda v: f"Rs {int(float(v)):,}"),
-        ]:
-            if _col in can_disp.columns:
-                can_disp[_col] = can_disp[_col].apply(lambda v, f=_fn: f(v) if v==v else "—")
-        for _oc in can_disp.select_dtypes(include=["object"]).columns:
-            can_disp[_oc] = can_disp[_oc].fillna("").astype(str)
-        can_disp = can_disp.rename(columns={
-            "cannibal_product":"Replacing Product ↑","cannibal_growth_3m_pct":"Its Growth %",
-            "victim_product":"Being Replaced ↓","victim_growth_3m_pct":"Its Decline %",
-            "association_confidence":"Confidence","association_lift":"Lift",
-            "cannibalization_score":"Score","estimated_revenue_shift":"Est. Rev Shift/3M",
-        })
-        st.dataframe(can_disp, use_container_width=True, hide_index=True)
+        st.dataframe(
+            cannibal_df[display_cols],
+            column_config={
+                "cannibal_product": "Replacing Product ↑",
+                "cannibal_growth_3m_pct": st.column_config.NumberColumn("Its Growth %", format="%+.1f%%"),
+                "victim_product": "Being Replaced ↓",
+                "victim_growth_3m_pct": st.column_config.NumberColumn("Its Decline %", format="%+.1f%%"),
+                "association_confidence": st.column_config.NumberColumn("Confidence", format="%.2f"),
+                "association_lift": st.column_config.NumberColumn("Lift", format="%.2f"),
+                "cannibalization_score": st.column_config.NumberColumn("Score", format="%.3f"),
+                "estimated_revenue_shift": st.column_config.NumberColumn("Est. Rev Shift/3M", format="Rs %.0f"),
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
 
         if len(cannibal_df) >= 2:
             fig_sankey = go.Figure(go.Sankey(
@@ -316,29 +290,25 @@ def render(ai):
             "peak_distance_pct", "buyer_trend", "total_stock", "max_age_days",
             "suggested_action",
         ] if c in eol_display.columns]
-        eol_disp = eol_display[display_cols].copy()
-        for _col, _fn in [
-            ("eol_risk_score",      lambda v: f"{float(v):.3f}"),
-            ("est_months_to_zero",  lambda v: f"{float(v):.1f}"),
-            ("current_revenue",     lambda v: f"Rs {int(float(v)):,}"),
-            ("growth_3m_pct",       lambda v: f"{float(v):+.1f}%"),
-            ("peak_distance_pct",   lambda v: f"{float(v):.1f}%"),
-            ("buyer_trend",         lambda v: f"{float(v):+.2f}"),
-            ("total_stock",         lambda v: f"{int(float(v)):,}"),
-            ("max_age_days",        lambda v: f"{int(float(v)):,}"),
-        ]:
-            if _col in eol_disp.columns:
-                eol_disp[_col] = eol_disp[_col].apply(lambda v, f=_fn: f(v) if v==v else "—")
-        for _oc in eol_disp.select_dtypes(include=["object"]).columns:
-            eol_disp[_oc] = eol_disp[_oc].fillna("").astype(str)
-        eol_disp = eol_disp.rename(columns={
-            "product_name":"Product","urgency_icon":"Urgency","lifecycle_stage":"Stage",
-            "eol_risk_score":"Risk Score","est_months_to_zero":"Est. Months to Zero",
-            "current_revenue":"Current Rev","growth_3m_pct":"3M Growth %",
-            "peak_distance_pct":"From Peak %","buyer_trend":"Buyer Trend",
-            "total_stock":"Stock Qty","max_age_days":"Max Age (Days)","suggested_action":"Suggested Action",
-        })
-        st.dataframe(eol_disp, use_container_width=True, hide_index=True)
+        st.dataframe(
+            eol_display[display_cols],
+            column_config={
+                "product_name": "Product",
+                "urgency_icon": "Urgency",
+                "lifecycle_stage": "Stage",
+                "eol_risk_score": st.column_config.NumberColumn("Risk Score", format="%.3f"),
+                "est_months_to_zero": st.column_config.NumberColumn("Est. Months to Zero", format="%.1f"),
+                "current_revenue": st.column_config.NumberColumn("Current Rev", format="Rs %.0f"),
+                "growth_3m_pct": st.column_config.NumberColumn("3M Growth %", format="%+.1f%%"),
+                "peak_distance_pct": st.column_config.NumberColumn("From Peak %", format="%.1f%%"),
+                "buyer_trend": st.column_config.NumberColumn("Buyer Trend", format="%+.2f"),
+                "total_stock": st.column_config.NumberColumn("Stock Qty", format="%.0f"),
+                "max_age_days": st.column_config.NumberColumn("Max Age (Days)", format="%.0f"),
+                "suggested_action": "Suggested Action",
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
 
         # EOL Risk Distribution
         if len(eol_df) > 3:
@@ -383,22 +353,10 @@ def render(ai):
             with act3:
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("Generate Offer Script", key="eol_gen_script"):
-                    # Personalize with top buyer name if available
-                    try:
-                        leads_eol = ai.get_dead_stock()
-                        top_buyer = ""
-                        if not leads_eol.empty and "dead_stock_item" in leads_eol.columns:
-                            match = leads_eol[leads_eol["dead_stock_item"].str.lower() == chosen_eol.lower()]
-                            if not match.empty and "potential_buyer" in match.columns:
-                                sort_col = next((c for c in ["buyer_past_purchase_qty", "historical_qty_bought", "historical_revenue"] if c in match.columns), None)
-                                top_buyer = match.sort_values(sort_col, ascending=False).iloc[0]["potential_buyer"] if sort_col else match.iloc[0]["potential_buyer"]
-                    except Exception:
-                        top_buyer = ""
-                    salutation = f"Dear {top_buyer}" if top_buyer else "Dear Partner"
                     bundle_line = f" We're bundling it with **{bundle_with}** for added value." if bundle_with else ""
                     script = (
                         f"**Flash Deal — Limited Stock Alert!**\n\n"
-                        f"{salutation}, we have a special **{discount_pct}% discount** on **{chosen_eol}** "
+                        f"Dear Partner, we have a special **{discount_pct}% discount** on **{chosen_eol}** "
                         f"(only ~{months_left:.0f} months of active inventory left)!{bundle_line}\n\n"
                         f"Act fast — this offer expires when stock runs out. Contact your sales rep today!"
                     )

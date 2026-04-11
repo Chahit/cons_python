@@ -1,0 +1,48 @@
+{
+  "description": "Golden snapshot: expected outputs from the deterministic pipeline on golden_dataset.csv",
+  "version": "1.0",
+  "generated_by": "tests/test_golden_snapshot.py — run once with --generate flag to update",
+  "partners": {
+    "Alpha Distributors": {
+      "health_segment_options": ["Healthy", "Champion"],
+      "degrowth_flag": false,
+      "revenue_drop_pct_max": 5.0,
+      "churn_probability_max": 0.50,
+      "growth_rate_90d_min": 0.0
+    },
+    "Beta Traders": {
+      "health_segment_options": ["At Risk", "Critical"],
+      "degrowth_flag": true,
+      "revenue_drop_pct_min": 50.0,
+      "churn_probability_min": 0.55
+    },
+    "Epsilon Stores": {
+      "health_segment_options": ["Critical"],
+      "degrowth_flag": true,
+      "churn_probability_min": 0.80,
+      "recent_90_revenue_max": 1.0
+    },
+    "Theta Partners": {
+      "health_segment_options": ["Champion", "Healthy"],
+      "degrowth_flag": false,
+      "churn_probability_max": 0.40,
+      "recency_days_max": 20
+    },
+    "Zeta Industrial": {
+      "health_segment_options": ["Champion", "Healthy"],
+      "degrowth_flag": false,
+      "churn_probability_max": 0.40
+    },
+    "Iota Wholesale": {
+      "health_segment_options": ["At Risk", "Critical"],
+      "degrowth_flag": true,
+      "revenue_drop_pct_min": 20.0
+    }
+  },
+  "aggregate": {
+    "all_churn_probabilities_bounded": true,
+    "all_credit_scores_bounded": true,
+    "all_health_scores_bounded": true,
+    "health_score_range": [0.0, 1.0]
+  }
+}

@@ -2,10 +2,6 @@ import os
 # Fix for KMeans cluster issue on Windows
 os.environ["OMP_NUM_THREADS"] = "1"
 import sys
-import datetime
-
-import pandas as pd
-pd.set_option("future.no_silent_downcasting", True)
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -192,7 +188,6 @@ if st.sidebar.button("⟳  Refresh Data", key="nav_refresh"):
     st.rerun()
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
 
-
 st.sidebar.markdown('<div class="nav-section-label">Modules</div>', unsafe_allow_html=True)
 
 # ── NAV CARDS ─────────────────────────────────────────────────────────────────
@@ -239,7 +234,7 @@ for m in st.session_state.chat_history[-20:]:
     msgs_js_array += f'{{role:"{role}",content:`{content}`}},'
 msgs_js_array += "]"
 
-openai_ok = bool(ai.openai_api_key or os.getenv("OPENAI_API_KEY", ""))
+groq_ok = bool(ai.groq_api_key or os.getenv("GROQ_API_KEY", ""))
 quick_prompts_js = str([q.replace('"', '\\"') for q in ai.get_quick_insights()])
 
 # --- INJECT FLOATING CHATBOT via components.html (JS runs in iframe, modifies parent) ---

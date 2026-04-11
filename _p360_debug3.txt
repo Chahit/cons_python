@@ -1,0 +1,25 @@
+321:                 f"{rec_label}</div>"
+322:                 f"<div style=\'font-size:11px;color:#64748b;margin-top:6px;\'>Estimated Yearly</div>"
+323:                 f"<div style=\'font-size:11px;color:#64748b;margin-top:2px;\'>"
+324:                 f"Based on historical avg revenue</div></div>",
+325:                 unsafe_allow_html=True,
+326:             )
+327:         with _r2:
+328:             if outreach_script:
+329:                 with st.expander("Outreach Script - click to expand and copy"):
+330:                     st.code(outreach_script, language=None)
+331:                     st.caption("Customise: replace [Contact Name], [Day], [Time] before sending.")
+332: 
+333:     st.markdown(
+334:         f"<div class='ui-section'>",
+335:         unsafe_allow_html=True,
+336:     )
+337:     section_header("Revenue Health")
+338:     c1, c2, c3, c4 = st.columns(4)
+339:     with c1:
+340:         st.metric("Revenue Drop", f"{drop:.1f}%", delta=f"-{drop:.1f}%", delta_color="inverse")
+341:     with c2:
+342:         st.metric("Unlocked Potential (Yearly)", _fmt(total_pot_yearly),
+343:                   delta=f"Monthly {_fmt(total_pot_monthly)}", delta_color="off")
+344:     with c3:
+345:         st.metric("Health Score", f"{health_score:.2f}")

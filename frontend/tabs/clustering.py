@@ -47,13 +47,22 @@ def render(ai):
     n_outliers = is_outlier.sum()
     n_vip = (matrix["cluster_type"] == "VIP").sum()
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("Total Clusters Formed", int(n_clusters))
     with c2:
         st.metric("Outlier Partners", int(n_outliers))
     with c3:
         st.metric("VIP Partners", int(n_vip))
+    with c4:
+        label_method = "—"
+        if hasattr(ai, "cluster_label_report") and isinstance(ai.cluster_label_report, dict):
+            method_raw = ai.cluster_label_report.get("method", "")
+            label_method = {
+                "gemini_llm": "🧠 LLM (Gemini)",
+                "heuristic":  "📊 Heuristic",
+            }.get(str(method_raw).lower(), str(method_raw) or "—")
+        st.metric("Label Method", label_method)
 
     # --- Export Buttons ---
     cex1, cex2, cex3 = st.columns([1, 1, 4])
@@ -102,90 +111,28 @@ def render(ai):
     if rev_col:
         rev_agg = matrix[~is_outlier].groupby("cluster_label")[rev_col].mean().rename("Avg Revenue (Rs)")
         cluster_summary = cluster_summary.merge(rev_agg, on="cluster_label", how="left")
-    cs_disp = cluster_summary.copy()
-    if "Partners" in cs_disp.columns:
-        cs_disp["Partners"] = cs_disp["Partners"].apply(lambda v: str(int(float(v))) if v==v else "0")
-    if "Avg Revenue (Rs)" in cs_disp.columns:
-        cs_disp["Avg Revenue (Rs)"] = cs_disp["Avg Revenue (Rs)"].apply(
-            lambda v: f"Rs {int(float(v)):,}" if v==v else "—"
+        st.dataframe(
+            cluster_summary,
+            column_config={
+                "cluster_label": st.column_config.TextColumn("Cluster"),
+                "cluster_type": "Type",
+                "Partners": st.column_config.NumberColumn("Partners", format="%d"),
+                "Avg Revenue (Rs)": st.column_config.NumberColumn("Avg Revenue", format="Rs %.0f"),
+            },
+            use_container_width=True,
+            hide_index=True,
         )
-    for _oc in cs_disp.select_dtypes(include=["object"]).columns:
-        cs_disp[_oc] = cs_disp[_oc].fillna("").astype(str)
-    cs_disp = cs_disp.rename(columns={"cluster_label":"Cluster","cluster_type":"Type","Avg Revenue (Rs)":"Avg Revenue"})
-    st.dataframe(cs_disp, use_container_width=True, hide_index=True)
-
-    # Cluster Profile Cards (roadmap 3.2)
-    def _cluster_recommended_action(label, cluster_type):
-        label_l = label.lower()
-        if "strategic accounts" in label_l: return "Expand to new categories with a curated premium bundle."
-        if "category champions" in label_l:  return "Deepen share in dominant category; offer exclusive deals."
-        if "core revenue drivers" in label_l: return "Protect with quarterly commitment scheme + loyalty incentive."
-        if "anchor specialists" in label_l:  return "Broaden mix with 1 adjacent category recommendation."
-        if "emerging power" in label_l or "rising" in label_l: return "Fast-track relationship with senior sales rep ownership."
-        if "steady contributors" in label_l: return "Expand wallet share with cross-sell in under-penetrated category."
-        if "win-back" in label_l:            return "Run recovery call + 14-day exclusive offer window."
-        if "high-growth" in label_l:         return "Accelerate with priority fulfilment + advance order incentive."
-        if "niche power" in label_l:         return "Offer category exclusivity deal to lock in spend."
-        if "high-volume" in label_l:         return "Drive margin with premium-tier product recommendation."
-        if "balanced growth" in label_l:     return "Increase visit frequency; position as full-range supplier."
-        if "category growth specialist" in label_l: return "Cross-sell 1 complementary category to reduce concentration."
-        if "mid-tier growing" in label_l:    return "Qualify for VIP threshold with a volume-based milestone reward."
-        if cluster_type == "VIP":            return "Maintain relationship with quarterly strategic review."
-        return "Regular follow-up and portfolio review."
-
-    section_header("Cluster Profile Cards")
-
-    rev_col       = next((c for c in ["total_revenue", "recent_90_revenue", "revenue"] if c in matrix.columns), None)
-    order_gap_col = next((c for c in ["avg_order_gap_days", "order_gap_days", "recency_days"] if c in matrix.columns), None)
-    product_col   = next((c for c in ["top_category", "top_affinity_pitch"] if c in matrix.columns), None)
-
-    CLUSTER_ICONS = {
-        "strategic accounts": "💎", "category champions": "🏆",
-        "core revenue drivers": "💰", "win-back": "🔄",
-        "high-growth": "🚀", "anchor": "⚓",
-    }
-
-    cluster_groups = list(matrix[~is_outlier].groupby(["cluster_label", "cluster_type"]))
-    cards_per_row = 2
-    for i in range(0, len(cluster_groups), cards_per_row):
-        cols = st.columns(cards_per_row)
-        for j, (key, grp) in enumerate(cluster_groups[i: i + cards_per_row]):
-            label, ctype = key
-            n_partners = len(grp)
-            avg_rev    = float(grp[rev_col].mean()) if rev_col and rev_col in grp.columns else 0.0
-            avg_gap    = float(grp[order_gap_col].mean()) if order_gap_col and order_gap_col in grp.columns else None
-            if product_col and product_col in grp.columns:
-                prods = grp[product_col].dropna().astype(str)
-                prods = prods[prods.str.lower() != "n/a"]
-                top_prods = ", ".join(prods.value_counts().head(2).index.tolist()) or "N/A"
-            else:
-                top_prods = "N/A"
-            icon = next((v for k, v in CLUSTER_ICONS.items() if k in label.lower()),
-                        "📋" if ctype == "VIP" else "📊")
-            action  = _cluster_recommended_action(label, ctype)
-            gap_txt = f"{avg_gap:.0f} days" if avg_gap is not None else "N/A"
-            rev_fmt = f"Rs {int(avg_rev / 100_000):.0f}L" if avg_rev >= 100_000 else f"Rs {int(avg_rev):,}"
-            with cols[j]:
-                st.markdown(
-                    f'<div style="background:linear-gradient(135deg,#1e1e2e,#2a2a3e);border:1px solid #3f3f5f;'
-                    f'border-radius:12px;padding:18px 20px;margin-bottom:14px;">'
-                    f'<div style="font-size:1.3em;margin-bottom:6px;">{icon} '
-                    f'<strong style="color:#c4b5fd;">{label}</strong> '
-                    f'<span style="font-size:0.75em;color:#6b7280;margin-left:6px;">{ctype}</span></div>'
-                    f'<div style="display:flex;gap:20px;flex-wrap:wrap;margin:8px 0 10px;">'
-                    f'<div><span style="color:#9ca3af;font-size:0.78em;">PARTNERS</span><br/>'
-                    f'<strong style="color:#f9fafb;">{n_partners}</strong></div>'
-                    f'<div><span style="color:#9ca3af;font-size:0.78em;">AVG 90D REVENUE</span><br/>'
-                    f'<strong style="color:#34d399;">{rev_fmt}</strong></div>'
-                    f'<div><span style="color:#9ca3af;font-size:0.78em;">AVG ORDER GAP</span><br/>'
-                    f'<strong style="color:#f9fafb;">{gap_txt}</strong></div></div>'
-                    f'<div style="font-size:0.81em;color:#d1d5db;margin-bottom:8px;">'
-                    f'<span style="color:#9ca3af;">Typical products:</span> {top_prods}</div>'
-                    f'<div style="background:#312e81;border-radius:8px;padding:8px 12px;'
-                    f'font-size:0.81em;color:#e0e7ff;">'
-                    f'🎯 <strong>Recommended action:</strong> {action}</div></div>',
-                    unsafe_allow_html=True,
-                )
+    else:
+        st.dataframe(
+            cluster_summary,
+            column_config={
+                "cluster_label": st.column_config.TextColumn("Cluster"),
+                "cluster_type": "Type",
+                "Partners": st.column_config.NumberColumn("Partners", format="%d"),
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
 
     # ── 3D DNA Map ───────────────────────────────────────────────────────────
     section_header("Partner DNA Map (3D)")

@@ -20,10 +20,6 @@ def render(ai):
         accent_color="#f59e0b",
         badge_text="AI-Powered",
     )
-    # ── Resolve AI keys FIRST (must be outside any tab context) ──────────────
-    model_name = str(getattr(ai, "openai_model", "gpt-4o-mini"))
-    key = str(getattr(ai, "openai_api_key", "")).strip()
-
     skel = st.empty()
     with skel.container():
         skeleton_loader(n_metric_cards=4, n_rows=4, label="Loading recommendation context...")
@@ -48,6 +44,124 @@ def render(ai):
     selected_partner = st.selectbox("Partner", partner_list)
     top_n = st.slider("Top Actions", 1, 5, 3, 1)
 
+    # ────────────────────────────── Tabs ──────────────────────────────────────
+    tab_rec, tab_nl, tab_adv = st.tabs(["📋 Recommendations", "🔍 NL Query", "⚙️ Advanced"])
+
+    # ── Tab 2: NL Query ───────────────────────────────────────────────────────
+    with tab_nl:
+        section_header("Natural Language Query over Recommendations")
+        st.caption("Example: Show high-margin recommendations for low-credit-risk VIPs in Delhi.")
+        nq1, nq2 = st.columns([2, 1])
+        with nq1:
+            nl_query = st.text_input(
+                "Ask in plain language",
+                value="",
+                placeholder="Show high-margin recommendations for low-credit-risk VIPs in Delhi",
+                key="nl_query_input",
+            )
+        with nq2:
+            nl_scope = st.selectbox(
+                "Search Scope",
+                ["Selected State", "All States"],
+                index=0,
+                key="nl_scope",
+            )
+        nq3, nq4, nq5 = st.columns(3)
+        with nq3:
+            nl_top_n = st.slider("NL Query Top N", 5, 100, 20, 5)
+        with nq4:
+            st.markdown("<br>", unsafe_allow_html=True)
+            advanced_filters = st.checkbox("Show Advanced Filters")
+        with nq5:
+            st.write("")
+            st.write("")
+            nl_run = st.button("Run NL Query", use_container_width=True)
+            
+        if advanced_filters:
+            af1, af2 = st.columns(2)
+            with af1:
+                min_conf = st.slider("Min Confidence Threshold", 0.0, 1.0, 0.15, 0.05)
+            with af2:
+                min_lift = st.slider("Min Lift Threshold", 1.0, 5.0, 1.0, 0.5)
+    # ── Tab 3: Advanced ───────────────────────────────────────────────────────
+    with tab_adv:
+        model_name_adv = str(getattr(ai, "gemini_model", "gemini-1.5-flash"))
+        key_adv = str(getattr(ai, "gemini_api_key", "")).strip()
+        if key_adv:
+            st.caption(f"Gemini Model: {model_name_adv} (enabled via environment)")
+        else:
+            st.info("GEMINI_API_KEY not configured. Enhanced AI narrative unavailable, but all deterministic logic still runs.")
+
+    # ── Tab 1: Recommendations ────────────────────────────────────────────────
+    with tab_rec:
+        model_name = str(getattr(ai, "gemini_model", "gemini-1.5-flash"))
+        model_fallbacks = str(getattr(ai, "gemini_model_fallbacks", "") or "").strip()
+        key = str(getattr(ai, "gemini_api_key", "")).strip()
+        nl_query = st.session_state.get("nl_query_input", "")
+        nl_run = False  # handled in NL tab
+
+
+    if nl_run and str(nl_query).strip():
+        nl_result = ai.query_recommendations_nl(
+            query=nl_query,
+            state_scope=selected_state if nl_scope == "Selected State" else None,
+            top_n=int(nl_top_n),
+            use_genai=True,
+            api_key=key if key else None,
+            model=model_name,
+        )
+        if not nl_result or nl_result.get("status") != "ok":
+            st.error(
+                nl_result.get("reason", "Query execution failed.")
+                if isinstance(nl_result, dict)
+                else "Query execution failed."
+            )
+        else:
+            parser = nl_result.get("parser", {}) or {}
+            filters = nl_result.get("filters", {}) or {}
+            st.info(
+                f"Matched {int(nl_result.get('total_matches', 0))} recommendation rows "
+                f"(showing top {int(filters.get('top_n', nl_top_n))}); "
+                f"scanned {int(nl_result.get('scanned_partners', 0))} of "
+                f"{int(nl_result.get('candidate_partners', 0))} candidate partners. "
+                f"Parser: {parser.get('mode', 'heuristic')}."
+            )
+            if parser.get("genai_error"):
+                st.warning(parser.get("genai_error"))
+            with st.expander("Structured Filters Used", expanded=False):
+                st.json(filters)
+
+            nl_df = nl_result.get("results", pd.DataFrame())
+            if isinstance(nl_df, pd.DataFrame) and not nl_df.empty:
+                cols = [
+                    "partner_name",
+                    "state",
+                    "cluster_label",
+                    "cluster_type",
+                    "health_segment",
+                    "action_type",
+                    "recommended_offer",
+                    "priority_score",
+                    "margin_rate",
+                    "safe_discount_pct",
+                    "churn_probability",
+                    "credit_risk_score",
+                ]
+                show = [c for c in cols if c in nl_df.columns]
+                st.dataframe(
+                    nl_df[show],
+                    column_config={
+                        "priority_score": st.column_config.NumberColumn("Priority", format="%.2f"),
+                        "margin_rate": st.column_config.NumberColumn("Margin Rate", format="%.2f"),
+                        "safe_discount_pct": st.column_config.NumberColumn("Safe Discount %", format="%.1f"),
+                        "churn_probability": st.column_config.NumberColumn("Churn", format="%.3f"),
+                        "credit_risk_score": st.column_config.NumberColumn("Credit Risk", format="%.3f"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.warning("No recommendations matched the requested filters.")
 
     plan = ai.get_partner_recommendation_plan(
         partner_name=selected_partner,
@@ -116,67 +230,32 @@ def render(ai):
                 return re.sub('<[^<]+?>', '', str(text)).strip()
 
             df_display = df.copy()
-
+            
+            # Map icons for a premium look
             icon_map = {
-                "up-sell": "📈", "cross-sell": "🛒", "rescue": "🚨",
-                "retention": "🔄", "affinity": "📦", "strategic": "♟️",
-                "alert": "⚠️", "nurture": "🌱", "credit": "🔒",
+                "up-sell": "📈", "cross-sell": "🛒", "rescue": "🚨", "retention": "🔄", "affinity": "📦"
             }
-
-            df_display["Type"] = df_display["action_type"].apply(
-                lambda x: f"{icon_map.get(next((k for k in icon_map if k in str(x).lower()), ''), '📦')} {str(x).upper()}"
+            
+            df_display["Type"] = df_display["action_type"].apply(lambda x: f"{icon_map.get(next((k for k in icon_map if k in str(x).lower()), ''), '📦')} {str(x).upper()}")
+            df_display["Recommendation"] = df_display["recommended_offer"]
+            df_display["Logic"] = df_display["why_relevant"].apply(clean_html)
+            df_display["Execution"] = df_display["suggested_sequence"].apply(clean_html)
+            df_display["Priority"] = df_display["priority_score"]
+            
+            # Show the table
+            st.dataframe(
+                df_display[["Priority", "Type", "Recommendation", "Logic", "Execution"]].sort_values("Priority", ascending=False),
+                column_config={
+                    "Priority": st.column_config.ProgressColumn("Confidence", min_value=0, max_value=100, format="%.0f"),
+                    "Type": st.column_config.TextColumn("Category", width="small"),
+                    "Recommendation": st.column_config.TextColumn("Offer", width="medium"),
+                    "Logic": st.column_config.TextColumn("Why This?", width="large"),
+                    "Execution": st.column_config.TextColumn("Next Step", width="medium"),
+                },
+                use_container_width=True,
+                hide_index=True,
             )
-            df_display["Offer"]     = df_display["recommended_offer"]
-            df_display["Why?"]      = df_display["why_relevant"].apply(clean_html)
-            df_display["Next Step"] = df_display["suggested_sequence"].apply(clean_html)
-
-            # Roadmap 4.1 — Confidence + Similar Partners + Expected Uplift
-            df_display["Confidence"] = df_display["confidence_pct"].apply(
-                lambda v: f"{float(v):.0f}%" if pd.notna(v) else "—"
-            ) if "confidence_pct" in df_display.columns else "—"
-            df_display["Based On"] = df_display["similar_partners_count"].apply(
-                lambda v: f"{int(float(v))} peers" if pd.notna(v) else "—"
-            ) if "similar_partners_count" in df_display.columns else "—"
-            df_display["Est. Uplift/mo"] = df_display["expected_uplift_monthly"].apply(
-                lambda v: f"Rs {int(float(v)):,}" if pd.notna(v) and float(v) > 0 else "—"
-            ) if "expected_uplift_monthly" in df_display.columns else "—"
-
-            # Display top action confidence badges prominently
-            top_action = df_display.iloc[0] if not df_display.empty else None
-            if top_action is not None:
-                b1, b2, b3 = st.columns(3)
-                with b1:
-                    st.markdown(
-                        f"<div style='background:#1e3a5f;border-radius:10px;padding:10px 14px;text-align:center;'>"
-                        f"<div style='color:#93c5fd;font-size:0.75em;letter-spacing:1px;'>CONFIDENCE</div>"
-                        f"<div style='color:#eff6ff;font-size:1.6em;font-weight:700;'>{top_action.get('Confidence','—')}</div>"
-                        f"</div>", unsafe_allow_html=True,
-                    )
-                with b2:
-                    st.markdown(
-                        f"<div style='background:#1a3a2f;border-radius:10px;padding:10px 14px;text-align:center;'>"
-                        f"<div style='color:#6ee7b7;font-size:0.75em;letter-spacing:1px;'>BASED ON</div>"
-                        f"<div style='color:#ecfdf5;font-size:1.6em;font-weight:700;'>{top_action.get('Based On','—')}</div>"
-                        f"</div>", unsafe_allow_html=True,
-                    )
-                with b3:
-                    st.markdown(
-                        f"<div style='background:#3b1f00;border-radius:10px;padding:10px 14px;text-align:center;'>"
-                        f"<div style='color:#fcd34d;font-size:0.75em;letter-spacing:1px;'>EXPECTED UPLIFT/MONTH</div>"
-                        f"<div style='color:#fffbeb;font-size:1.6em;font-weight:700;'>{top_action.get('Est. Uplift/mo','—')}</div>"
-                        f"</div>", unsafe_allow_html=True,
-                    )
-                st.markdown("<br/>", unsafe_allow_html=True)
-
-            reco_disp = df_display[[
-                "Confidence", "Based On", "Est. Uplift/mo",
-                "Type", "Offer", "Why?", "Next Step",
-            ]].copy()
-            for _rc in reco_disp.select_dtypes(include=["object"]).columns:
-                reco_disp[_rc] = reco_disp[_rc].fillna("").astype(str)
-            st.dataframe(reco_disp, use_container_width=True, hide_index=True)
             st.markdown("---")
-
 
     # ======================================================================
     # FP-Growth Predictive Bundles
@@ -273,17 +352,20 @@ def render(ai):
                 )
 
             scripts = script_pack.get("scripts", {}) or {}
-            wa_text = str(scripts.get("whatsapp", ""))
-            email_subj = str(scripts.get("email_subject", ""))
-            email_body = str(scripts.get("email_body", ""))
-
-            st.text_area("WhatsApp Draft", value=wa_text, height=170)
-            st.code(wa_text, language="")
-
-            st.text_input("Email Subject", value=email_subj)
-
-            st.text_area("Email Body", value=email_body, height=230)
-            st.code(email_body, language="")
+            st.text_area(
+                "WhatsApp Draft",
+                value=str(scripts.get("whatsapp", "")),
+                height=170,
+            )
+            st.text_input(
+                "Email Subject",
+                value=str(scripts.get("email_subject", "")),
+            )
+            st.text_area(
+                "Email Body",
+                value=str(scripts.get("email_body", "")),
+                height=230,
+            )
 
 
         st.markdown("---")
@@ -342,17 +424,20 @@ def render(ai):
                     st.metric("Alternate Bundle", "Fallback: smaller trial")
 
             followup = followup_pack.get("followup", {}) or {}
-            fu_wa = str(followup.get("whatsapp_followup", ""))
-            fu_subj = str(followup.get("email_subject_followup", ""))
-            fu_body = str(followup.get("email_body_followup", ""))
-
-            st.text_area("WhatsApp Follow-up", value=fu_wa, height=180)
-            st.code(fu_wa, language="")
-
-            st.text_input("Follow-up Email Subject", value=fu_subj)
-
-            st.text_area("Follow-up Email Body", value=fu_body, height=240)
-            st.code(fu_body, language="")
+            st.text_area(
+                "WhatsApp Follow-up",
+                value=str(followup.get("whatsapp_followup", "")),
+                height=180,
+            )
+            st.text_input(
+                "Follow-up Email Subject",
+                value=str(followup.get("email_subject_followup", "")),
+            )
+            st.text_area(
+                "Follow-up Email Body",
+                value=str(followup.get("email_body_followup", "")),
+                height=240,
+            )
 
 
 

@@ -119,12 +119,16 @@ def render(engine):
                 delta_df["change (Rs)"] = delta_df["revenue"] - delta_df["prev_revenue"]
                 delta_df["change (%)"] = ((delta_df["change (Rs)"] / delta_df["prev_revenue"].replace(0, np.nan)) * 100).round(1)
                 delta_df = delta_df.dropna(subset=["prev_revenue"])
+                delta_df["revenue"] = delta_df["revenue"].astype(int)
+                delta_df["change (Rs)"] = delta_df["change (Rs)"].astype(int)
                 delta_df.rename(columns={"month": "Month", "revenue": "Revenue (Rs)"}, inplace=True)
-                delta_df["Revenue (Rs)"] = delta_df["Revenue (Rs)"].apply(lambda v: f"Rs {int(float(v)):,}")
-                delta_df["change (Rs)"] = delta_df["change (Rs)"].apply(lambda v: f"Rs {int(float(v)):,}")
-                delta_df["change (%)"] = delta_df["change (%)"].apply(lambda v: f"{float(v):.1f}%" if pd.notnull(v) else "0.0%")
                 st.dataframe(
                     delta_df[["Month", "Revenue (Rs)", "change (Rs)", "change (%)"]],
+                    column_config={
+                        "Revenue (Rs)": st.column_config.NumberColumn(format="Rs %d"),
+                        "change (Rs)": st.column_config.NumberColumn(format="Rs %d"),
+                        "change (%)": st.column_config.NumberColumn(format="%.1f%%"),
+                    },
                     hide_index=True, use_container_width=True
                 )
 
@@ -150,7 +154,7 @@ def render(engine):
     st.subheader("🏆 Sales Rep Leaderboard (Active Employees Only)")
     display_df = df[[
         "sales_rep_name", "total_orders", "total_revenue", "unique_customers",
-        "total_tours", "total_expenses", "issues_logged"
+        "total_tours", "total_expenses", "revenue_roi", "issues_logged"
     ]].copy()
     display_df.rename(columns={
         "sales_rep_name": "Sales Rep",
@@ -159,13 +163,21 @@ def render(engine):
         "unique_customers": "Partners Served",
         "total_tours": "Tours",
         "total_expenses": "Expenses (Rs)",
+        "revenue_roi": "ROI (x)",
         "issues_logged": "Issues Logged",
     }, inplace=True)
-    display_df["Revenue (Rs)"] = display_df["Revenue (Rs)"].fillna(0).apply(lambda v: f"Rs {int(float(v)):,}")
-    display_df["Expenses (Rs)"] = display_df["Expenses (Rs)"].fillna(0).apply(lambda v: f"Rs {int(float(v)):,}")
+    display_df["Revenue (Rs)"] = display_df["Revenue (Rs)"].fillna(0).astype(int)
+    display_df["Expenses (Rs)"] = display_df["Expenses (Rs)"].fillna(0).astype(int)
+    display_df["ROI (x)"] = display_df["ROI (x)"].replace([np.inf, -np.inf], 9999).fillna(0).astype(int)
 
     st.dataframe(
         display_df,
+        column_config={
+            "Revenue (Rs)": st.column_config.NumberColumn(format="Rs %d"),
+            "Expenses (Rs)": st.column_config.NumberColumn(format="Rs %d"),
+            "ROI (x)": st.column_config.NumberColumn(format="%dx"),
+            "Orders": st.column_config.NumberColumn(format="%d"),
+        },
         hide_index=True, use_container_width=True, height=450
     )
 
@@ -238,14 +250,18 @@ def render(engine):
     st.subheader("📐 Revenue Efficiency Analysis")
     eff_df = df[["sales_rep_name", "total_revenue", "total_orders", "total_expenses",
                  "unique_customers"]].copy()
-    _rs = lambda v: f"Rs {int(float(v)):,}"
-    eff_df["Rev per Order"] = (eff_df["total_revenue"] / eff_df["total_orders"].replace(0, np.nan)).fillna(0).apply(_rs)
-    eff_df["Rev per Partner"] = (eff_df["total_revenue"] / eff_df["unique_customers"].replace(0, np.nan)).fillna(0).apply(_rs)
-    eff_df["Cost per Order"] = (eff_df["total_expenses"] / eff_df["total_orders"].replace(0, np.nan)).fillna(0).apply(_rs)
+    eff_df["Rev per Order"] = (eff_df["total_revenue"] / eff_df["total_orders"].replace(0, np.nan)).fillna(0).round(0).astype(int)
+    eff_df["Rev per Partner"] = (eff_df["total_revenue"] / eff_df["unique_customers"].replace(0, np.nan)).fillna(0).round(0).astype(int)
+    eff_df["Cost per Order"] = (eff_df["total_expenses"] / eff_df["total_orders"].replace(0, np.nan)).fillna(0).round(0).astype(int)
     eff_df = eff_df[["sales_rep_name", "Rev per Order", "Rev per Partner", "Cost per Order"]].rename(
-        columns={"sales_rep_name": "Sales Rep", "Rev per Order": "Avg Revenue/Order", "Rev per Partner": "Avg Revenue/Partner", "Cost per Order": "Avg Cost/Order"}
+        columns={"sales_rep_name": "Sales Rep"}
     )
     st.dataframe(
         eff_df,
+        column_config={
+            "Rev per Order":   st.column_config.NumberColumn("Avg Revenue/Order (Rs)", format="Rs %d"),
+            "Rev per Partner": st.column_config.NumberColumn("Avg Revenue/Partner (Rs)", format="Rs %d"),
+            "Cost per Order":  st.column_config.NumberColumn("Avg Cost/Order (Rs)", format="Rs %d"),
+        },
         hide_index=True, use_container_width=True
     )

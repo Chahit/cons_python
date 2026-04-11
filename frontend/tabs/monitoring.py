@@ -59,8 +59,15 @@ def render(ai):
             .sort_values("Seconds", ascending=False)
             .reset_index(drop=True)
         )
-        tdf["Seconds"] = tdf["Seconds"].apply(lambda v: f"{float(v):.3f}")
-        st.dataframe(tdf.rename(columns={"Seconds":"Latency (s)"}), use_container_width=True, hide_index=True)
+        st.dataframe(
+            tdf,
+            column_config={
+                "Step": "Step",
+                "Seconds": st.column_config.NumberColumn("Latency (s)", format="%.3f"),
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
     else:
         st.info("No timing data captured yet.")
 
@@ -142,26 +149,21 @@ def render(ai):
 
         rows = alert_snapshot.get("rows", []) or []
         if rows:
-            alert_df = pd.DataFrame(rows)
-            for _col, _fn in [
-                ("revenue_drop_pct",  lambda v: f"{float(v):.1f}"),
-                ("churn_probability", lambda v: f"{float(v):.3f}"),
-                ("churn_delta",       lambda v: f"{float(v):.3f}"),
-                ("credit_risk_score", lambda v: f"{float(v):.3f}"),
-                ("credit_delta",      lambda v: f"{float(v):.3f}"),
-                ("active_alerts",     lambda v: str(int(float(v)))),
-            ]:
-                if _col in alert_df.columns:
-                    alert_df[_col] = alert_df[_col].apply(lambda v, f=_fn: f(v) if v==v else "—")
-            for _oc in alert_df.select_dtypes(include=["object"]).columns:
-                alert_df[_oc] = alert_df[_oc].fillna("").astype(str)
-            alert_df = alert_df.rename(columns={
-                "company_name":"Partner","triggered_rules":"Triggered Rules",
-                "revenue_drop_pct":"Revenue Drop %","churn_probability":"Churn",
-                "churn_delta":"Churn Delta","credit_risk_score":"Credit Risk",
-                "credit_delta":"Credit Delta","active_alerts":"Active Alerts",
-            })
-            st.dataframe(alert_df, use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(rows),
+                column_config={
+                    "company_name": "Partner",
+                    "triggered_rules": "Triggered Rules",
+                    "revenue_drop_pct": st.column_config.NumberColumn("Revenue Drop %", format="%.1f"),
+                    "churn_probability": st.column_config.NumberColumn("Churn", format="%.3f"),
+                    "churn_delta": st.column_config.NumberColumn("Churn Delta", format="%.3f"),
+                    "credit_risk_score": st.column_config.NumberColumn("Credit Risk", format="%.3f"),
+                    "credit_delta": st.column_config.NumberColumn("Credit Delta", format="%.3f"),
+                    "active_alerts": st.column_config.NumberColumn("Active Alerts"),
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
         else:
             st.success("No alert rules triggered in current snapshot.")
 
@@ -264,30 +266,21 @@ def render(ai):
 
         kpis = bv.get("cluster_kpis", [])
         if kpis:
-            _rs = lambda v: f"Rs {int(float(v)):,}" if pd.notnull(v) else "Rs 0"
-            kpi_df = pd.DataFrame(kpis)
-            for _mc in ["avg_recent_90_revenue", "total_est_monthly_loss"]:
-                if _mc in kpi_df.columns:
-                    kpi_df[_mc] = kpi_df[_mc].apply(_rs)
-            kpi_disp = kpi_df.copy()
-            for _col, _fn in [
-                ("partners",            lambda v: str(int(float(v)))),
-                ("degrowth_rate",       lambda v: f"{float(v):.2f}"),
-                ("avg_growth_rate_90d", lambda v: f"{float(v):.3f}"),
-                ("avg_churn_probability", lambda v: f"{float(v):.4f}"),
-                ("avg_credit_risk_score", lambda v: f"{float(v):.4f}"),
-            ]:
-                if _col in kpi_disp.columns:
-                    kpi_disp[_col] = kpi_disp[_col].apply(lambda v, f=_fn: f(v) if v==v else "—")
-            for _oc in kpi_disp.select_dtypes(include=["object"]).columns:
-                kpi_disp[_oc] = kpi_disp[_oc].fillna("").astype(str)
-            kpi_disp = kpi_disp.rename(columns={
-                "cluster_label":"Cluster","partners":"Partners","degrowth_rate":"Degrowth %",
-                "avg_recent_90_revenue":"Avg Rev 90d","avg_growth_rate_90d":"Avg Growth 90d",
-                "avg_churn_probability":"Avg Churn","avg_credit_risk_score":"Avg Credit",
-                "total_est_monthly_loss":"Total Est Monthly Loss",
-            })
-            st.dataframe(kpi_disp, use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(kpis),
+                column_config={
+                    "cluster_label": "Cluster",
+                    "partners": st.column_config.NumberColumn("Partners"),
+                    "degrowth_rate": st.column_config.NumberColumn("Degrowth %", format="%.2f"),
+                    "avg_recent_90_revenue": st.column_config.NumberColumn("Avg Rev 90d", format="Rs %d"),
+                    "avg_growth_rate_90d": st.column_config.NumberColumn("Avg Growth 90d", format="%.3f"),
+                    "avg_churn_probability": st.column_config.NumberColumn("Avg Churn", format="%.4f"),
+                    "avg_credit_risk_score": st.column_config.NumberColumn("Avg Credit", format="%.4f"),
+                    "total_est_monthly_loss": st.column_config.NumberColumn("Total Est Monthly Loss", format="Rs %d"),
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
 
     st.markdown("---")
     st.subheader("Data Quality")

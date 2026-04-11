@@ -1,0 +1,55 @@
+161:         f"border-radius:20px;background:rgba(255,255,255,0.06);"
+162:         f"color:{fresh_color};border:1px solid {fresh_color}55;'>"
+163:         f"{fresh_emoji} {fresh_label} · Data as of {data_date_str}</span>"
+164:         f"</span></div>",
+165:         unsafe_allow_html=True,
+166:     )
+167: 
+168:     # ── Churn Risk Intelligence v2 ──────────────────────────────────────────
+169:     churn_data = report.get("churn_reasons", {})
+170:     if isinstance(churn_data, list):
+171:         churn_signals = churn_data
+172:         composite_score = 0; risk_level = "Unknown"; risk_label = ""
+173:         score_breakdown = {}; top_signal = churn_signals[0] if churn_signals else None
+174:         outreach_script = ""; peer_ctx = {}; rec_label = "Rs0"
+175:     else:
+176:         churn_signals   = churn_data.get("signals", [])
+177:         composite_score = int(churn_data.get("composite_score", 0))
+178:         risk_level      = churn_data.get("risk_level", "Low")
+179:         risk_label      = churn_data.get("risk_label", "")
+180:         score_breakdown = churn_data.get("score_breakdown", {})
+181:         top_signal      = churn_data.get("top_signal")
+182:         outreach_script = churn_data.get("outreach_script", "")
+183:         peer_ctx        = churn_data.get("peer_context", {}) or {}
+184:         rec_label       = churn_data.get("recovery_label", "Rs0")
+185: 
+186:     _seg = str(facts.get("health_segment", "Healthy"))
+187:     if churn_signals and _seg in ("At Risk", "Critical"):
+188:         _sev_c = {"critical": "#ef4444", "high": "#f59e0b", "medium": "#6366f1"}
+189:         _rl_color = (
+190:             "#ef4444" if risk_level == "Critical" else
+191:             "#f59e0b" if risk_level == "High" else
+192:             "#6366f1" if risk_level == "Medium" else "#22c55e"
+193:         )
+194:         _pct = max(0, min(100, composite_score))
+195:         _bar = (
+196:             f"<div style=\'background:#1e2433;border-radius:6px;height:10px;"
+197:             f"margin:8px 0 4px;overflow:hidden;\'>"
+198:             f"<div style=\'width:{_pct}%;height:100%;border-radius:6px;"
+199:             f"background:linear-gradient(90deg,{_rl_color}88,{_rl_color});\'></div></div>"
+200:         )
+201:         _sub = ""
+202:         for _cn, _cv in score_breakdown.items():
+203:             _sp = int(min(100, _cv / 0.3))
+204:             _sub += (
+205:                 f"<div style=\'display:flex;align-items:center;gap:6px;margin-bottom:3px;\'>"
+206:                 f"<div style=\'width:85px;font-size:11px;color:#94a3b8;text-align:right;\'>{_cn}</div>"
+207:                 f"<div style=\'flex:1;background:#1e2433;border-radius:4px;height:6px;\'>"
+208:                 f"<div style=\'width:{_sp}%;background:{_rl_color};border-radius:4px;height:6px;\'></div></div>"
+209:                 f"<div style=\'font-size:11px;color:{_rl_color};width:22px;\'>{int(_cv)}</div></div>"
+210:             )
+211:         st.markdown(
+212:             f"<div style=\'background:#0f1420;border:1px solid {_rl_color}55;"
+213:             f"border-radius:12px;padding:20px;margin-bottom:18px;\'>"
+214:             f"<div style=\'display:flex;align-items:flex-start;justify-content:space-between;"
+215:             f"flex-wrap:wrap;gap:12px;margin-bottom:14px;\'>"

@@ -219,6 +219,14 @@ class AssociationsMixin:
                     "SELECT * FROM view_product_associations ORDER BY times_bought_together DESC LIMIT 1000",
                     self.engine,
                 )
+                # Normalize: view exposes item_1/item_2, code expects product_a/product_b
+                _rmap = {}
+                if "item_1" in df.columns and "product_a" not in df.columns:
+                    _rmap["item_1"] = "product_a"
+                if "item_2" in df.columns and "product_b" not in df.columns:
+                    _rmap["item_2"] = "product_b"
+                if _rmap:
+                    df = df.rename(columns=_rmap)
             except Exception:
                 return pd.DataFrame(
                     columns=[
@@ -471,67 +479,8 @@ class AssociationsMixin:
         except Exception:
             return pd.DataFrame()
 
-    def _compute_adaptive_min_support(self, baskets_df: "pd.DataFrame") -> float:
-        """
-        Compute an adaptive min_support threshold based on actual basket sparsity.
-
-        WHY: A static 2% support threshold is too aggressive for sparse B2B datasets
-        where each partner buys only a few product categories per month. This method
-        scales the threshold down automatically when the data is sparse.
-
-        Sparsity = actual product-pair co-occurrence count / maximum possible pairs.
-        - Very sparse (< 0.1): set min_support = max(0.005, 2/n_baskets)
-          → At minimum, a pair must appear in at least 2 baskets.
-        - Moderate (0.1 - 0.3): min_support = 0.01
-        - Dense (> 0.3): min_support = 0.02 (standard default)
-        """
-        if baskets_df.empty:
-            return 0.02
-
-        try:
-            n_baskets = baskets_df["basket_id"].nunique()
-            n_products = baskets_df["product_name"].nunique()
-
-            if n_baskets < 10 or n_products < 2:
-                return 0.02
-
-            # Count actual co-occurring product pairs per basket
-            basket_groups = baskets_df.groupby("basket_id")["product_name"].apply(set)
-            actual_pairs = 0
-            for prods in basket_groups:
-                n = len(prods)
-                actual_pairs += n * (n - 1) // 2
-
-            max_possible_pairs = n_baskets * (n_products * (n_products - 1) // 2)
-            sparsity = actual_pairs / max(max_possible_pairs, 1)
-
-            if sparsity < 0.1:
-                # Very sparse: require at least 2 co-occurrences
-                adaptive = max(0.005, 2.0 / n_baskets)
-            elif sparsity < 0.3:
-                # Moderate: lower than default but not too aggressive
-                adaptive = 0.01
-            else:
-                # Relatively dense: use standard default
-                adaptive = 0.02
-
-            print(
-                f"[FPGrowth] Sparsity={sparsity:.4f}, n_baskets={n_baskets}, "
-                f"n_products={n_products} → adaptive min_support={adaptive:.4f}"
-            )
-            return float(adaptive)
-
-        except Exception as exc:
-            print(f"[FPGrowth] Adaptive support computation failed ({exc}), using 0.02")
-            return 0.02
-
-    def mine_fpgrowth_rules(self, min_support=None, min_confidence=0.15, min_lift=1.0):
-        """
-        Mine association rules using FP-Growth with dynamic thresholds.
-
-        When min_support is not explicitly provided, computes an adaptive threshold
-        based on actual basket sparsity (see _compute_adaptive_min_support).
-        """
+    def mine_fpgrowth_rules(self, min_support=0.02, min_confidence=0.15, min_lift=1.0):
+        """Mine association rules using FP-Growth with dynamic thresholds."""
         try:
             fp_mod = importlib.import_module("mlxtend.frequent_patterns")
             pp_mod = importlib.import_module("mlxtend.preprocessing")
@@ -556,12 +505,6 @@ class AssociationsMixin:
         baskets = baskets_df.groupby("basket_id")["product_name"].apply(list).tolist()
         if len(baskets) < 10:
             return pd.DataFrame(), {"status": "failed", "reason": "Insufficient baskets"}
-
-        # Compute adaptive min_support if not explicitly provided
-        if min_support is None:
-            min_support = self._compute_adaptive_min_support(baskets_df)
-        else:
-            min_support = float(min_support)
 
         te = TransactionEncoder()
         te_array = te.fit(baskets).transform(baskets)

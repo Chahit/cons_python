@@ -343,22 +343,10 @@ class ClusteringMixin:
         if subset_df.empty:
             return pd.DataFrame(), pd.DataFrame(), pd.Series(dtype=str)
 
-        # Resolve spend column — name varies by load path
-        _spend_col = next(
-            (c for c in ["total_spend", "total_revenue", "net_amt"] if c in subset_df.columns),
-            None,
-        )
-        if _spend_col is None:
-            _num_cols = subset_df.select_dtypes(include="number").columns.tolist()
-            _spend_col = _num_cols[0] if _num_cols else None
-        if _spend_col is None or "group_name" not in subset_df.columns:
-            return pd.DataFrame(), pd.DataFrame(), pd.Series(dtype=str)
-
         pivot = subset_df.pivot_table(
             index="company_name",
             columns="group_name",
-            values=_spend_col,
-            aggfunc="sum",
+            values="total_spend",
             fill_value=0.0,
         )
         if pivot.empty:
@@ -369,20 +357,13 @@ class ClusteringMixin:
         if not self.strict_view_only:
             for d in windows:
                 dfw = self._load_temporal_group_spend(d)
-                if dfw is not None and not dfw.empty and "group_name" in dfw.columns:
-                    _w_col = next(
-                        (c for c in ["total_spend", "total_revenue", "net_amt"] if c in dfw.columns),
-                        dfw.select_dtypes(include="number").columns[0]
-                        if not dfw.select_dtypes(include="number").empty else None,
+                if dfw is not None and not dfw.empty:
+                    windows[d] = dfw.pivot_table(
+                        index="company_name",
+                        columns="group_name",
+                        values="total_spend",
+                        fill_value=0.0,
                     )
-                    if _w_col:
-                        windows[d] = dfw.pivot_table(
-                            index="company_name",
-                            columns="group_name",
-                            values=_w_col,
-                            aggfunc="sum",
-                            fill_value=0.0,
-                        )
 
         base_cols = set(pivot.columns.tolist())
         for d, w in windows.items():
@@ -423,16 +404,13 @@ class ClusteringMixin:
         ag_365 = (scale_base > 0).sum(axis=1).astype(float)
         scale["scale::active_group_momentum"] = ag_90 - ag_365
 
-        if "state" in subset_df.columns:
-            state_map = (
-                subset_df[["company_name", "state"]]
-                .drop_duplicates("company_name")
-                .set_index("company_name")["state"]
-                .reindex(pivot.index)
-                .fillna("Unknown")
-            )
-        else:
-            state_map = pd.Series("Unknown", index=pivot.index, name="state")
+        state_map = (
+            subset_df[["company_name", "state"]]
+            .drop_duplicates("company_name")
+            .set_index("company_name")["state"]
+            .reindex(pivot.index)
+            .fillna("Unknown")
+        )
 
         # --- RFM Features ---
         rfm_features = pd.DataFrame(index=pivot.index)
@@ -493,120 +471,15 @@ class ClusteringMixin:
         except Exception:
             pass
 
-        raw_features = pd.concat(
+        features = pd.concat(
             [mix_rw, scale, rfm_features, velocity_features,
              entropy_features, season_features, network_features],
             axis=1,
         ).fillna(0.0)
-        raw_features, fq = self._feature_quality_guardrails(raw_features)
-        drift = self._compute_feature_drift(raw_features)
+        features, fq = self._feature_quality_guardrails(features)
+        drift = self._compute_feature_drift(features)
         self._last_cluster_feature_report = {"quality": fq, "drift": drift}
-
-        # ── Group-weighted PCA + UMAP dimensionality reduction ────────────────
-        features = self._compress_features_weighted_pca_umap(raw_features)
         return features, pivot, state_map
-
-    def _compress_features_weighted_pca_umap(
-        self, features: pd.DataFrame, umap_dims: int = 15
-    ) -> pd.DataFrame:
-        """
-        Step 1 – Group-weighted PCA:
-            Each feature namespace (mix, scale, rfm, vel, div, season, net)
-            is PCA-compressed independently then scaled by its business priority weight.
-            Weights: mix=40 %, rfm=30 %, velocity=20 %, rest share 10 %.
-
-        Step 2 – UMAP:
-            Concatenated weighted PCA output is reduced to `umap_dims` dimensions
-            to defeat the curse of dimensionality (especially with <200 partners
-            and 30-50 raw features).
-        """
-        from sklearn.decomposition import PCA
-        from sklearn.preprocessing import RobustScaler as _RS
-
-        # namespace prefix → business priority weight
-        GROUP_WEIGHTS = {
-            "mix":    0.40,
-            "rfm":    0.30,
-            "vel":    0.20,
-            "scale":  0.04,
-            "div":    0.02,
-            "season": 0.02,
-            "net":    0.02,
-        }
-
-        n_samples = len(features)
-        compressed_parts = []
-
-        for prefix, weight in GROUP_WEIGHTS.items():
-            cols = [c for c in features.columns if c.startswith(f"{prefix}::")]
-            if not cols:
-                continue
-            sub = features[cols].values.astype(np.float64)
-            n_components = max(1, min(len(cols), max(1, n_samples // 6), 8))
-            try:
-                pca = PCA(n_components=n_components, random_state=42)
-                compressed = pca.fit_transform(sub)
-            except Exception:
-                compressed = sub[:, :n_components]
-            compressed = compressed * weight
-            compressed_parts.append(compressed)
-
-        if not compressed_parts:
-            return features
-
-        X_pca = np.hstack(compressed_parts)
-
-        # UMAP reduction (graceful fallback if umap-learn not installed)
-        target_dim = min(umap_dims, X_pca.shape[1], n_samples - 2)
-        if target_dim >= X_pca.shape[1]:
-            # Already small enough — skip UMAP
-            result = pd.DataFrame(X_pca, index=features.index,
-                                  columns=[f"pca_{i}" for i in range(X_pca.shape[1])])
-            return result
-
-        try:
-            import umap
-            # Adaptive n_neighbors: sqrt(n) gives good local/global balance.
-            # Clamped: min 5 (too low = noisy), max 30 (too high = global structure lost).
-            # WHY: default formula n_samples//5 undershoots for large datasets (200+ partners).
-            n_neighbors = max(5, min(30, int(np.sqrt(n_samples))))
-
-            # Adaptive min_dist based on dataset size.
-            # WHY: small datasets need spread-out embeddings (0.1) to avoid over-compression;
-            # large datasets need tighter clustering (0.01) to separate dense groups.
-            if n_samples < 50:
-                min_dist = 0.10   # spread out — small datasets compress too much
-            elif n_samples <= 200:
-                min_dist = 0.05   # balanced — typical size
-            else:
-                min_dist = 0.01   # tighter — large datasets have denser structure
-
-            reducer = umap.UMAP(
-                n_components=target_dim,
-                n_neighbors=n_neighbors,
-                min_dist=min_dist,
-                metric="euclidean",
-                random_state=42,
-                low_memory=True,
-            )
-            X_umap = reducer.fit_transform(X_pca)
-            result = pd.DataFrame(
-                X_umap, index=features.index,
-                columns=[f"umap_{i}" for i in range(target_dim)]
-            )
-            print(f"[Clustering] PCA→UMAP: {len(features.columns)} raw → {X_pca.shape[1]} PCA → {target_dim} UMAP dims "
-                  f"(n_neighbors={n_neighbors}, min_dist={min_dist})")
-        except ImportError:
-            # umap-learn not installed — use PCA output directly
-            result = pd.DataFrame(X_pca, index=features.index,
-                                  columns=[f"pca_{i}" for i in range(X_pca.shape[1])])
-            print(f"[Clustering] umap-learn not installed — using {X_pca.shape[1]} weighted-PCA dims (install with: pip install umap-learn)")
-        except Exception as exc:
-            result = pd.DataFrame(X_pca, index=features.index,
-                                  columns=[f"pca_{i}" for i in range(X_pca.shape[1])])
-            print(f"[Clustering] UMAP failed ({exc}) — using weighted-PCA dims")
-
-        return result
 
     @staticmethod
     def _compute_quality_scores(X, labels):
@@ -871,21 +744,25 @@ class ClusteringMixin:
     @staticmethod
     def _build_consensus_matrix(label_sets, n):
         """
-        Vectorized consensus matrix — replaces O(n²) nested loop.
-        C[i,j] = fraction of clustering runs where partners i and j share a cluster.
-        Outlier labels (-1) are excluded. Uses np.equal.outer for 100× speedup.
+        Build a co-association consensus matrix from multiple clustering runs.
+        C[i,j] = fraction of runs where partners i and j share a cluster.
+        Outlier labels (-1) are excluded from co-assignment.
         """
-        C = np.zeros((n, n), dtype=np.float32)
-        count = np.zeros((n, n), dtype=np.float32)
+        C = np.zeros((n, n), dtype=float)
+        count = np.zeros((n, n), dtype=float)
         for labels in label_sets:
-            labels = np.asarray(labels, dtype=np.int32)
-            valid = labels != -1
-            # Boolean participation mask: outer AND of valid flags
-            both_valid = np.outer(valid, valid)          # (n, n) bool
-            # Boolean co-assignment: i and j share the same label
-            same_cluster = np.equal.outer(labels, labels)  # (n, n) bool
-            count += both_valid.astype(np.float32)
-            C     += (both_valid & same_cluster).astype(np.float32)
+            for i in range(n):
+                if labels[i] == -1:
+                    continue
+                for j in range(i, n):
+                    if labels[j] == -1:
+                        continue
+                    count[i, j] += 1
+                    count[j, i] += 1
+                    if labels[i] == labels[j]:
+                        C[i, j] += 1
+                        C[j, i] += 1
+        # Normalize: fraction of times i,j were together when both were non-outliers
         with np.errstate(divide="ignore", invalid="ignore"):
             C = np.where(count > 0, C / count, 0.0)
         np.fill_diagonal(C, 1.0)
@@ -1061,51 +938,12 @@ class ClusteringMixin:
         label_sets = []
         algo_reports = []
 
-        # Algorithm 1: KMeans at best_k — warm-started from HDBSCAN centroids when
-        # available, otherwise falls back to k-means++ random init.
-        hdbscan_centroids = None
-        if n >= 8:
-            try:
-                _mcs = max(3, int(round(0.015 * n)))
-                _ms  = max(2, _mcs - 1)
-                _hdb_pre = HDBSCAN(
-                    min_cluster_size=_mcs, min_samples=_ms,
-                    metric="euclidean", cluster_selection_method="leaf", copy=True,
-                )
-                _y_pre = _hdb_pre.fit_predict(X).astype(int)
-                _hdb_labels = _y_pre[_y_pre != -1]
-                _hdb_X      = X[_y_pre != -1]
-                _unique_hdb = np.unique(_hdb_labels)
-                if len(_unique_hdb) >= 2:
-                    # Build centroids for the HDBSCAN clusters found
-                    _centroids = np.vstack([
-                        _hdb_X[_hdb_labels == c].mean(axis=0) for c in _unique_hdb
-                    ])
-                    # If HDBSCAN found a different K than best_k, subsample / pad
-                    if len(_centroids) >= best_k:
-                        hdbscan_centroids = _centroids[:best_k]
-                    else:
-                        # Pad with KMeans++ centroids for remaining slots
-                        from sklearn.cluster import _kmeans as _km_mod
-                        hdbscan_centroids = None  # let k-means++ handle it
-            except Exception:
-                hdbscan_centroids = None
-
+        # Algorithm 1: KMeans at best_k (guaranteed to produce exactly best_k clusters)
         try:
-            if hdbscan_centroids is not None:
-                km = KMeans(
-                    n_clusters=best_k, init=hdbscan_centroids,
-                    n_init=1, random_state=int(random_state),
-                )
-                algo_reports.append({"algo": "KMeans", "k": best_k, "init": "hdbscan_centroids", "status": "ok"})
-            else:
-                km = KMeans(
-                    n_clusters=best_k, init="k-means++",
-                    n_init=15, random_state=int(random_state),
-                )
-                algo_reports.append({"algo": "KMeans", "k": best_k, "init": "k-means++", "status": "ok"})
+            km = KMeans(n_clusters=best_k, random_state=int(random_state), n_init=15)
             y_km = km.fit_predict(X).astype(int)
             label_sets.append(y_km)
+            algo_reports.append({"algo": "KMeans", "k": best_k, "status": "ok"})
         except Exception as e:
             algo_reports.append({"algo": "KMeans", "status": "failed", "error": str(e)})
 
@@ -1231,15 +1069,8 @@ class ClusteringMixin:
         if len(common) < 3:
             return {}
 
-        # Ensure no duplicate index labels before reindex
-        prev_labels = prev_labels[~prev_labels.index.duplicated(keep="last")]
-        new_labels  = new_labels[~new_labels.index.duplicated(keep="last")]
-        common = prev_labels.index.intersection(new_labels.index)
-        if len(common) < 3:
-            return {}
-
         prev_sub = prev_labels.reindex(common).dropna()
-        new_sub  = new_labels.reindex(common).dropna()
+        new_sub = new_labels.reindex(common).dropna()
         common_clean = prev_sub.index.intersection(new_sub.index)
         if len(common_clean) < 3:
             return {}
@@ -1307,13 +1138,9 @@ class ClusteringMixin:
         prev_labels = prev["cluster_label"].astype(str)
         new_labels = current_matrix["cluster_label"].astype(str)
 
-        # ── Deduplicate: index must be unique for reindex/intersection to work ──
-        prev_labels = prev_labels[~prev_labels.index.duplicated(keep="last")]
-        new_labels  = new_labels[~new_labels.index.duplicated(keep="last")]
-
         # Match clusters via Hungarian algorithm
         mapping = self._match_clusters_hungarian(
-            prev_labels, new_labels, prev_labels.index, new_labels.index
+            prev_labels, new_labels, prev.index, current_matrix.index
         )
         report["cluster_mapping"] = mapping
 
@@ -1425,26 +1252,27 @@ class ClusteringMixin:
         """
         Build a human-readable profile for each cluster based on:
         - Top product categories (spend share)
-        - Scale metrics (avg spend, breadth)
+        - Scale metrics (avg spend per partner, breadth)
         - Partner count
+
+        Spend level (High / Medium / Low) is determined by ranking each cluster's
+        mean partner spend against ALL other clusters using cross-cluster p33/p66
+        thresholds — NOT against intra-cluster quantiles (which was the previous bug).
+
         Returns dict: {cluster_label: profile_string}
         """
         if matrix is None or matrix.empty:
             return {}
 
         meta_cols = {"state", "cluster", "cluster_type", "cluster_label", "strategic_tag"}
-        # Strictly numeric only — matrix can contain date/object cols from view_ml_input
-        product_cols = [
-            c for c in matrix.columns
-            if c not in meta_cols
-            and pd.api.types.is_numeric_dtype(matrix[c])
-        ]
+        product_cols = [c for c in matrix.columns if c not in meta_cols]
         if not product_cols:
             return {}
 
-        profiles = {}
         cluster_labels = matrix["cluster_label"].unique()
 
+        # ── PASS 1: Collect raw per-cluster data ────────────────────────
+        raw = {}
         for label in cluster_labels:
             label_str = str(label)
             if "Outlier" in label_str:
@@ -1457,28 +1285,20 @@ class ClusteringMixin:
 
             cluster_type = str(members["cluster_type"].iloc[0])
 
-            # Category spend analysis
+            # Mean spend per feature across cluster members
             spend = members[product_cols].mean().sort_values(ascending=False)
             total_mean_spend = float(spend.sum())
             if total_mean_spend <= 0:
                 continue
 
-            # Top categories with share
+            # Top categories with spend share > 2%
             top_cats = []
             for cat, val in spend.head(5).items():
-                share = (float(val) / total_mean_spend * 100) if total_mean_spend > 0 else 0
-                if share > 2:  # Only include meaningful categories
+                share = float(val) / total_mean_spend * 100
+                if share > 2.0:
                     top_cats.append(f"{cat} ({share:.0f}%)")
 
-            # Scale classification
-            if total_mean_spend > spend.quantile(0.75).sum() if len(spend) > 0 else 0:
-                spend_level = "High-spend"
-            elif total_mean_spend > spend.quantile(0.25).sum() if len(spend) > 0 else 0:
-                spend_level = "Medium-spend"
-            else:
-                spend_level = "Low-spend"
-
-            # Portfolio breadth
+            # Portfolio breadth: fraction of groups bought by >30% of cluster
             active_cats = int((members[product_cols] > 0).mean(axis=0).gt(0.3).sum())
             if active_cats >= 6:
                 breadth = "diversified portfolio"
@@ -1487,7 +1307,7 @@ class ClusteringMixin:
             else:
                 breadth = "focused/narrow portfolio"
 
-            # Concentration
+            # HHI concentration (per-feature comparison, not total sum)
             spend_shares = spend / total_mean_spend
             hhi = float((spend_shares ** 2).sum())
             if hhi > 0.5:
@@ -1497,9 +1317,41 @@ class ClusteringMixin:
             else:
                 concentration = "well-distributed across categories"
 
+            raw[label_str] = {
+                "cluster_type": cluster_type,
+                "n_partners": n_partners,
+                "total_mean_spend": total_mean_spend,
+                "top_cats": top_cats,
+                "breadth": breadth,
+                "concentration": concentration,
+            }
+
+        if not raw:
+            return {}
+
+        # ── PASS 2: Cross-cluster percentile thresholds for spend level ──
+        all_spends = np.array([v["total_mean_spend"] for v in raw.values()])
+        if len(all_spends) >= 3:
+            p66 = float(np.percentile(all_spends, 66))
+            p33 = float(np.percentile(all_spends, 33))
+        else:
+            p66 = float(np.max(all_spends))
+            p33 = float(np.median(all_spends))
+
+        profiles = {}
+        for label_str, data in raw.items():
+            tms = data["total_mean_spend"]
+            if tms >= p66:
+                spend_level = "High-spend"
+            elif tms >= p33:
+                spend_level = "Medium-spend"
+            else:
+                spend_level = "Low-spend"
+
+            top_cats = data["top_cats"]
             profile = (
-                f"Cluster '{label_str}' ({cluster_type} tier, {n_partners} partners): "
-                f"{spend_level}, {breadth}, {concentration}. "
+                f"Cluster '{label_str}' ({data['cluster_type']} tier, {data['n_partners']} partners): "
+                f"{spend_level}, {data['breadth']}, {data['concentration']}. "
                 f"Top categories: {', '.join(top_cats[:4]) if top_cats else 'varied'}."
             )
             profiles[label_str] = profile
@@ -1508,14 +1360,14 @@ class ClusteringMixin:
 
     def _generate_cluster_labels_llm(self, profiles):
         """
-        Use OpenAI to generate business-meaningful cluster labels from centroid profiles.
+        Use Gemini to generate business-meaningful cluster labels from centroid profiles.
         Returns dict: {old_label: new_label}
         """
         if not profiles:
             return {}
 
-        key = str(getattr(self, "openai_api_key", "") or "").strip()
-        model = str(getattr(self, "openai_model", "gpt-4o")).strip()
+        key = str(getattr(self, "gemini_api_key", "") or "").strip()
+        model = str(getattr(self, "gemini_model", "gemini-2.5-flash")).strip()
         if not key:
             return {}
 
@@ -1534,11 +1386,11 @@ Rules:
 3. Keep the tier prefix (VIP or Growth) but replace the generic number
 4. Do NOT use generic labels like "Cluster A" or "Group 1"
 
-Respond ONLY with a valid JSON object. No explanation, no markdown fences. Example:
-{{
+Respond ONLY with a JSON object mapping original label to new label. Example:
+{{{{
   "VIP-0": "VIP — Premium Multi-Category Leaders",
   "Growth-1": "Growth — Emerging Niche Specialists"
-}}"""
+}}}}"""
 
         try:
             text_out, err = self._call_gemini_recommendation(
@@ -1547,26 +1399,21 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
             if err or not text_out:
                 return {}
 
-            # Extract JSON from response — handle both raw JSON and ```-fenced output
+            # Extract JSON from response
             text_clean = text_out.strip()
-            if "```" in text_clean:
+            if text_clean.startswith("```"):
                 lines = text_clean.split("\n")
                 text_clean = "\n".join(
                     l for l in lines if not l.strip().startswith("```")
-                ).strip()
-            # Find JSON boundaries in case LLM prepended/appended prose
-            start = text_clean.find("{")
-            end   = text_clean.rfind("}") + 1
-            if start != -1 and end > start:
-                text_clean = text_clean[start:end]
+                )
             mapping = json.loads(text_clean)
             if not isinstance(mapping, dict):
                 return {}
 
-            # Validate: labels must be meaningful strings (3– 80 chars)
+            # Validate: all values must be non-empty strings
             result = {}
             for old, new in mapping.items():
-                if isinstance(new, str) and 3 <= len(new.strip()) <= 80:
+                if isinstance(new, str) and len(new.strip()) > 2:
                     result[str(old)] = new.strip()
             return result
         except Exception:
@@ -1574,98 +1421,69 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
 
     def _generate_cluster_labels_heuristic(self, profiles):
         """
-        Generate business-meaningful cluster labels without LLM, using centroid profiles.
-
-        Labels use recognizable business archetypes (Strategic Accounts, Category Champions,
-        Win-Back Targets, etc.) rather than generic descriptors.
-        Fallback when OpenAI API key is not available.
+        Generate descriptive labels without LLM, using centroid features.
+        Fallback when Gemini API key is not available.
         """
         if not profiles:
             return {}
 
-        # Business archetype definitions.
-        # Each archetype is matched by a combination of spend level + breadth + concentration.
-        # Priority order: more specific matches take precedence.
-        ARCHETYPES = [
-            # VIP archetypes
-            ("VIP",    "High-spend",   "diversified",      None,               "Strategic Accounts"),
-            ("VIP",    "High-spend",   None,               "highly concentrated", "Category Champions"),
-            ("VIP",    "High-spend",   "moderate",         None,               "Core Revenue Drivers"),
-            ("VIP",    "High-spend",   "focused",          None,               "Anchor Specialists"),
-            ("VIP",    "Medium-spend", "diversified",      None,               "Emerging Power Buyers"),
-            ("VIP",    "Medium-spend", None,               None,               "Steady Contributors"),
-            ("VIP",    "Low-spend",    None,               None,               "Rising VIPs"),
-            # Growth archetypes
-            ("Growth", None,           None,               None,               None),  # fallthrough
-        ]
-        GROWTH_ARCHETYPES = [
-            ("High-spend",   "diversified",  None,               "High-Growth Partners"),
-            ("High-spend",   None,           "highly concentrated", "Niche Power Players"),
-            ("High-spend",   None,           None,               "High-Volume Accounts"),
-            ("Medium-spend", "diversified",  None,               "Balanced Growth Partners"),
-            ("Medium-spend", "focused",      None,               "Category Growth Specialists"),
-            ("Medium-spend", None,           None,               "Mid-Tier Growing Accounts"),
-            ("Low-spend",    None,           None,               "Win-Back Targets"),
-        ]
-
         result = {}
-        seen_labels = {}   # base_label → first cluster_num that used it
-
+        # Track seen labels to avoid collisions
+        seen_labels = {}
         for label, profile in profiles.items():
             parts = label.split("-", 1)
-            tier = parts[0] if parts else "Cluster"   # "VIP" or "Growth"
+            tier = parts[0] if parts else "Cluster"
             cluster_num = parts[1] if len(parts) > 1 else "0"
 
-            # Extract profile signals
-            is_high   = "High-spend" in profile
-            is_med    = "Medium-spend" in profile
-            is_low    = "Low-spend" in profile
-            is_div    = "diversified" in profile
-            is_mod    = "moderate" in profile
-            is_foc    = "focused" in profile or "narrow" in profile
-            is_conc   = "highly concentrated" in profile
-            is_well   = "well-distributed" in profile
+            # Spend level
+            if "High-spend" in profile:
+                spend_level = "High-Value"
+            elif "Medium-spend" in profile:
+                spend_level = "Mid-Tier"
+            elif "Low-spend" in profile:
+                spend_level = "Emerging"
+            else:
+                spend_level = ""
 
-            spend_level = "High-spend" if is_high else ("Medium-spend" if is_med else "Low-spend")
-            breadth_str = "diversified" if is_div else ("moderate" if is_mod else ("focused" if is_foc else None))
-            conc_str    = "highly concentrated" if is_conc else None
+            # Breadth
+            if "diversified" in profile:
+                breadth = "Diversified"
+            elif "moderate" in profile:
+                breadth = "Balanced"
+            elif "focused" in profile or "narrow" in profile:
+                breadth = "Specialist"
+            else:
+                breadth = ""
 
-            # Match archetype
-            archetype_name = None
+            # Concentration
+            if "highly concentrated" in profile:
+                concentration = "Category-Focused"
+            elif "well-distributed" in profile:
+                concentration = "Multi-Category"
+            else:
+                concentration = ""
 
-            if tier == "VIP":
-                for (t, sp, br, cn, name) in ARCHETYPES:
-                    if t != "VIP":
-                        continue
-                    if sp and sp not in profile:
-                        continue
-                    if br and br not in profile:
-                        continue
-                    if cn and cn not in profile:
-                        continue
-                    archetype_name = name
-                    break
-                if archetype_name is None:
-                    archetype_name = "Key Accounts"
+            # Top category name (e.g. "Lubricants")
+            top_cat = ""
+            if "Top categories:" in profile:
+                cat_section = profile.split("Top categories:")[1].strip().rstrip(".")
+                first_cat = cat_section.split(",")[0].strip()
+                if "(" in first_cat:
+                    top_cat = first_cat.split("(")[0].strip()
 
-            else:  # Growth
-                for (sp, br, cn, name) in GROWTH_ARCHETYPES:
-                    if sp and sp not in profile:
-                        continue
-                    if br and br not in profile:
-                        continue
-                    if cn and cn not in profile:
-                        continue
-                    archetype_name = name
-                    break
-                if archetype_name is None:
-                    archetype_name = "Developing Partners"
+            # Build descriptive base label
+            descriptors = [d for d in [spend_level, breadth or concentration] if d]
+            if top_cat and len(top_cat) < 25:
+                descriptors.append(f"{top_cat}")
 
-            base_label = f"{tier} — {archetype_name}"
+            if descriptors:
+                base_label = f"{tier} — {' · '.join(descriptors[:2])}"
+            else:
+                base_label = f"{tier} — Segment {cluster_num}"
 
             # Deduplicate: if this base_label was already used, append cluster number
             if base_label in seen_labels:
-                new_label = f"{base_label} {cluster_num}"
+                new_label = f"{base_label} #{cluster_num}"
             else:
                 new_label = base_label
                 seen_labels[base_label] = cluster_num
@@ -1686,7 +1504,7 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
         # Try LLM first
         llm_labels = self._generate_cluster_labels_llm(profiles)
         if llm_labels and len(llm_labels) >= len(profiles) * 0.5:
-            method = "openai_llm"
+            method = "gemini_llm"
             label_map = llm_labels
         else:
             # Heuristic fallback
@@ -1694,17 +1512,15 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
             method = "heuristic"
 
         if label_map:
-            # Apply new labels to matrix
-            matrix["cluster_label"] = matrix["cluster_label"].map(
-                lambda x: label_map.get(str(x), x)
-            )
-            # Also update strategic_tag to include new label
-            matrix["strategic_tag"] = matrix.apply(
-                lambda row: f"{label_map.get(str(row.get('cluster_label', '')), row.get('strategic_tag', ''))}"
-                if str(row.get("cluster_label", "")) in label_map
-                else row.get("strategic_tag", ""),
-                axis=1,
-            )
+            # Capture OLD labels BEFORE remapping — required for strategic_tag lookup.
+            # Bug fix: previously cluster_label was remapped first, so the label_map
+            # lookup in strategic_tag always missed (new labels are not keys in label_map).
+            old_labels = matrix["cluster_label"].astype(str).copy()
+            # Remap cluster_label with business-meaningful names
+            matrix["cluster_label"] = old_labels.map(lambda x: label_map.get(x, x))
+            # Update strategic_tag only for clusters that were actually remapped
+            remapped_mask = old_labels.map(lambda x: x in label_map)
+            matrix.loc[remapped_mask, "strategic_tag"] = old_labels[remapped_mask].map(label_map)
 
         return {
             "status": "ok",
@@ -1937,38 +1753,18 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
         if self.df_ml is None:
             self.ensure_core_loaded()
 
-        # ── Choose clustering data source ──────────────────────────────────────
-        # df_recent_group_spend is long-format (company_name × group_name × total_spend)
-        # which _build_cluster_features requires for category-mix features.
-        # df_ml (view_ml_input) is a partner-level summary — no group_name column.
-        _cluster_src = None
-        if (
-            self.df_recent_group_spend is not None
-            and not self.df_recent_group_spend.empty
-            and "group_name" in self.df_recent_group_spend.columns
-        ):
-            _cluster_src = self.df_recent_group_spend
+        # df_recent_group_spend is the long-form table with company_name, group_name,
+        # total_spend and state — the correct source for all group-level clustering ops.
+        # df_ml (from view_ml_input) is a partner-level summary and lacks those columns.
+        gs = self.df_recent_group_spend
+        if gs is None or gs.empty:
+            self.matrix = pd.DataFrame()
+            self.cluster_quality_report = {"status": "empty", "reason": "No group-spend data available for clustering."}
+            return self.matrix
 
-        # Revenue ranking: use cluster_src if available, else df_ml
-        _rank_src = _cluster_src if _cluster_src is not None else self.df_ml
-        _rev_col = next(
-            (c for c in ["total_spend", "total_revenue"] if c in _rank_src.columns),
-            None,
+        partner_totals = (
+            gs.groupby("company_name")["total_spend"].sum().sort_values(ascending=False)
         )
-        if _rev_col:
-            partner_totals = (
-                _rank_src.groupby("company_name")[_rev_col].sum().sort_values(ascending=False)
-            )
-        else:
-            _num = _rank_src.select_dtypes(include="number")
-            partner_totals = (
-                _rank_src[["company_name"]]
-                .join(_num)
-                .groupby("company_name")
-                .sum()
-                .sum(axis=1)
-                .sort_values(ascending=False)
-            )
         n_partners = int(len(partner_totals))
         if n_partners == 0:
             self.matrix = pd.DataFrame()
@@ -2003,49 +1799,26 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
             vip_names = partner_totals.head(forced_vip_n).index
             mass_names = partner_totals.index.difference(vip_names)
 
-        # Use long-format group spend for clustering (has group_name + total_spend)
-        _src = _cluster_src if _cluster_src is not None else self.df_ml
-        df_vip = _src[_src["company_name"].isin(vip_names)]
-        df_mass = _src[_src["company_name"].isin(mass_names)]
+        # Pass the long-form group-spend subsets to _process_segment / _build_cluster_features
+        df_vip = gs[gs["company_name"].isin(vip_names)]
+        df_mass = gs[gs["company_name"].isin(mass_names)]
 
         vip_meta, vip_report = self._process_segment(df_vip, method="kmeans")
         growth_meta, growth_report = self._process_segment(df_mass, method="hdbscan")
         cluster_meta = pd.concat([vip_meta, growth_meta], axis=0)
 
-        # Build matrix from the long-format source (group_name → columns, spend → values)
-        _matrix_src = _cluster_src if _cluster_src is not None else self.df_ml
-        _pivot_val = next(
-            (c for c in ["total_spend", "total_revenue"] if c in _matrix_src.columns),
-            None,
+        # Build the company × product-group spend matrix from the correct source
+        self.matrix = gs.pivot_table(
+            index="company_name",
+            columns="group_name",
+            values="total_spend",
+            fill_value=0,
         )
-        if _pivot_val and "group_name" in _matrix_src.columns:
-            self.matrix = _matrix_src.pivot_table(
-                index="company_name",
-                columns="group_name",
-                values=_pivot_val,
-                aggfunc="sum",
-                fill_value=0,
-            )
-            # Deduplicate matrix index
-            self.matrix = self.matrix[~self.matrix.index.duplicated(keep="last")]
-        else:
-            self.matrix = (
-                _matrix_src.set_index("company_name")
-                if "company_name" in _matrix_src.columns
-                else _matrix_src.copy()
-            )
-        # Attach state — prefer df_ml (joined with master_state) over cluster_src
-        _state_src = self.df_ml if "state" in self.df_ml.columns else _matrix_src
-        if "state" in _state_src.columns and "company_name" in _state_src.columns:
-            self.matrix["state"] = (
-                _state_src[["company_name", "state"]]
-                .drop_duplicates("company_name")
-                .set_index("company_name")["state"]
-                .reindex(self.matrix.index)
-                .fillna("Unknown")
-            )
-        else:
-            self.matrix["state"] = "Unknown"
+        self.matrix["state"] = (
+            gs[["company_name", "state"]]
+            .drop_duplicates("company_name")
+            .set_index("company_name")["state"]
+        )
 
         self.matrix["cluster"] = (
             cluster_meta["cluster"].reindex(self.matrix.index).fillna(-1).astype(int)
@@ -2104,6 +1877,46 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
 
         # Refresh business validation snapshot on each cluster run.
         self.run_cluster_business_validation()
+
+        # ── Merge cluster labels back into df_partner_features ─────────────
+        # self.matrix only contains companies that have recent group-spend data.
+        # df_partner_features has ALL partners (LEFT JOIN on master_party).
+        # We need to propagate cluster info so the Kanban, Partner 360, and
+        # chatbot all see the correct labels for every partner.
+        if (
+            self.df_partner_features is not None
+            and not self.df_partner_features.empty
+            and self.matrix is not None
+            and not self.matrix.empty
+        ):
+            cluster_cols = ["cluster", "cluster_type", "cluster_label", "strategic_tag"]
+            cols_available = [c for c in cluster_cols if c in self.matrix.columns]
+            if cols_available:
+                # Drop stale cluster columns if they exist from a previous run
+                for c in cols_available:
+                    if c in self.df_partner_features.columns:
+                        self.df_partner_features = self.df_partner_features.drop(columns=[c])
+                self.df_partner_features = self.df_partner_features.join(
+                    self.matrix[cols_available], how="left"
+                )
+                # Fill unclustered companies with "Inactive" defaults
+                if "cluster_label" in self.df_partner_features.columns:
+                    self.df_partner_features["cluster_label"] = (
+                        self.df_partner_features["cluster_label"].fillna("Inactive")
+                    )
+                if "cluster_type" in self.df_partner_features.columns:
+                    self.df_partner_features["cluster_type"] = (
+                        self.df_partner_features["cluster_type"].fillna("Inactive")
+                    )
+                if "strategic_tag" in self.df_partner_features.columns:
+                    self.df_partner_features["strategic_tag"] = (
+                        self.df_partner_features["strategic_tag"].fillna("No recent activity")
+                    )
+                if "cluster" in self.df_partner_features.columns:
+                    self.df_partner_features["cluster"] = (
+                        self.df_partner_features["cluster"].fillna(-1).astype(int)
+                    )
+
         return self.matrix
 
     def get_cluster_quality_report(self):
@@ -2502,4 +2315,362 @@ Respond ONLY with a valid JSON object. No explanation, no markdown fences. Examp
             "cluster_info": strategic_tag,
             "alerts": alerts,
             "playbook": playbook,
+            "churn_reasons": self.get_churn_reasons(partner_name),
+        }
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Churn Intelligence Engine v2
+    # ──────────────────────────────────────────────────────────────────────────
+    def get_churn_reasons(self, partner_name):
+        """
+        Returns a rich structured dict explaining churn/decline for a partner.
+
+        Keys:
+          signals              – list of signal dicts (signal, detail, action, severity, priority)
+          composite_score      – int 0-100 overall churn risk score
+          risk_level           – 'Critical' | 'High' | 'Medium' | 'Low'
+          risk_label           – human-readable description of the score band
+          score_breakdown      – dict of score components for a visual breakdown bar
+          top_signal           – the single highest-priority signal dict (or None)
+          outreach_script      – pre-written call/email template for the top signal
+          peer_context         – dict with peer benchmarking stats
+          recovery_potential   – float estimated annual recovery revenue (₹)
+          recovery_label       – formatted ₹ string of recovery_potential
+
+        All signals derived purely from df_partner_features — zero extra DB queries.
+        """
+        if self.df_partner_features is None or self.df_partner_features.empty:
+            return {"signals": [], "composite_score": 0, "risk_level": "Low",
+                    "risk_label": "No data", "score_breakdown": {}, "top_signal": None,
+                    "outreach_script": "", "peer_context": {}, "recovery_potential": 0,
+                    "recovery_label": "₹0"}
+
+        pf = self.df_partner_features
+        try:
+            if partner_name in pf.index:
+                row = pf.loc[partner_name]
+            else:
+                matches = pf.index[
+                    pf.index.astype(str).str.strip().str.casefold()
+                    == str(partner_name).strip().casefold()
+                ]
+                if matches.empty:
+                    return {"signals": [], "composite_score": 0, "risk_level": "Low",
+                            "risk_label": "No data", "score_breakdown": {}, "top_signal": None,
+                            "outreach_script": "", "peer_context": {}, "recovery_potential": 0,
+                            "recovery_label": "₹0"}
+                row = pf.loc[matches[0]]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
+        except Exception:
+            return {"signals": [], "composite_score": 0, "risk_level": "Low",
+                    "risk_label": "No data", "score_breakdown": {}, "top_signal": None,
+                    "outreach_script": "", "peer_context": {}, "recovery_potential": 0,
+                    "recovery_label": "₹0"}
+
+        def _v(col, default=0.0):
+            try:
+                val = row.get(col, default)
+                return float(val) if pd.notnull(val) else float(default)
+            except Exception:
+                return float(default)
+
+        recency        = _v("recency_days")
+        drop_pct       = _v("revenue_drop_pct")
+        recent_rev     = _v("recent_90_revenue")
+        prev_rev       = _v("prev_90_revenue")
+        cat_now        = _v("category_count")
+        cat_prev       = _v("category_count_prev")
+        aov_now        = _v("avg_order_value")
+        aov_prev       = _v("avg_order_value_prev")
+        eng_vel        = _v("engagement_velocity", 1.0)
+        active_months  = _v("active_months")
+        lifetime_rev   = _v("lifetime_revenue")
+        volatility     = _v("revenue_volatility")
+        credit_band    = str(row.get("credit_risk_band", "Unknown") or "Unknown")
+        churn_prob     = _v("churn_probability")
+        state          = str(row.get("state", "Unknown") or "Unknown")
+
+        # ── Build signals ─────────────────────────────────────────────────────
+        signals = []
+
+        # 1. Complete revenue stop
+        if recent_rev == 0 and prev_rev > 0:
+            signals.append({
+                "signal": "🔴 Revenue Stopped",
+                "detail": f"Generated ₹{prev_rev:,.0f} last quarter — ₹0 in the last 90 days.",
+                "action": "Escalate to account manager. Schedule a senior call within 48h to confirm if they've migrated to a competitor.",
+                "severity": "critical", "priority": 1, "score_contribution": 30,
+            })
+
+        # 2. Long purchase silence
+        if recency > 120:
+            signals.append({
+                "signal": "⏰ Extended Purchase Gap",
+                "detail": f"Last transaction {int(recency)} days ago ({int(recency)//30}+ months of silence).",
+                "action": "Send a personalised re-engagement bundle offer based on purchase history. Assign dedicated rep.",
+                "severity": "critical", "priority": 2, "score_contribution": 25,
+            })
+        elif recency > 60:
+            signals.append({
+                "signal": "⏳ Going Silent",
+                "detail": f"No purchase in {int(recency)} days — above their normal cadence.",
+                "action": "Book a check-in call this week. Offer a time-limited incentive.",
+                "severity": "high", "priority": 3, "score_contribution": 12,
+            })
+
+        # 3. Revenue decline
+        if drop_pct > 50:
+            signals.append({
+                "signal": "📉 Revenue Collapse",
+                "detail": f"Revenue fell {drop_pct:.0f}% vs prior 90-day period.",
+                "action": "Investigate competitor encroachment. Consider a site visit + exclusive loyalty pricing.",
+                "severity": "critical", "priority": 2, "score_contribution": 22,
+            })
+        elif drop_pct > 25:
+            signals.append({
+                "signal": "📉 Revenue Declining",
+                "detail": f"{drop_pct:.0f}% revenue drop vs last quarter.",
+                "action": "Offer a loyalty discount or targeted bundle on top-purchased products.",
+                "severity": "high", "priority": 3, "score_contribution": 12,
+            })
+
+        # 4. Category abandonment
+        cat_loss = cat_prev - cat_now
+        if cat_loss >= 2:
+            signals.append({
+                "signal": "🏷️ Category Abandonment",
+                "detail": f"{int(cat_loss)} fewer product categories bought vs last period — competitor may have taken those categories.",
+                "action": "Run a targeted pitch on dropped categories. Highlight pricing advantage vs competition.",
+                "severity": "critical", "priority": 2, "score_contribution": 18,
+            })
+        elif cat_loss == 1:
+            signals.append({
+                "signal": "🏷️ Narrowing Purchase Mix",
+                "detail": "Dropped 1 product category vs prior period.",
+                "action": "Identify the lost category and send a re-introduction with a pricing update or demo.",
+                "severity": "medium", "priority": 5, "score_contribution": 7,
+            })
+
+        # 5. Order size shrinkage
+        if aov_prev > 0 and aov_now < aov_prev * 0.7:
+            aov_drop = (1.0 - aov_now / aov_prev) * 100
+            signals.append({
+                "signal": "💰 Shrinking Orders",
+                "detail": f"Avg order value fell {aov_drop:.0f}% — placing smaller, more cautious orders.",
+                "action": "Introduce volume-based pricing tiers or quantity incentives.",
+                "severity": "high", "priority": 4, "score_contribution": 10,
+            })
+
+        # 6. Engagement frequency
+        if eng_vel < 0.4 and prev_rev > 0:
+            signals.append({
+                "signal": "📊 Frequency Collapse",
+                "detail": "Ordering less than 40% as often as before — major engagement drop.",
+                "action": "Assign a dedicated account manager. Increase touchpoints with market insights.",
+                "severity": "high", "priority": 3, "score_contribution": 12,
+            })
+        elif 0.4 <= eng_vel < 0.7 and prev_rev > 0:
+            signals.append({
+                "signal": "📊 Slowing Frequency",
+                "detail": "Ordering at roughly half their usual rate.",
+                "action": "Ask about pricing, delivery, or quality concerns. Offer a value-add check-in.",
+                "severity": "medium", "priority": 5, "score_contribution": 6,
+            })
+
+        # 7. New buyer dropout
+        if active_months <= 2 and recent_rev == 0 and prev_rev > 0:
+            signals.append({
+                "signal": "🌱 New Buyer Dropout",
+                "detail": f"Only {int(active_months)} active month(s) — never became a repeat buyer.",
+                "action": "Immediate onboarding follow-up: identify blockers. Offer a new-customer bundle.",
+                "severity": "high", "priority": 3, "score_contribution": 10,
+            })
+
+        # 8. High volatility + declining (unstable and trending down)
+        if volatility > 0 and drop_pct > 15:
+            avg_monthly_hist = lifetime_rev / max(active_months, 1)
+            if avg_monthly_hist > 0 and (recent_rev / 3) < avg_monthly_hist * 0.5:
+                signals.append({
+                    "signal": "〜 Revenue Instability",
+                    "detail": "High volatility in purchase patterns combined with a recent declining trend.",
+                    "action": "Understand purchase triggers. Offer a subscription/standing order to smooth purchasing.",
+                    "severity": "medium", "priority": 5, "score_contribution": 6,
+                })
+
+        # 9. Financial stress (credit deterioration + revenue drop)
+        if credit_band in ("High", "Critical") and drop_pct > 10:
+            signals.append({
+                "signal": "💳 Financial Stress",
+                "detail": f"Credit risk is '{credit_band}' AND revenue is declining — partner may be under financial pressure.",
+                "action": "Talk to finance team about credit terms. Offer flexible payment schedules to ease the burden.",
+                "severity": "high", "priority": 3, "score_contribution": 8,
+            })
+
+        signals.sort(key=lambda r: r.get("priority", 99))
+        signals = signals[:6]
+
+        # ── Composite Risk Score 0–100 ────────────────────────────────────────
+        # Recency component (0–30)
+        rec_score = (
+            30 if recency > 180 else
+            24 if recency > 120 else
+            14 if recency > 60  else
+            5  if recency > 30  else 0
+        )
+        # Revenue stop/drop (0–30)
+        if recent_rev == 0 and prev_rev > 0:
+            rev_score = 30
+        elif drop_pct > 60:
+            rev_score = 24
+        elif drop_pct > 40:
+            rev_score = 18
+        elif drop_pct > 20:
+            rev_score = 10
+        else:
+            rev_score = 0
+        # Category (0–20)
+        cat_score = min(20, int(cat_loss) * 8) if cat_loss > 0 else 0
+        # Engagement (0–15)
+        eng_score = (
+            15 if eng_vel < 0.2 else
+            10 if eng_vel < 0.4 else
+            5  if eng_vel < 0.7 else 0
+        ) if prev_rev > 0 else 0
+        # Financial stress (0–5)
+        fin_score = 5 if credit_band in ("High", "Critical") and drop_pct > 10 else 0
+
+        composite_score = min(100, rec_score + rev_score + cat_score + eng_score + fin_score)
+        score_breakdown = {
+            "Recency":    rec_score,
+            "Revenue":    rev_score,
+            "Categories": cat_score,
+            "Engagement": eng_score,
+            "Credit":     fin_score,
+        }
+
+        if composite_score >= 70:
+            risk_level = "Critical"
+            risk_label = "Immediate escalation required"
+        elif composite_score >= 45:
+            risk_level = "High"
+            risk_label = "Active intervention needed"
+        elif composite_score >= 20:
+            risk_level = "Medium"
+            risk_label = "Monitor and engage proactively"
+        else:
+            risk_level = "Low"
+            risk_label = "Healthy — routine check-in recommended"
+
+        # ── Recovery Potential ────────────────────────────────────────────────
+        avg_monthly = lifetime_rev / max(active_months, 1)
+        recovery_potential = avg_monthly * 12
+        def _fmt_inr(v):
+            try:
+                v = float(v)
+                if v >= 1_00_00_000: return f"₹{v/1_00_00_000:.1f}Cr"
+                if v >= 1_00_000:    return f"₹{v/1_00_000:.1f}L"
+                if v >= 1_000:       return f"₹{v/1_000:.0f}K"
+                return f"₹{v:.0f}"
+            except Exception:
+                return "₹0"
+        recovery_label = _fmt_inr(recovery_potential)
+
+        # ── Peer Benchmarking ─────────────────────────────────────────────────
+        peer_context = {}
+        try:
+            if (
+                self.matrix is not None
+                and not self.matrix.empty
+                and partner_name in self.matrix.index
+            ):
+                cluster_id = int(self.matrix.loc[partner_name, "cluster"])
+                cluster_label_str = str(self.matrix.loc[partner_name, "cluster_label"])
+                if cluster_id != -1:
+                    members = self.matrix[self.matrix["cluster"] == cluster_id].index.tolist()
+                    peers = [n for n in members if n != partner_name and n in pf.index]
+                    if peers:
+                        peer_df = pf.loc[peers]
+                        peer_avg_rev    = float(peer_df["recent_90_revenue"].mean())
+                        peer_avg_rec    = float(peer_df["recency_days"].mean())
+                        peer_avg_drop   = float(peer_df["revenue_drop_pct"].mean())
+                        peer_avg_cats   = float(peer_df["category_count"].mean())
+                        pct_vs_peer     = ((recent_rev - peer_avg_rev) / max(peer_avg_rev, 1)) * 100
+                        peer_context = {
+                            "cluster_label":    cluster_label_str,
+                            "peer_count":       len(peers),
+                            "peer_avg_rev_90d": peer_avg_rev,
+                            "peer_avg_rev_fmt": _fmt_inr(peer_avg_rev),
+                            "this_rev_fmt":     _fmt_inr(recent_rev),
+                            "pct_vs_peer":      round(pct_vs_peer, 1),
+                            "peer_avg_recency":  round(peer_avg_rec, 0),
+                            "peer_avg_drop":    round(peer_avg_drop, 1),
+                            "peer_avg_cats":    round(peer_avg_cats, 1),
+                            "this_cats":        int(cat_now),
+                        }
+        except Exception:
+            pass
+
+        # ── Outreach Script ───────────────────────────────────────────────────
+        top_signal = signals[0] if signals else None
+        scripts = {
+            "🔴 Revenue Stopped": (
+                f"Hi [Contact Name],\n\n"
+                f"I hope you're well. I noticed we haven't processed any orders from {partner_name} over the last few months and wanted to personally reach out.\n\n"
+                f"Has anything changed on your end? I'd love to schedule a quick 15-minute call to understand how we can continue supporting your business — and whether there's anything we can do better.\n\n"
+                f"Would [Day] at [Time] work for a chat?\n\n"
+                f"Best regards,\n[Your Name]"
+            ),
+            "⏰ Extended Purchase Gap": (
+                f"Hi [Contact Name],\n\n"
+                f"It's been a while since we last heard from {partner_name} and I wanted to check in.\n\n"
+                f"I know business cycles can shift — if you're evaluating options or if there's anything we can improve, I'd genuinely appreciate the feedback.\n\n"
+                f"We also have some new products and pricing offers that might be a good fit. Happy to walk you through them at your convenience.\n\n"
+                f"Best regards,\n[Your Name]"
+            ),
+            "📉 Revenue Collapse": (
+                f"Hi [Contact Name],\n\n"
+                f"I've been reviewing our partnership with {partner_name} and noticed your order volumes have shifted significantly this quarter.\n\n"
+                f"I'd like to understand what's driving this — whether it's budget, timing, product fit, or something we can solve together.\n\n"
+                f"I'm also happy to put together a special pricing package based on your historical volumes. Can we find 20 minutes this week?\n\n"
+                f"Best regards,\n[Your Name]"
+            ),
+            "📉 Revenue Declining": (
+                f"Hi [Contact Name],\n\n"
+                f"I wanted to reach out as I noticed {partner_name}'s order activity has been lower than usual recently.\n\n"
+                f"I'd love to understand if there's a gap we can close — whether through pricing, product range, or service. We value your business and want to make sure we're the right fit.\n\n"
+                f"Would you be open to a brief call this week?\n\n"
+                f"Best regards,\n[Your Name]"
+            ),
+            "🏷️ Category Abandonment": (
+                f"Hi [Contact Name],\n\n"
+                f"I've been looking at {partner_name}'s purchasing patterns and noticed that some product categories you used to buy regularly haven't appeared in recent orders.\n\n"
+                f"I wanted to check if there's a specific reason — we may have new options, better pricing, or solutions that might be a better fit now.\n\n"
+                f"Happy to put together a product snapshot relevant to your business. Would a quick call work?\n\n"
+                f"Best regards,\n[Your Name]"
+            ),
+        }
+        # Fallback generic script
+        generic_script = (
+            f"Hi [Contact Name],\n\n"
+            f"I'm reaching out to check in on our partnership with {partner_name}.\n\n"
+            f"We value your business and want to make sure we're meeting your expectations. If there's anything we can improve or if you'd like to explore new products/offers, I'd love to connect.\n\n"
+            f"Would a 15-minute call this week work?\n\n"
+            f"Best regards,\n[Your Name]"
+        )
+        outreach_script = scripts.get(
+            top_signal["signal"] if top_signal else "", generic_script
+        ) if top_signal else generic_script
+
+        return {
+            "signals":           signals,
+            "composite_score":   composite_score,
+            "risk_level":        risk_level,
+            "risk_label":        risk_label,
+            "score_breakdown":   score_breakdown,
+            "top_signal":        top_signal,
+            "outreach_script":   outreach_script,
+            "peer_context":      peer_context,
+            "recovery_potential": recovery_potential,
+            "recovery_label":    recovery_label,
         }

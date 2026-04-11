@@ -7,23 +7,7 @@ import io
 import re
 from datetime import datetime
 
-import math
-
 import pandas as pd
-
-
-def _safe_float(val, default=0.0):
-    """Convert val to float, returning default for None/NaN."""
-    try:
-        v = float(val)
-        return default if math.isnan(v) or math.isinf(v) else v
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(val, default=0):
-    """Convert val to int, returning default for None/NaN."""
-    return int(_safe_float(val, default))
 from fpdf import FPDF
 
 
@@ -164,11 +148,11 @@ def export_partner_360_pdf(partner_name: str, report: dict) -> bytes:
     # --- Health Overview ---
     _add_section(pdf, "Health Overview")
     _add_kv(pdf, "Health Status", facts.get("health_status", "Unknown"), bold_value=True)
-    _add_kv(pdf, "Health Score", f"{_safe_float(facts.get('health_score', 0)):.2f}")
+    _add_kv(pdf, "Health Score", f"{float(facts.get('health_score', 0)):.2f}")
     _add_kv(pdf, "Health Segment", facts.get("health_segment", "Unknown"))
-    _add_kv(pdf, "Revenue Drop", f"{_safe_float(facts.get('revenue_drop_pct', 0)):.1f}%")
-    _add_kv(pdf, "Est. Monthly Loss", f"Rs {_safe_int(facts.get('estimated_monthly_loss', 0)):,}")
-    _add_kv(pdf, "Recency", f"{_safe_int(facts.get('recency_days', 0))} days")
+    _add_kv(pdf, "Revenue Drop", f"{float(facts.get('revenue_drop_pct', 0)):.1f}%")
+    _add_kv(pdf, "Est. Monthly Loss", f"Rs {int(float(facts.get('estimated_monthly_loss', 0))):,}")
+    _add_kv(pdf, "Recency", f"{int(facts.get('recency_days', 0))} days")
     _add_kv(pdf, "Degrowth Flag", "Yes" if facts.get("degrowth_flag") else "No")
     pdf.ln(3)
 
@@ -181,23 +165,23 @@ def export_partner_360_pdf(partner_name: str, report: dict) -> bytes:
 
     # --- Churn & Forecast ---
     _add_section(pdf, "Churn & Revenue Forecast")
-    _add_kv(pdf, "Churn Probability", f"{_safe_float(facts.get('churn_probability', 0)) * 100:.1f}%")
+    _add_kv(pdf, "Churn Probability", f"{float(facts.get('churn_probability', 0)) * 100:.1f}%")
     _add_kv(pdf, "Churn Risk Band", facts.get("churn_risk_band", "Unknown"))
-    _add_kv(pdf, "Revenue At Risk (90d)", f"Rs {_safe_int(facts.get('expected_revenue_at_risk_90d', 0)):,}")
-    _add_kv(pdf, "Revenue At Risk (Monthly)", f"Rs {_safe_int(facts.get('expected_revenue_at_risk_monthly', 0)):,}")
-    _add_kv(pdf, "Forecast Next 30d", f"Rs {_safe_int(facts.get('forecast_next_30d', 0)):,}")
-    _add_kv(pdf, "Forecast Trend", f"{_safe_float(facts.get('forecast_trend_pct', 0)):+.1f}%")
-    _add_kv(pdf, "Forecast Confidence", f"{_safe_float(facts.get('forecast_confidence', 0)):.2f}")
+    _add_kv(pdf, "Revenue At Risk (90d)", f"Rs {int(float(facts.get('expected_revenue_at_risk_90d', 0))):,}")
+    _add_kv(pdf, "Revenue At Risk (Monthly)", f"Rs {int(float(facts.get('expected_revenue_at_risk_monthly', 0))):,}")
+    _add_kv(pdf, "Forecast Next 30d", f"Rs {int(float(facts.get('forecast_next_30d', 0))):,}")
+    _add_kv(pdf, "Forecast Trend", f"{float(facts.get('forecast_trend_pct', 0)):+.1f}%")
+    _add_kv(pdf, "Forecast Confidence", f"{float(facts.get('forecast_confidence', 0)):.2f}")
     pdf.ln(3)
 
     # --- Credit Risk ---
     _add_section(pdf, "Credit Risk Profile")
-    _add_kv(pdf, "Credit Risk Score", f"{_safe_float(facts.get('credit_risk_score', 0)) * 100:.1f}%")
+    _add_kv(pdf, "Credit Risk Score", f"{float(facts.get('credit_risk_score', 0)) * 100:.1f}%")
     _add_kv(pdf, "Credit Risk Band", facts.get("credit_risk_band", "Unknown"))
-    _add_kv(pdf, "Credit Utilization", f"{_safe_float(facts.get('credit_utilization', 0)) * 100:.1f}%")
-    _add_kv(pdf, "Overdue Ratio", f"{_safe_float(facts.get('overdue_ratio', 0)) * 100:.1f}%")
-    _add_kv(pdf, "Outstanding Amount", f"Rs {_safe_int(facts.get('outstanding_amount', 0)):,}")
-    _add_kv(pdf, "Credit Adj. Risk Value", f"Rs {_safe_int(facts.get('credit_adjusted_risk_value', 0)):,}")
+    _add_kv(pdf, "Credit Utilization", f"{float(facts.get('credit_utilization', 0)) * 100:.1f}%")
+    _add_kv(pdf, "Overdue Ratio", f"{float(facts.get('overdue_ratio', 0)) * 100:.1f}%")
+    _add_kv(pdf, "Outstanding Amount", f"Rs {int(float(facts.get('outstanding_amount', 0))):,}")
+    _add_kv(pdf, "Credit Adj. Risk Value", f"Rs {int(float(facts.get('credit_adjusted_risk_value', 0))):,}")
     pdf.ln(3)
 
     # --- Alerts ---

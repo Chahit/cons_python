@@ -64,6 +64,44 @@ CREATE TABLE IF NOT EXISTS cluster_assignments (
 );
 
 
+-- ── 1B-2. Cluster Centroid History ─────────────────────────────
+-- Stores centroid vectors after each run for drift detection.
+CREATE TABLE IF NOT EXISTS cluster_centroids_history (
+    id              BIGSERIAL PRIMARY KEY,
+    run_id          BIGINT REFERENCES cluster_model_runs(id) ON DELETE CASCADE,
+    tier            TEXT NOT NULL,          -- 'VIP' | 'Growth'
+    cluster_label   TEXT NOT NULL,
+    centroid_json   TEXT NOT NULL,          -- JSON array of float feature values
+    feature_names   TEXT NOT NULL,          -- JSON array of feature names (same order)
+    recorded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_centroids_label_recorded
+    ON cluster_centroids_history (cluster_label, recorded_at DESC);
+
+
+-- ── 1B-3. Cluster Drift Alerts ─────────────────────────────────
+-- Records centroid drift alerts raised after comparing runs.
+CREATE TABLE IF NOT EXISTS cluster_drift_alerts (
+    id                   BIGSERIAL PRIMARY KEY,
+    run_id               BIGINT REFERENCES cluster_model_runs(id) ON DELETE CASCADE,
+    cluster_label        TEXT NOT NULL,
+    drift_score          DOUBLE PRECISION NOT NULL,
+    drift_threshold      DOUBLE PRECISION NOT NULL DEFAULT 0.25,
+    top_drifted_features TEXT NOT NULL,     -- JSON array of feature names
+    severity             TEXT NOT NULL DEFAULT 'medium',  -- 'medium' | 'high'
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_alerts_run_id
+    ON cluster_drift_alerts (run_id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_drift_alerts_severity
+    ON cluster_drift_alerts (severity, created_at DESC);
+
+
+
+
 -- ── 1B. Competitor Intelligence ───────────────────────────────
 CREATE TABLE IF NOT EXISTS competitor_products (
     id              BIGSERIAL PRIMARY KEY,

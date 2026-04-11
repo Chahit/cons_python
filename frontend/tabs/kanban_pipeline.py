@@ -15,27 +15,6 @@ LANES = [
     {"key": "critical", "label": "🔴 Critical", "segments": {"Critical"}, "color": "#ef4444"},
 ]
 
-# Cluster label → emoji badge
-CLUSTER_BADGES = {
-    "vip":       "👑 VIP",
-    "champion":  "🏆 Champion",
-    "growth":    "📈 Growth",
-    "emerging":  "🌱 Emerging",
-    "dormant":   "💤 Dormant",
-    "at-risk":   "⚠️ At-Risk",
-    "niche":     "🎯 Niche",
-    "outlier":   "🔍 Outlier",
-}
-
-def _cluster_badge(label: str) -> str:
-    if not label or label in ("Unknown", "—", ""):
-        return ""
-    lower = str(label).lower()
-    for key, badge in CLUSTER_BADGES.items():
-        if key in lower:
-            return badge
-    return f"🔷 {label}"
-
 def _fmt_inr(val):
     try:
         v = float(val)
@@ -46,52 +25,48 @@ def _fmt_inr(val):
     if v >= 1_000:       return f"₹{v / 1_000:.0f}K"
     return f"₹{v:.0f}"
 
-def _trend_arrow(drop_pct):
-    """Return colored arrow + pct string based on revenue_drop_pct."""
-    try:
-        d = float(drop_pct)
-    except Exception:
-        return ""
-    if d >= 30:
-        return f"<span style='color:#ef4444;font-weight:700'>▼ {d:.0f}%</span>"
-    if d >= 10:
-        return f"<span style='color:#f59e0b;font-weight:700'>▼ {d:.0f}%</span>"
-    if d <= -10:   # negative drop = growth
-        return f"<span style='color:#22c55e;font-weight:700'>▲ {abs(d):.0f}%</span>"
-    return f"<span style='color:#94a3b8'>→ {abs(d):.0f}%</span>"
-
-def _churn_border_color(churn_raw):
-    try:
-        c = float(churn_raw)
-    except Exception:
-        return "#334155"
-    if c >= 0.70: return "#ef4444"
-    if c >= 0.50: return "#f59e0b"
-    if c >= 0.30: return "#3b82f6"
-    return "#22c55e"
-
-def _last_seen(recency_days):
+def _days_ago(recency_days):
+    """Format recency_days as human-readable last-order string."""
     try:
         d = int(float(recency_days))
+        if d == 0:  return "Today"
+        if d == 1:  return "1d ago"
+        if d < 31:  return f"{d}d ago"
+        if d < 365: return f"{d // 30}mo ago"
+        return f"{d // 365}y ago"
     except Exception:
         return "—"
-    if d == 0:   return "Today"
-    if d == 1:   return "Yesterday"
-    if d <= 7:   return f"{d}d ago"
-    if d <= 30:  return f"{d // 7}w ago"
-    if d <= 365: return f"{d // 30}mo ago"
-    return f"{d // 365}y ago"
 
-# ── Cache the heavy data slice ──────────────────────────────────────────────
+def _primary_risk_signal(row):
+    """Return (signal_text, color) for the single most urgent risk indicator."""
+    try:
+        recency   = float(row.get("recency_days") or 0)
+        drop      = float(row.get("revenue_drop_pct") or 0)
+        recent    = float(row.get("recent_90_revenue") or 0)
+        prev      = float(row.get("prev_90_revenue") or 0)
+        if recent == 0 and prev > 0:
+            return "🔴 Revenue stopped", "#ef4444"
+        if recency > 120:
+            return f"⏰ {int(recency)}d no purchase", "#ef4444"
+        if drop > 50:
+            return f"📉 Revenue ↓{drop:.0f}%", "#ef4444"
+        if recency > 60:
+            return f"⏳ {int(recency)}d quiet", "#f59e0b"
+        if drop > 25:
+            return f"📉 ↓{drop:.0f}% revenue", "#f59e0b"
+    except Exception:
+        pass
+    return None, None
+
+# ── Cache the heavy data slice so repeated renders are fast ────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def _build_kanban_df(_pf_df):
     """Extract and pre-process only the columns needed by the Kanban board."""
     needed = [
         "company_name", "state", "health_segment", "health_status",
         "churn_probability", "credit_risk_band",
-        "recent_90_revenue", "revenue_drop_pct",
-        "recency_days", "cluster_label", "cluster_type",
-        "expected_revenue_at_risk_90d",
+        "recent_90_revenue", "prev_90_revenue", "revenue_drop_pct", "revenue_at_risk",
+        "cluster_label", "cluster_type", "recency_days",
     ]
     df = _pf_df.reset_index()
     if "company_name" not in df.columns and "index" in df.columns:
@@ -102,36 +77,28 @@ def _build_kanban_df(_pf_df):
     # Fill defaults for optional columns
     for col, default in [
         ("churn_probability", 0.0),
-        ("revenue_drop_pct", 0.0),
-        ("recency_days", 0.0),
-        ("expected_revenue_at_risk_90d", 0.0),
         ("credit_risk_band", "N/A"),
         ("health_segment", "Healthy"),
-        ("cluster_label", ""),
-        ("cluster_type", ""),
+        ("cluster_label", "—"),
+        ("cluster_type", "—"),
+        ("recency_days", None),
+        ("prev_90_revenue", 0.0),
+        ("revenue_drop_pct", None),
+        ("revenue_at_risk", None),
     ]:
         if col not in df.columns:
             df[col] = default
 
-    for col in ["churn_probability", "recent_90_revenue", "revenue_drop_pct",
-                "recency_days", "expected_revenue_at_risk_90d"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    df["churn_probability"] = pd.to_numeric(df["churn_probability"], errors="coerce").fillna(0.0)
+    df["recent_90_revenue"] = pd.to_numeric(df.get("recent_90_revenue", 0), errors="coerce").fillna(0.0)
 
-    # Fallback: if churn scoring was skipped (fast_mode=True) the
-    # expected_revenue_at_risk_90d column may be 0 even though churn_probability
-    # is non-zero. In that case compute it inline so the Kanban always shows
-    # meaningful risk values.
-    # Formula: churn_probability × recent_90_revenue (probability-weighted loss).
-    # WHY: This is the same formula used in churn_credit_stub_mixin when full
-    # scoring runs — applying it here as a fallback ensures consistency.
-    zero_risk_mask = df["expected_revenue_at_risk_90d"] == 0.0
-    has_churn_prob = df["churn_probability"] > 0.0
-    fallback_mask = zero_risk_mask & has_churn_prob
-    if fallback_mask.any():
-        df.loc[fallback_mask, "expected_revenue_at_risk_90d"] = (
-            df.loc[fallback_mask, "churn_probability"]
-            * df.loc[fallback_mask, "recent_90_revenue"]
-        ).round(2)
+    # Compute revenue_at_risk if not provided: churn probability × 90d revenue
+    if "revenue_at_risk" not in df.columns or df["revenue_at_risk"].isna().all():
+        df["revenue_at_risk"] = df["churn_probability"] * df["recent_90_revenue"]
+    else:
+        df["revenue_at_risk"] = pd.to_numeric(df["revenue_at_risk"], errors="coerce").fillna(
+            df["churn_probability"] * df["recent_90_revenue"]
+        )
 
     return df
 
@@ -147,6 +114,7 @@ def render(ai):
     with skel.container():
         skeleton_loader(n_metric_cards=5, n_rows=2, label="Loading pipeline data...")
 
+    # Load clustering (fast, cached) and optionally churn/credit
     ai.ensure_clustering()
     if getattr(ai, "enable_realtime_partner_scoring", False):
         try:
@@ -162,6 +130,7 @@ def render(ai):
         st.warning("Partner features not available. Run the clustering engine first.")
         return
 
+    # Use cached, lightweight slice
     df = _build_kanban_df(pf)
 
     # ── Sidebar filters ─────────────────────────────────────────────────────
@@ -180,7 +149,7 @@ def render(ai):
 
     sort_by = st.sidebar.selectbox(
         "Sort cards by",
-        ["Revenue (High→Low)", "Churn Risk (High→Low)", "Revenue Drop (High→Low)", "Name (A→Z)"],
+        ["Revenue (High→Low)", "Churn Risk (High→Low)", "At Risk (High→Low)", "Name (A→Z)"],
         key="kb_sort",
     )
 
@@ -197,37 +166,29 @@ def render(ai):
         df = df.sort_values("recent_90_revenue", ascending=False)
     elif sort_by == "Churn Risk (High→Low)":
         df = df.sort_values("churn_probability", ascending=False)
-    elif sort_by == "Revenue Drop (High→Low)":
-        df = df.sort_values("revenue_drop_pct", ascending=False)
+    elif sort_by == "At Risk (High→Low)":
+        df = df.sort_values("revenue_at_risk", ascending=False)
     else:
         df = df.sort_values("company_name")
 
     st.markdown("---")
 
-    # ── Summary bar — 5 metrics ──────────────────────────────────────────────
-    total_partners = len(df)
-    high_churn     = int((df["churn_probability"] >= 0.65).sum())
-    critical_cnt   = int((df.get("health_segment", pd.Series(dtype=str)) == "Critical").sum())
-    total_revenue  = float(df["recent_90_revenue"].sum())
-
-    # Revenue at risk = expected_revenue_at_risk_90d for At Risk + Critical lanes
-    at_risk_mask = df["health_segment"].isin({"At Risk", "Critical"}) if "health_segment" in df.columns else pd.Series(False, index=df.index)
-    revenue_at_risk = float(df.loc[at_risk_mask, "expected_revenue_at_risk_90d"].sum())
+    # ── Summary bar — 5 metrics ─────────────────────────────────────────────
+    total_partners  = len(df)
+    high_churn      = int((df["churn_probability"] >= 0.65).sum())
+    critical_cnt    = int((df.get("health_segment", pd.Series(dtype=str)) == "Critical").sum())
+    total_revenue   = float(df["recent_90_revenue"].sum())
+    total_at_risk   = float(df["revenue_at_risk"].sum())
 
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Partners in Pipeline", total_partners)
     m2.metric("High Churn Risk", high_churn,
-              delta=f"{high_churn/max(total_partners,1)*100:.0f}% of Pipeline",
+              delta=f"⚠️ {high_churn/max(total_partners,1)*100:.0f}% of Pipeline",
               delta_color="inverse")
     m3.metric("Critical Accounts", critical_cnt, delta_color="inverse")
     m4.metric("90d Pipeline Value", _fmt_inr(total_revenue))
-    m5.metric(
-        "⚠️ Revenue at Risk",
-        _fmt_inr(revenue_at_risk),
-        delta="At Risk + Critical",
-        delta_color="inverse",
-        help="Sum of expected_revenue_at_risk_90d for all At Risk and Critical partners",
-    )
+    m5.metric("Revenue at Risk ⓘ", _fmt_inr(total_at_risk),
+              delta="⚠️ AI Risk + Critical", delta_color="inverse")
 
     st.markdown("---")
 
@@ -244,21 +205,19 @@ def render(ai):
         lane_df = df[mask]
         lane_count = len(lane_df)
         lane_rev   = float(lane_df["recent_90_revenue"].sum())
-        lane_at_risk_rev = float(lane_df["expected_revenue_at_risk_90d"].sum())
+        lane_risk  = float(lane_df["revenue_at_risk"].sum())
 
         with col:
             # Lane header
-            at_risk_row = (
-                f"<div style='font-size:11px;color:#f87171;margin-top:2px;'>⚠️ At Risk: <b>{_fmt_inr(lane_at_risk_rev)}</b></div>"
-                if lane_at_risk_rev > 0 else ""
-            )
             st.markdown(
                 f"""<div style="background:#1a1c23;padding:12px;border-top:4px solid {lane['color']};border-radius:8px;margin-bottom:12px;">
                     <h4 style="margin:0;font-size:15px;color:{lane['color']};">
                         {lane['label']} <span style="font-size:12px;color:#aaa;float:right;">({lane_count})</span>
                     </h4>
-                    <div style="font-size:12px;color:#aaa;margin-top:4px;">Value: <b>{_fmt_inr(lane_rev)}</b></div>
-                    {at_risk_row}
+                    <div style="font-size:12px;color:#aaa;margin-top:4px;">
+                        Value: <b>{_fmt_inr(lane_rev)}</b>
+                        &nbsp;|&nbsp; <span style="color:#f59e0b;">⚠ At Risk: {_fmt_inr(lane_risk)}</span>
+                    </div>
                 </div>""",
                 unsafe_allow_html=True,
             )
@@ -267,81 +226,78 @@ def render(ai):
                 st.info("Empty")
                 continue
 
-            # ── Cards: top 50 per lane ────────────────────────────────────
+            # ── Cards: only render top 50 per lane for speed ──────────────
             shown = lane_df.head(50)
             for _, row in shown.iterrows():
-                name        = str(row.get("company_name", "Unknown"))
-                rev         = _fmt_inr(row.get("recent_90_revenue", 0))
-                churn_raw   = row.get("churn_probability", 0)
-                churn_pct   = f"{float(churn_raw)*100:.0f}%" if pd.notnull(churn_raw) else "—"
-                credit      = str(row.get("credit_risk_band", "—"))
-                state       = str(row.get("state", "—"))
-                drop_pct    = row.get("revenue_drop_pct", 0)
-                recency     = row.get("recency_days", 0)
-                at_risk_rev = row.get("expected_revenue_at_risk_90d", 0)
-                clabel      = str(row.get("cluster_label", ""))
-                ctype       = str(row.get("cluster_type", ""))
+                name       = str(row.get("company_name", "Unknown"))
+                rev        = _fmt_inr(row.get("recent_90_revenue", 0))
+                churn_raw  = row.get("churn_probability", 0)
+                churn_pct  = f"{float(churn_raw)*100:.0f}%" if pd.notnull(churn_raw) else "—"
+                credit     = str(row.get("credit_risk_band", "—"))
+                state      = str(row.get("state", "—"))
+                cluster    = str(row.get("cluster_label", "—"))
+                at_risk    = row.get("revenue_at_risk", None)
+                drop_pct   = row.get("revenue_drop_pct", None)
+                recency    = row.get("recency_days", None)
 
-                churn_color  = _churn_border_color(churn_raw)
-                trend_html   = _trend_arrow(drop_pct)
-                last_seen    = _last_seen(recency)
-                badge        = _cluster_badge(clabel)
-                at_risk_str  = _fmt_inr(at_risk_rev) if at_risk_rev > 0 else "—"
+                # ── Color-code churn severity ──────────────────────────────
+                if pd.notnull(churn_raw) and float(churn_raw) >= 0.7:
+                    churn_color = "#ef4444"
+                elif pd.notnull(churn_raw) and float(churn_raw) >= 0.5:
+                    churn_color = "#f59e0b"
+                else:
+                    churn_color = "#22c55e"
 
-                # Credit badge color
-                credit_colors = {"Low": "#22c55e", "Medium": "#f59e0b",
-                                 "High": "#ef4444", "Critical": "#dc2626"}
-                credit_color = credit_colors.get(credit, "#94a3b8")
+                # ── Revenue trend display ──────────────────────────────────
+                if drop_pct is not None and pd.notnull(drop_pct):
+                    dp = float(drop_pct)
+                    if dp > 0:
+                        rev_trend_html = f"<span style='color:#ef4444;font-weight:600'>↓ {dp:.0f}%</span>"
+                    elif dp < 0:
+                        # Negative drop = growth
+                        rev_trend_html = f"<span style='color:#22c55e;font-weight:600'>↑ {abs(dp):.0f}%</span>"
+                    else:
+                        rev_trend_html = "<span style='color:#aaa'>→ 0%</span>"
+                else:
+                    rev_trend_html = "<span style='color:#aaa'>—</span>"
+
+                # ── Last order recency ─────────────────────────────────────
+                last_order_str = _days_ago(recency) if recency is not None and pd.notnull(recency) else "—"
+
+                # ── At Risk amount display ─────────────────────────────────
+                at_risk_str = _fmt_inr(float(at_risk)) if at_risk is not None and pd.notnull(at_risk) and float(at_risk) > 0 else "—"
+
+                # ── State + cluster badge ──────────────────────────────────
+                cluster_color = "#22c55e" if "VIP" in cluster else "#6366f1" if "Growth" in cluster else "#aaa"
+                badge_html = ""
+                if state and state != "—":
+                    badge_html += f"<span style='background:#23283a;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:4px;'>📍 {state}</span>"
+                if cluster and cluster not in ("—", "nan", "Uncategorized"):
+                    badge_html += f"<span style='background:{cluster_color}22;color:{cluster_color};padding:2px 6px;border-radius:4px;font-size:11px;border:1px solid {cluster_color}44;'>🏷 {cluster}</span>"
 
                 with st.expander(f"{name} — {rev}"):
-                    # Row 1: State + cluster badge
-                    badge_str = f"&nbsp;&nbsp;•&nbsp;&nbsp;{badge}" if badge else ""
+                    if badge_html:
+                        st.markdown(badge_html, unsafe_allow_html=True)
                     st.markdown(
-                        f"<span style='color:#94a3b8;font-size:12px;'>📍 {state}{badge_str}</span>",
+                        f"**Rev Trend:** {rev_trend_html} &nbsp;|&nbsp; **Last Order:** {last_order_str}  \n"
+                        f"**Churn:** <span style='color:{churn_color};font-weight:600'>{churn_pct}</span>"
+                        f" &nbsp;|&nbsp; **Credit:** {credit}  \n"
+                        f"**At Risk:** {at_risk_str} &nbsp;|&nbsp; **Cluster:** {cluster}",
                         unsafe_allow_html=True,
                     )
-
-                    # Row 2: Revenue trend + Last order
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown(
-                            f"**Rev Trend:** {trend_html}",
-                            unsafe_allow_html=True,
-                        )
-                    with c2:
-                        st.markdown(
-                            f"**Last Order:** <span style='color:#94a3b8'>{last_seen}</span>",
-                            unsafe_allow_html=True,
-                        )
-
-                    # Row 3: Churn + Credit
-                    c3, c4 = st.columns(2)
-                    with c3:
-                        st.markdown(
-                            f"**Churn:** <span style='color:{churn_color};font-weight:600'>{churn_pct}</span>",
-                            unsafe_allow_html=True,
-                        )
-                    with c4:
-                        st.markdown(
-                            f"**Credit:** <span style='color:{credit_color};font-weight:600'>{credit}</span>",
-                            unsafe_allow_html=True,
-                        )
-
-                    # Row 4: Revenue at Risk + Cluster type
-                    c5, c6 = st.columns(2)
-                    with c5:
-                        st.markdown(
-                            f"**At Risk:** <span style='color:#f87171'>{at_risk_str}</span>",
-                            unsafe_allow_html=True,
-                        )
-                    with c6:
-                        label_val = (ctype or clabel or "").strip()
-                        if label_val and label_val not in ("Unknown", "—", ""):
+                    # ── Primary risk signal (At Risk / Critical only) ──────────
+                    if lane["key"] in ("at_risk", "critical"):
+                        sig_text, sig_color = _primary_risk_signal(row)
+                        if sig_text:
                             st.markdown(
-                                f"**Cluster:** <span style='color:#a5b4fc'>{label_val}</span>",
+                                f"<div style='margin-top:8px;padding:6px 10px;"
+                                f"background:{sig_color}18;border-radius:6px;"
+                                f"border-left:3px solid {sig_color};"
+                                f"font-size:12px;color:{sig_color};font-weight:600;'>"
+                                f"⚡ {sig_text}"
+                                f"</div>",
                                 unsafe_allow_html=True,
                             )
-
 
             if lane_count > 50:
                 st.caption(f"Showing top 50 of {lane_count}. Use filters to narrow down.")

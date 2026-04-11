@@ -4,20 +4,6 @@ import pandas as pd
 from .schemas import DataQualityReport
 
 class BaseLoaderMixin:
-    # ── Date-filtered accessors ────────────────────────────────────────────────
-    # All mixins and tabs should prefer these over self.df_fact / self.df_ml.
-    # Both fall back to the full frame when no date range is set.
-
-    @property
-    def df_fact_filtered(self):
-        """Return df_fact sliced to the sidebar date window (or full df_fact)."""
-        return self.get_date_filtered_fact() if self.df_fact is not None else None
-
-    @property
-    def df_ml_filtered(self):
-        """Return df_ml sliced to the sidebar date window (or full df_ml)."""
-        return self.get_date_filtered_ml() if self.df_ml is not None else None
-
     @staticmethod
     def _approved_condition(alias="t"):
         # Works whether source column is text ('True') or boolean.
@@ -75,10 +61,8 @@ class BaseLoaderMixin:
             self.df_recent_group_spend = self._timed_step(
                 "features.recent_group_spend_view_only",
                 lambda: self.df_ml[
-                    [c for c in ["company_name", "state", "group_name", "total_spend"]
-                     if c in self.df_ml.columns]
-                ].copy() if self.df_ml is not None and not self.df_ml.empty
-                else pd.DataFrame(columns=["company_name", "state", "group_name", "total_spend"]),
+                    ["company_name", "state", "group_name", "total_spend"]
+                ].copy(),
             )
         else:
             self.df_partner_features = self._timed_step(
@@ -105,43 +89,8 @@ class BaseLoaderMixin:
             return
         self.ensure_core_loaded()
         self._timed_step("model.clustering", self.run_clustering)
-        # Inject auto-named cluster labels into df_partner_features so every tab
-        # (Kanban, Partner 360, Chatbot, Monitoring) sees meaningful labels
-        # like "VIP — High-Value · Diversified" instead of "VIP-0".
-        self._merge_cluster_labels_to_features()
         self._clustering_ready = True
         self._clustering_loaded_at = time.time()
-
-    def _merge_cluster_labels_to_features(self):
-        if self.matrix is None or self.matrix.empty:
-            return
-        if self.df_partner_features is None or self.df_partner_features.empty:
-            return
-
-        # ── Deduplicate both indices before reindex to prevent ValueError ──
-        if self.matrix.index.duplicated().any():
-            self.matrix = self.matrix[~self.matrix.index.duplicated(keep="last")]
-        if self.df_partner_features.index.duplicated().any():
-            self.df_partner_features = self.df_partner_features[
-                ~self.df_partner_features.index.duplicated(keep="last")
-            ]
-
-        cluster_cols = ["cluster_label", "cluster_type", "cluster", "strategic_tag"]
-        for col in cluster_cols:
-            if col in self.matrix.columns:
-                self.df_partner_features[col] = (
-                    self.matrix[col].reindex(self.df_partner_features.index)
-                )
-
-        if "cluster_label" in self.df_partner_features.columns:
-            self.df_partner_features["cluster_label"] = (
-                self.df_partner_features["cluster_label"].fillna("Uncategorized")
-            )
-        if "cluster_type" in self.df_partner_features.columns:
-            self.df_partner_features["cluster_type"] = (
-                self.df_partner_features["cluster_type"].fillna("Growth")
-            )
-
 
     def ensure_churn_forecast(self):
         if self._churn_ready and not self._is_stale(
@@ -244,36 +193,18 @@ class BaseLoaderMixin:
     def _build_recent_matrix(self):
         if self.df_recent_group_spend is None or self.df_recent_group_spend.empty:
             return pd.DataFrame()
-        if "group_name" not in self.df_recent_group_spend.columns:
-            return pd.DataFrame()
-
-        _val_col = next(
-            (c for c in ["total_spend", "total_revenue"] if c in self.df_recent_group_spend.columns),
-            None,
-        )
-        if _val_col is None:
-            return pd.DataFrame()
 
         matrix_recent = self.df_recent_group_spend.pivot_table(
             index="company_name",
             columns="group_name",
-            values=_val_col,
-            aggfunc="sum",
+            values="total_spend",
             fill_value=0,
         )
-        # Deduplicate index (safety guard)
-        matrix_recent = matrix_recent[~matrix_recent.index.duplicated(keep="last")]
-
-        if "state" in self.df_recent_group_spend.columns:
-            matrix_recent["state"] = (
-                self.df_recent_group_spend[["company_name", "state"]]
-                .drop_duplicates("company_name")
-                .set_index("company_name")["state"]
-                .reindex(matrix_recent.index)
-                .fillna("Unknown")
-            )
-        else:
-            matrix_recent["state"] = "Unknown"
+        matrix_recent["state"] = (
+            self.df_recent_group_spend[["company_name", "state"]]
+            .drop_duplicates("company_name")
+            .set_index("company_name")["state"]
+        )
         return matrix_recent
 
     def _run_data_quality_checks(self, df_ml):
@@ -312,80 +243,48 @@ class BaseLoaderMixin:
         return report.to_dict()
 
     def _build_partner_features_from_views(self):
-        """Build partner-level features from view_ml_input (df_ml).
-        df_fact is product-level and has no company_name — df_ml is the correct source.
-        """
-        if self.df_ml is None or self.df_ml.empty:
+        if self.df_fact is None or self.df_fact.empty:
             return pd.DataFrame()
-
-        # df_ml may have multiple rows per partner (one per group_name).
-        # Aggregate to one row per company.
-        agg_cols = {c: "first" for c in ["state", "party_id"] if c in self.df_ml.columns}
-        agg_cols.update({
-            c: "sum" for c in ["total_revenue", "total_spend", "order_count", "product_diversity"]
-            if c in self.df_ml.columns
-        })
-        agg_cols.update({
-            c: "mean" for c in ["avg_order_value", "avg_payment_days"]
-            if c in self.df_ml.columns
-        })
-        if "last_order_date" in self.df_ml.columns:
-            # Force datetime — psycopg2 may return date objects as object dtype
-            try:
-                self.df_ml["last_order_date"] = pd.to_datetime(
-                    self.df_ml["last_order_date"], errors="coerce"
-                )
-                agg_cols["last_order_date"] = "max"
-            except Exception:
-                pass  # skip if not coercible
-        if "recency_days" in self.df_ml.columns:
-            # Force numeric — PostgreSQL interval may come in as object/timedelta
-            try:
-                col = self.df_ml["recency_days"]
-                if col.dtype == object or str(col.dtype).startswith("timedelta"):
-                    self.df_ml["recency_days"] = pd.to_numeric(
-                        col.apply(lambda x: x.days if hasattr(x, "days") else x),
-                        errors="coerce",
-                    )
-                agg_cols["recency_days"] = "min"  # min = most recently active
-            except Exception:
-                pass  # skip if not coercible
-
-        features = self.df_ml.groupby("company_name", as_index=False).agg(agg_cols)
-        features["state"] = features["state"].fillna("Unknown") if "state" in features.columns else "Unknown"
-
-        # Derive revenue proxy columns expected by downstream components
-        rev_col = "total_revenue" if "total_revenue" in features.columns else "total_spend"
-        features["recent_90_revenue"] = features.get(rev_col, pd.Series(0.0, index=features.index))
-        # In the fallback path we don't have the 90-180 day split.
-        # Use flat assumption (prev = recent) — neutral and honest.
-        # The old `* 0.9` implied all partners dropped 11% which was wrong:
-        # it inflated churn scores uniformly and made revenue_drop_pct misleading.
-        features["prev_90_revenue"] = features["recent_90_revenue"].copy()
-        features["revenue_drop_pct"] = 0.0
-        features["growth_rate_90d"] = 0.0
-
-        n = len(features)
-        idx = features.index
-        features["health_score"] = pd.Series(0.65, index=idx, dtype=float)
-        features["health_segment"] = pd.Series(["Healthy"] * n, index=idx)
-        features["health_status"] = pd.Series(["Stable"] * n, index=idx)
-        features["estimated_monthly_loss"] = pd.Series(0.0, index=idx, dtype=float)
-        features["degrowth_threshold_pct"] = pd.Series(20.0, index=idx, dtype=float)
-        features["degrowth_flag"] = pd.Series([False] * n, index=idx)
-        features["churn_probability"] = pd.Series(0.0, index=idx, dtype=float)
-        features["churn_risk_band"] = pd.Series(["Unknown"] * n, index=idx)
-        features["expected_revenue_at_risk_90d"] = pd.Series(0.0, index=idx, dtype=float)
-        features["expected_revenue_at_risk_monthly"] = pd.Series(0.0, index=idx, dtype=float)
-        features["forecast_next_30d"] = pd.Series(0.0, index=idx, dtype=float)
-        features["forecast_trend_pct"] = pd.Series(0.0, index=idx, dtype=float)
-        features["forecast_confidence"] = pd.Series(0.0, index=idx, dtype=float)
-        features["credit_risk_score"] = pd.Series(0.0, index=idx, dtype=float)
-        features["credit_risk_band"] = pd.Series(["Unknown"] * n, index=idx)
-        features["credit_utilization"] = pd.Series(0.0, index=idx, dtype=float)
-        features["overdue_ratio"] = pd.Series(0.0, index=idx, dtype=float)
-        features["outstanding_amount"] = pd.Series(0.0, index=idx, dtype=float)
-        features["credit_adjusted_risk_value"] = pd.Series(0.0, index=idx, dtype=float)
+        features = self.df_fact.copy().reset_index()
+        states = (
+            self.df_ml[["company_name", "state"]]
+            .drop_duplicates("company_name")
+            if self.df_ml is not None and not self.df_ml.empty
+            else pd.DataFrame(columns=["company_name", "state"])
+        )
+        features = features.merge(states, on="company_name", how="left")
+        features["state"] = features["state"].fillna("Unknown")
+        features["health_segment"] = np.where(
+            features["health_status"].astype(str).str.contains("Healthy", case=False, na=False),
+            "Healthy",
+            np.where(
+                features["health_status"].astype(str).str.contains("Stable", case=False, na=False),
+                "Healthy",
+                "At Risk",
+            ),
+        )
+        features["health_score"] = np.where(
+            features["health_segment"] == "Healthy",
+            0.65,
+            0.45,
+        )
+        features["estimated_monthly_loss"] = 0.0
+        features["recency_days"] = 0
+        features["degrowth_threshold_pct"] = 20.0
+        features["degrowth_flag"] = features["revenue_drop_pct"].fillna(0).astype(float) >= 20.0
+        features["churn_probability"] = 0.0
+        features["churn_risk_band"] = "Unknown"
+        features["expected_revenue_at_risk_90d"] = 0.0
+        features["expected_revenue_at_risk_monthly"] = 0.0
+        features["forecast_next_30d"] = 0.0
+        features["forecast_trend_pct"] = 0.0
+        features["forecast_confidence"] = 0.0
+        features["credit_risk_score"] = 0.0
+        features["credit_risk_band"] = "Unknown"
+        features["credit_utilization"] = 0.0
+        features["overdue_ratio"] = 0.0
+        features["outstanding_amount"] = 0.0
+        features["credit_adjusted_risk_value"] = 0.0
         return features.set_index("company_name")
 
     def _load_partner_features(self):
@@ -533,11 +432,7 @@ class BaseLoaderMixin:
     def _add_health_scores(self, features):
         revenue_strength = self._normalize(np.log1p(features["recent_90_revenue"]))
         growth_trend = self._normalize(features["growth_rate_90d"].clip(-1.0, 1.5))
-        # LOG-TRANSFORM recency before normalizing into the health score.
-        # WHY: Linear normalization treats absence of 10d vs 40d identically to 100d vs 200d.
-        # np.log1p compresses short absences — a partner gone 10 days is barely penalized,
-        # while one gone 200+ days is heavily penalized. This matches real sales urgency.
-        recency_activity = 1.0 - self._normalize(np.log1p(features["recency_days"].clip(lower=0)))
+        recency_activity = 1.0 - self._normalize(features["recency_days"])
         stability = 1.0 - self._normalize(np.log1p(features["revenue_volatility"]))
 
         features["health_score"] = (
@@ -560,19 +455,6 @@ class BaseLoaderMixin:
         features["estimated_monthly_loss"] = (
             (features["prev_90_revenue"] - features["recent_90_revenue"]).clip(lower=0) / 3.0
         )
-
-        # Revenue at risk — trend-based baseline.
-        # Formula: absolute revenue lost over the past 90 days (prev - recent, floor 0).
-        # This gives a meaningful non-zero value immediately from health scoring,
-        # even before churn scoring runs. When _score_partner_churn_risk() runs,
-        # it overwrites this with the more accurate formula:
-        #   expected_revenue_at_risk_90d = churn_probability × recent_90_revenue
-        # which is better because it accounts for partners who are declining slowly
-        # (still positive revenue, but high churn probability).
-        features["expected_revenue_at_risk_90d"] = (
-            (features["prev_90_revenue"] - features["recent_90_revenue"]).clip(lower=0)
-        )
-        features["expected_revenue_at_risk_monthly"] = features["estimated_monthly_loss"].copy()
 
         segments = []
         statuses = []
