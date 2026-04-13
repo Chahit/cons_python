@@ -60,9 +60,7 @@ class BaseLoaderMixin:
             )
             self.df_recent_group_spend = self._timed_step(
                 "features.recent_group_spend_view_only",
-                lambda: self.df_ml[
-                    ["company_name", "state", "group_name", "total_spend"]
-                ].copy(),
+                self._build_group_spend_from_ml_view,
             )
         else:
             self.df_partner_features = self._timed_step(
@@ -190,9 +188,37 @@ class BaseLoaderMixin:
         except Exception:
             return pd.DataFrame(columns=["company_name", "state", "group_name", "total_spend"])
 
+    def _build_group_spend_from_ml_view(self):
+        """
+        Safely slice df_ml into the group-spend DataFrame.
+        Fills missing columns (state, group_name, total_spend) with defaults
+        instead of crashing when the host DB view differs from the expected schema.
+        """
+        if self.df_ml is None or self.df_ml.empty:
+            return pd.DataFrame(
+                columns=["company_name", "state", "group_name", "total_spend"]
+            )
+        df = self.df_ml.copy()
+        # Ensure all required columns exist — fill with safe defaults if absent
+        if "state" not in df.columns:
+            df["state"] = "Unknown"
+        if "group_name" not in df.columns:
+            df["group_name"] = "General"
+        if "total_spend" not in df.columns:
+            df["total_spend"] = 0.0
+        if "company_name" not in df.columns:
+            return pd.DataFrame(
+                columns=["company_name", "state", "group_name", "total_spend"]
+            )
+        return df[["company_name", "state", "group_name", "total_spend"]].copy()
+
     def _build_recent_matrix(self):
         if self.df_recent_group_spend is None or self.df_recent_group_spend.empty:
             return pd.DataFrame()
+
+        # Ensure state column exists before pivot
+        if "state" not in self.df_recent_group_spend.columns:
+            self.df_recent_group_spend["state"] = "Unknown"
 
         matrix_recent = self.df_recent_group_spend.pivot_table(
             index="company_name",
@@ -442,13 +468,18 @@ class BaseLoaderMixin:
             + 0.15 * stability
         ).clip(0.0, 1.0)
 
-        state_threshold = (
-            features.assign(pos_drop=features["revenue_drop_pct"].where(features["revenue_drop_pct"] > 0))
-            .groupby("state")["pos_drop"]
-            .transform(lambda s: float(s.quantile(0.70)) if s.notna().any() else 20.0)
-            .clip(lower=10.0, upper=40.0)
-        )
-        features["degrowth_threshold_pct"] = state_threshold.fillna(20.0)
+        # Guard: if all states are 'Unknown' (missing column in host DB),
+        # skip state-aware groupby and use flat 20% threshold.
+        if "state" in features.columns and features["state"].nunique() > 1:
+            state_threshold = (
+                features.assign(pos_drop=features["revenue_drop_pct"].where(features["revenue_drop_pct"] > 0))
+                .groupby("state")["pos_drop"]
+                .transform(lambda s: float(s.quantile(0.70)) if s.notna().any() else 20.0)
+                .clip(lower=10.0, upper=40.0)
+            )
+            features["degrowth_threshold_pct"] = state_threshold.fillna(20.0)
+        else:
+            features["degrowth_threshold_pct"] = 20.0
         features["degrowth_flag"] = (
             features["revenue_drop_pct"] >= features["degrowth_threshold_pct"]
         )
