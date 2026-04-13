@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kanban Pipeline — Technical Brief</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root {
+    --primary: #6366f1; --primary-light: #eef2ff; --primary-dark: #3730a3;
+    --green: #16a34a;   --green-light: #dcfce7;
+    --blue: #2563eb;    --blue-light: #dbeafe;
+    --amber: #d97706;   --amber-light: #fef3c7;
+    --red: #dc2626;     --red-light: #fee2e2;
+    --text: #111827; --text-secondary: #4b5563; --text-muted: #9ca3af;
+    --border: #e5e7eb; --bg: #f9fafb; --card: #ffffff; --code-bg: #1e293b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.75; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
+
+  .cover { background: linear-gradient(135deg, #1e1b4b 0%, #4338ca 55%, #6366f1 100%); color: #fff; padding: 72px 80px 60px; }
+  .cover-badge { display: inline-block; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 20px; padding: 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 24px; }
+  .cover h1 { font-size: 42px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.15; margin-bottom: 14px; }
+  .cover h1 span { color: #c7d2fe; }
+  .cover .subtitle { font-size: 16px; color: #e0e7ff; max-width: 620px; margin-bottom: 40px; line-height: 1.6; }
+  .cover-meta { display: flex; gap: 32px; flex-wrap: wrap; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 28px; }
+  .cover-meta-item { font-size: 12px; color: #c7d2fe; }
+  .cover-meta-item strong { display: block; color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+
+  .container { max-width: 900px; margin: 0 auto; padding: 56px 40px; }
+  .intro-box { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 10px 10px 0; padding: 20px 24px; margin-bottom: 48px; font-size: 14.5px; color: var(--primary-dark); line-height: 1.7; }
+
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 48px; }
+  .toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; margin-bottom: 16px; }
+  .toc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; }
+  .toc-item { font-size: 13.5px; color: var(--primary); font-weight: 500; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .toc-num { color: var(--text-muted); font-weight: 400; margin-right: 6px; font-size: 12px; }
+
+  .section { margin-bottom: 60px; }
+  .section-header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 2px solid var(--border); }
+  .section-num { background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .section h2 { font-size: 21px; font-weight: 700; color: var(--text); }
+  .section-file { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--code-bg); color: #7dd3fc; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
+
+  h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 26px 0 10px; }
+  p { margin-bottom: 14px; color: var(--text-secondary); font-size: 14.5px; }
+
+  .formula { background: var(--code-bg); border-radius: 10px; padding: 18px 22px; margin: 16px 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #e2e8f0; line-height: 1.9; overflow-x: auto; white-space: pre; }
+  .formula .comment   { color: #64748b; }
+  .formula .highlight { color: #34d399; }
+  .formula .var       { color: #93c5fd; }
+
+  .callout { border-radius: 10px; padding: 16px 20px; margin: 18px 0; font-size: 14px; display: flex; gap: 12px; align-items: flex-start; }
+  .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.5; }
+  .callout-body strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+  .callout.why  { background: var(--primary-light); color: var(--primary-dark); }
+  .callout.tip  { background: var(--green-light); color: #14532d; }
+  .callout.alt  { background: var(--amber-light); color: #78350f; }
+  .callout.info { background: var(--blue-light); color: #1e3a8a; }
+
+  .table-wrap { overflow-x: auto; margin: 18px 0; border-radius: 10px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead tr { background: #eef2ff; }
+  th { padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--primary-dark); border-bottom: 2px solid #c7d2fe; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f5f3ff; }
+  td code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; background: #eef2ff; padding: 1px 5px; border-radius: 3px; color: var(--primary); }
+  td strong { color: var(--text); font-weight: 600; }
+
+  /* Kanban board demo */
+  .kanban-demo { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 24px 0; }
+  .lane { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+  .lane-header { padding: 12px 14px; font-weight: 700; font-size: 13px; }
+  .lane-header.champion { background: #22c55e22; border-top: 4px solid #22c55e; color: #15803d; }
+  .lane-header.healthy  { background: #3b82f622; border-top: 4px solid #3b82f6; color: #1d4ed8; }
+  .lane-header.at-risk  { background: #f59e0b22; border-top: 4px solid #f59e0b; color: #b45309; }
+  .lane-header.critical { background: #ef444422; border-top: 4px solid #ef4444; color: #b91c1c; }
+  .lane-meta { padding: 6px 14px 10px; font-size: 11.5px; color: var(--text-muted); background: var(--card); border-bottom: 1px solid var(--border); }
+  .demo-card { margin: 8px; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 12px; }
+  .demo-card-name { font-weight: 700; color: var(--text); margin-bottom: 4px; font-size: 12.5px; }
+  .demo-card-line { color: var(--text-secondary); margin: 2px 0; }
+  .demo-card-line span { font-weight: 600; }
+
+  /* Churn colour swatch */
+  .churn-swatches { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+  .swatch { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .swatch-dot { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; }
+
+  /* INR scale */
+  .inr-scale { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }
+  .inr-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; text-align: center; }
+  .inr-input { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .inr-output { font-size: 17px; font-weight: 700; color: var(--primary); }
+
+  .pill { display: inline-block; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+  .pill-green  { background: var(--green-light); color: var(--green); }
+  .pill-blue   { background: var(--blue-light); color: var(--blue); }
+  .pill-amber  { background: var(--amber-light); color: var(--amber); }
+  .pill-red    { background: var(--red-light); color: var(--red); }
+  .pill-indigo { background: var(--primary-light); color: var(--primary); }
+
+  .env-tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--primary); background: var(--primary-light); padding: 2px 7px; border-radius: 4px; }
+
+  .footer { text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 12px; border-top: 1px solid var(--border); margin-top: 16px; }
+  .footer strong { color: var(--text-secondary); }
+
+  @media (max-width: 640px) {
+    .cover { padding: 40px 24px; } .cover h1 { font-size: 28px; }
+    .container { padding: 32px 20px; }
+    .toc-grid, .kanban-demo, .inr-scale { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-badge">Module 03 of 08 — Internal Technical Brief</div>
+  <h1>Revenue Pipeline<br/><span>Kanban Tracker</span></h1>
+  <p class="subtitle">
+    How the Kanban board translates raw ML scores into a visual pipeline that every sales manager can read
+    at a glance — covering lane logic, revenue-at-risk calculation, card rendering, smart fallback formulas,
+    and the full set of filters and sorting options.
+  </p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><strong>Primary File</strong>kanban_pipeline.py</div>
+    <div class="cover-meta-item"><strong>Data Sources</strong>df_partner_features + ML scores</div>
+    <div class="cover-meta-item"><strong>Refresh</strong>5-minute cache (TTL=300s)</div>
+    <div class="cover-meta-item"><strong>April 2026</strong>Version 2.4</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="intro-box">
+    The Kanban board is the most human-facing view in the entire dashboard. It takes every number the ML engine has computed — health scores, churn probabilities, credit risk bands, revenue figures — and places each partner into one of four lanes: Champion, Healthy, At Risk, or Critical. This document explains every decision that shapes what a manager sees, including the logic for cards, colours, sorting, revenue-at-risk fallbacks, and the Indian number format.</div>
+
+  <div class="toc">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-item"><span class="toc-num">01</span>The Four Swimlanes</div>
+      <div class="toc-item"><span class="toc-num">05</span>Revenue at Risk — Calculation &amp; Fallback</div>
+      <div class="toc-item"><span class="toc-num">02</span>What's on Each Partner Card</div>
+      <div class="toc-item"><span class="toc-num">06</span>INR Number Formatting</div>
+      <div class="toc-item"><span class="toc-num">03</span>Churn Colour Coding</div>
+      <div class="toc-item"><span class="toc-num">07</span>Filters &amp; Sort Options</div>
+      <div class="toc-item"><span class="toc-num">04</span>Revenue Trend Arrows</div>
+      <div class="toc-item"><span class="toc-num">08</span>Performance &amp; Improvements</div>
+    </div>
+  </div>
+
+  <!-- S1 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">01</div>
+      <h2>The Four Swimlanes — Lane Assignment Logic</h2>
+      <span class="section-file">kanban_pipeline.py → LANES config</span>
+    </div>
+    <p>Every partner lands in exactly one of four lanes. The lane is determined entirely by the partner's <strong>health_segment</strong> value — which itself is computed by the ML engine's weighted health score formula (covered in the Partner 360 document). The Kanban does not re-compute this value; it reads it from the pre-computed partner features matrix.</p>
+
+    <div class="kanban-demo">
+      <div class="lane">
+        <div class="lane-header champion">🏆 Champion</div>
+        <div class="lane-meta">Segment = "Champion"<br/>Color: #22c55e</div>
+        <div class="demo-card">
+          <div class="demo-card-name">Sharma Telecom</div>
+          <div class="demo-card-line">📍 Maharashtra • 👑 VIP</div>
+          <div class="demo-card-line">Rev Trend: <span style="color:#22c55e">▲ 28%</span></div>
+          <div class="demo-card-line">Last Order: <span>3d ago</span></div>
+          <div class="demo-card-line">Churn: <span style="color:#22c55e">12%</span> &nbsp;|&nbsp; Credit: <span style="color:#22c55e">Low</span></div>
+          <div class="demo-card-line">At Risk: <span>—</span></div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-header healthy">✅ Healthy</div>
+        <div class="lane-meta">Segment = "Healthy"<br/>Color: #3b82f6</div>
+        <div class="demo-card">
+          <div class="demo-card-name">Rajan Electronics</div>
+          <div class="demo-card-line">📍 Gujarat • 📈 Growth</div>
+          <div class="demo-card-line">Rev Trend: <span style="color:#94a3b8">→ 4%</span></div>
+          <div class="demo-card-line">Last Order: <span>2w ago</span></div>
+          <div class="demo-card-line">Churn: <span style="color:#3b82f6">28%</span> &nbsp;|&nbsp; Credit: <span style="color:#f59e0b">Medium</span></div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-header at-risk">⚠️ At Risk</div>
+        <div class="lane-meta">Segment = "At Risk"<br/>Color: #f59e0b</div>
+        <div class="demo-card">
+          <div class="demo-card-name">Verma Distributors</div>
+          <div class="demo-card-line">📍 Rajasthan • 🔄 Win-Back</div>
+          <div class="demo-card-line">Rev Trend: <span style="color:#f59e0b">▼ 22%</span></div>
+          <div class="demo-card-line">Last Order: <span>2mo ago</span></div>
+          <div class="demo-card-line">Churn: <span style="color:#f59e0b">58%</span> &nbsp;|&nbsp; Credit: <span style="color:#f59e0b">Medium</span></div>
+          <div class="demo-card-line">⚠️ At Risk: <span style="color:#ef4444">₹1.2L</span></div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-header critical">🔴 Critical</div>
+        <div class="lane-meta">Segment = "Critical"<br/>Color: #ef4444</div>
+        <div class="demo-card">
+          <div class="demo-card-name">Patel Trading Co.</div>
+          <div class="demo-card-line">📍 UP • ⚠️ At-Risk cluster</div>
+          <div class="demo-card-line">Rev Trend: <span style="color:#ef4444">▼ 68%</span></div>
+          <div class="demo-card-line">Last Order: <span>4mo ago</span></div>
+          <div class="demo-card-line">Churn: <span style="color:#ef4444">84%</span> &nbsp;|&nbsp; Credit: <span style="color:#ef4444">High</span></div>
+          <div class="demo-card-line">⚠️ At Risk: <span style="color:#ef4444">₹3.8L</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Lane</th><th>Health Segment</th><th>Health Score Range</th><th>What it means operationally</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill pill-green">🏆 Champion</span></td><td>Champion</td><td>≥ 0.80 AND rev drop &lt; 10%</td><td>No action needed. Maintain relationship. Candidate for strategic expansion.</td></tr>
+          <tr><td><span class="pill pill-blue">✅ Healthy</span></td><td>Healthy</td><td>≥ 0.60</td><td>Monitor quarterly. Good cross-sell candidate. Not urgent.</td></tr>
+          <tr><td><span class="pill pill-amber">⚠️ At Risk</span></td><td>At Risk</td><td>≥ 0.40</td><td>Plan visit within 2 weeks. Investigate root cause of decline.</td></tr>
+          <tr><td><span class="pill pill-red">🔴 Critical</span></td><td>Critical</td><td>&lt; 0.40</td><td>Immediate call. Revenue may already be at zero. Escalate to area manager.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Lane Header Metrics</h3>
+    <p>Each lane header shows three numbers — not just a partner count:</p>
+    <div class="formula"><span class="var">lane_count</span>     = number of partners currently in this lane
+<span class="var">lane_value</span>     = sum of recent_90_revenue for all partners in this lane
+<span class="var">lane_at_risk</span>   = sum of expected_revenue_at_risk_90d for all partners in this lane
+
+<span class="comment">The "At Risk Revenue" row only appears if > ₹0 — so Champion and Healthy lanes</span>
+<span class="comment">typically show only the total pipeline value, not a red risk number.</span></div>
+    <p>This lane-level summary immediately answers the most important sales management question without even opening a single card: <em>"How much revenue is sitting in risky hands?"</em></p>
+  </div>
+
+  <!-- S2 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">02</div>
+      <h2>What's on Each Partner Card — Field by Field</h2>
+      <span class="section-file">kanban_pipeline.py → render() card loop</span>
+    </div>
+    <p>Each partner appears as an expandable card inside their lane. The card is designed to show the 6 data points a rep actually needs before making a call — without overwhelming them.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Card Row</th><th>Data Field</th><th>How it's shown</th><th>Why this field?</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Header</strong></td>
+            <td>Company name + 90d revenue</td>
+            <td>Bold title of the expander: "Sharma Telecom — ₹4.2L"</td>
+            <td>Lets a manager scan hundreds of partners by name and immediately know the revenue weight</td>
+          </tr>
+          <tr>
+            <td><strong>Row 1</strong></td>
+            <td>State + Cluster Badge</td>
+            <td>📍 Maharashtra · 👑 VIP</td>
+            <td>Cluster badge tells you which segment archetype this partner is, without opening partner 360</td>
+          </tr>
+          <tr>
+            <td><strong>Row 2</strong></td>
+            <td>Revenue Trend + Last Order Date</td>
+            <td>▼ 22% (amber) | 2mo ago</td>
+            <td>Trend + recency together reveal the "how bad is it and when did it start?" story</td>
+          </tr>
+          <tr>
+            <td><strong>Row 3</strong></td>
+            <td>Churn probability + Credit risk band</td>
+            <td>Churn: 58% (coloured) | Credit: Medium (coloured)</td>
+            <td>Two of the most actionable signals. High churn = retention call. High credit = collections call.</td>
+          </tr>
+          <tr>
+            <td><strong>Row 4</strong></td>
+            <td>Revenue at Risk (90d) + Cluster type</td>
+            <td>⚠️ At Risk: ₹1.2L | Cluster: Growth</td>
+            <td>Revenue at risk converts probability into money — the only number that makes management act</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Cluster Badges — The Mapping</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Keyword in cluster_label</th><th>Badge shown on card</th></tr></thead>
+        <tbody>
+          <tr><td>contains "vip"</td><td>👑 VIP</td></tr>
+          <tr><td>contains "champion"</td><td>🏆 Champion</td></tr>
+          <tr><td>contains "growth"</td><td>📈 Growth</td></tr>
+          <tr><td>contains "emerging"</td><td>🌱 Emerging</td></tr>
+          <tr><td>contains "dormant"</td><td>💤 Dormant</td></tr>
+          <tr><td>contains "at-risk"</td><td>⚠️ At-Risk</td></tr>
+          <tr><td>contains "niche"</td><td>🎯 Niche</td></tr>
+          <tr><td>contains "outlier"</td><td>🔍 Outlier</td></tr>
+          <tr><td>any other label</td><td>🔷 [full label text]</td></tr>
+          <tr><td>empty / "Unknown"</td><td>(no badge shown)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The keyword matching is case-insensitive. So "Strategic Accounts — VIP" still shows 👑 VIP as its badge because "vip" is found in the label.</p>
+
+    <h3>Card Performance Cap</h3>
+    <p>Each lane shows a maximum of <strong>50 cards</strong>. If a lane has more partners, a caption at the bottom says "Showing top 50 of N — use filters to narrow down." The cap is for browser performance: rendering 200+ expandable cards with embedded HTML causes lag in Streamlit. 50 per lane (× 4 lanes = 200 total) is the empirically safe limit on typical laptop hardware.</p>
+  </div>
+
+  <!-- S3 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">03</div>
+      <h2>Churn Colour Coding — The Visual Risk Signal</h2>
+      <span class="section-file">kanban_pipeline.py → _churn_border_color()</span>
+    </div>
+    <p>The churn probability value is shown as both a percentage and a colour — so a manager scanning cards doesn't need to read numbers to spot high-risk partners. The colour is also applied to the card's left border, making the risk visible even before the card is expanded.</p>
+
+    <div class="formula"><span class="comment">Churn probability → CSS border/text colour mapping:</span>
+
+churn ≥ 0.70  →  <span style="color:#ef4444">#ef4444 (red)</span>     — Critical risk: call immediately
+churn ≥ 0.50  →  <span style="color:#f59e0b">#f59e0b (amber)</span>   — High risk: schedule this week
+churn ≥ 0.30  →  <span style="color:#3b82f6">#3b82f6 (blue)</span>    — Watch list: next regular visit
+churn &lt; 0.30  →  <span style="color:#22c55e">#22c55e (green)</span>   — Stable: no action needed</div>
+
+    <div class="churn-swatches">
+      <div class="swatch"><div class="swatch-dot" style="background:#22c55e"></div> &lt; 30% — Stable</div>
+      <div class="swatch"><div class="swatch-dot" style="background:#3b82f6"></div> 30–50% — Watch</div>
+      <div class="swatch"><div class="swatch-dot" style="background:#f59e0b"></div> 50–70% — High Risk</div>
+      <div class="swatch"><div class="swatch-dot" style="background:#ef4444"></div> ≥ 70% — Critical</div>
+    </div>
+
+    <div class="callout why">
+      <div class="callout-icon">🎨</div>
+      <div class="callout-body">
+        <strong>Why four colours and not a simple red/green?</strong>
+        In a typical B2B distribution network, 30–50% of partners will have a churn probability between 30–65% at any given time — they are neither obviously fine nor obviously at risk. A red/green binary would either mark everything as red (panic) or everything as green (complacency). The four-colour scale lets managers triage: respond to red today, plan for amber this week, check blue next visit, ignore green.
+      </div>
+    </div>
+
+    <h3>Credit Risk Band Colours</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Credit Band</th><th>Colour</th><th>Hex Code</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Low</strong></td><td><span class="pill pill-green">●</span>Green</td><td><code>#22c55e</code></td><td>Payments on time. Safe to extend credit.</td></tr>
+          <tr><td><strong>Medium</strong></td><td><span class="pill pill-amber">●</span>Amber</td><td><code>#f59e0b</code></td><td>Some delay patterns. Monitor actively.</td></tr>
+          <tr><td><strong>High</strong></td><td><span class="pill pill-red">●</span>Red</td><td><code>#ef4444</code></td><td>Payment delays confirmed. Tighten credit terms.</td></tr>
+          <tr><td><strong>Critical</strong></td><td>Dark Red</td><td><code>#dc2626</code></td><td>Significant overdue. Escalate to finance team immediately.</td></tr>
+          <tr><td><strong>N/A</strong></td><td>Grey</td><td><code>#94a3b8</code></td><td>Insufficient data for credit scoring.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- S4 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">04</div>
+      <h2>Revenue Trend Arrows — Reading Growth vs Decline</h2>
+      <span class="section-file">kanban_pipeline.py → _trend_arrow() + _last_seen()</span>
+    </div>
+    <p>The revenue trend arrow converts <code>revenue_drop_pct</code> into a visual signal. Note that "drop percent" is used — so a positive value means the partner is declining, a negative value means they're actually growing.</p>
+    <div class="formula"><span class="var">revenue_drop_pct</span> value → Arrow display logic:
+
+drop ≥ 30        →  <span style="color:#ef4444">▼ 30%  (red)</span>      "Sharp decline"
+drop ≥ 10        →  <span style="color:#f59e0b">▼ 15%  (amber)</span>    "Moderate decline"
+drop ≤ −10       →  <span style="color:#22c55e">▲ 12%  (green)</span>    "Growing" (negative drop = growth)
+−10 &lt; drop &lt; 10  →  → 4%   (grey)      "Stable / minimal change"
+
+<span class="comment">Example: partner grew 28% → revenue_drop_pct = -28 → shown as ▲ 28% (green)</span>
+<span class="comment">Example: partner fell 45% → revenue_drop_pct = +45 → shown as ▼ 45% (red)</span></div>
+
+    <h3>Last Seen (Recency) Display</h3>
+    <p>Raw recency_days is converted to a human-readable string — no one reads "recency_days = 47" and feels urgency, but "2mo ago" is immediately understood as a problem:</p>
+    <div class="formula"><span class="var">recency_days</span> = 0   →  "Today"
+recency_days = 1   →  "Yesterday"
+recency_days ≤ 7   →  "{d}d ago"          e.g. "5d ago"
+recency_days ≤ 30  →  "{d÷7}w ago"        e.g. "2w ago"
+recency_days ≤ 365 →  "{d÷30}mo ago"      e.g. "3mo ago"
+recency_days > 365 →  "{d÷365}y ago"      e.g. "1y ago"</div>
+  </div>
+
+  <!-- S5 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">05</div>
+      <h2>Revenue at Risk — Calculation and Fallback</h2>
+      <span class="section-file">kanban_pipeline.py → _build_kanban_df() fallback logic</span>
+    </div>
+    <p>This is the most important metric on the board from a business standpoint. Revenue at risk is not just "this partner's revenue" — it is <strong>probability-weighted</strong> revenue loss. A partner with ₹10L in revenue and 80% churn probability carries ₹8L at risk. That is the number that should drive management attention.</p>
+
+    <h3>Primary Source</h3>
+    <p>When the dashboard runs in full scoring mode, the field <code>expected_revenue_at_risk_90d</code> is pre-computed by the churn scoring engine using the same formula below. The Kanban simply reads this value.</p>
+
+    <h3>Fallback Formula — Inline Computation</h3>
+    <p>In fast mode (<code>FAST_MODE=true</code>), full churn scoring is skipped to save load time. This means <code>expected_revenue_at_risk_90d</code> arrives as zero for most partners — even though churn_probability is computed. The Kanban detects this inconsistency and fills it in:</p>
+    <div class="formula"><span class="comment">Detect inconsistency: rev_at_risk == 0 AND churn_probability > 0</span>
+<span class="var">fallback_mask</span> = (expected_revenue_at_risk_90d == 0) AND (churn_probability > 0)
+
+<span class="comment">Apply fallback formula (same as churn scoring engine):</span>
+<span class="var">expected_revenue_at_risk_90d</span> = churn_probability × recent_90_revenue
+
+<span class="comment">Examples:</span>
+<span class="comment">  Churn = 80%, Revenue = ₹5L → At Risk = ₹4.0L</span>
+<span class="comment">  Churn = 45%, Revenue = ₹2L → At Risk = ₹0.9L</span>
+<span class="comment">  Churn = 10%, Revenue = ₹8L → At Risk = ₹0.8L</span></div>
+
+    <div class="callout tip">
+      <div class="callout-icon">✅</div>
+      <div class="callout-body">
+        <strong>Why is this called probability-weighted loss — not worst-case?</strong>
+        If we showed worst-case (i.e., the full revenue of every at-risk partner), the total "revenue at risk" metric would always look catastrophic. A partner with 5% churn and ₹20L revenue would contribute ₹20L to the risk figure, which is misleading — their probability-adjusted risk is only ₹1L. By using churn_probability × revenue, we show the <em>expected</em> monetary loss if the model's predictions are correct on average across the whole portfolio.
+      </div>
+    </div>
+
+    <h3>Board-Level Summary Metrics</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>Formula</th><th>Shown where</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Partners in Pipeline</strong></td><td>count of all partners after filters</td><td>Top summary bar</td></tr>
+          <tr><td><strong>High Churn Risk</strong></td><td>count(churn_probability ≥ 0.65)</td><td>Top bar + "X% of Pipeline" delta</td></tr>
+          <tr><td><strong>Critical Accounts</strong></td><td>count(health_segment == "Critical")</td><td>Top summary bar</td></tr>
+          <tr><td><strong>90d Pipeline Value</strong></td><td>sum(recent_90_revenue)</td><td>Top summary bar</td></tr>
+          <tr><td><strong>⚠️ Revenue at Risk</strong></td><td>sum(expected_revenue_at_risk_90d) for At Risk + Critical lanes only</td><td>Top summary bar — most important</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- S6 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">06</div>
+      <h2>Indian Number Formatting — Why We Built a Custom Function</h2>
+      <span class="section-file">kanban_pipeline.py → _fmt_inr()</span>
+    </div>
+    <p>Python's built-in number formatting produces "₹1,234,567" — which is the international format. Indian business uses a different system: ₹12.3L (lakhs) and ₹1.2Cr (crore). Every revenue figure on the dashboard uses this custom formatter.</p>
+
+    <div class="inr-scale">
+      <div class="inr-box"><div class="inr-input">₹750</div><div class="inr-output">₹750</div></div>
+      <div class="inr-box"><div class="inr-input">₹45,000</div><div class="inr-output">₹45K</div></div>
+      <div class="inr-box"><div class="inr-input">₹4,50,000</div><div class="inr-output">₹4.5L</div></div>
+      <div class="inr-box"><div class="inr-input">₹1,20,00,000</div><div class="inr-output">₹1.2Cr</div></div>
+    </div>
+
+    <div class="formula"><span class="comment">_fmt_inr() logic:</span>
+
+value ≥ 1,00,00,000  →  f"₹{value / 1_00_00_000:.1f}Cr"   <span class="comment">(crores)</span>
+value ≥ 1,00,000     →  f"₹{value / 1_00_000:.1f}L"         <span class="comment">(lakhs)</span>
+value ≥ 1,000        →  f"₹{value / 1_000:.0f}K"            <span class="comment">(thousands)</span>
+otherwise            →  f"₹{value:.0f}"                      <span class="comment">(absolute)</span>
+
+<span class="comment">Applied consistently across: card headers, lane total, board summary, at-risk values</span></div>
+  </div>
+
+  <!-- S7 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">07</div>
+      <h2>Filters and Sort Options</h2>
+      <span class="section-file">kanban_pipeline.py → sidebar filters + sort</span>
+    </div>
+    <p>Five filter/sort controls are available in the sidebar and on the main page. They all apply before the board renders — so if you filter to "Maharashtra + High Credit Risk" and sort by churn, every lane shows only the matching partners in churn order.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Control</th><th>Type</th><th>What it does</th><th>Default</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Filter by State</strong></td>
+            <td>Multi-select</td>
+            <td>Shows partners from selected states only. Dynamically populated from data. Empty = all states.</td>
+            <td>All states</td>
+          </tr>
+          <tr>
+            <td><strong>Filter by Credit Risk</strong></td>
+            <td>Dropdown</td>
+            <td>Restrict to Low / Medium / High / Critical credit bands. "All" shows everyone.</td>
+            <td>All</td>
+          </tr>
+          <tr>
+            <td><strong>Sort Cards by</strong></td>
+            <td>Dropdown</td>
+            <td>Revenue (High→Low) / Churn Risk (High→Low) / Revenue Drop (High→Low) / Name (A→Z)</td>
+            <td>Revenue (High→Low)</td>
+          </tr>
+          <tr>
+            <td><strong>Min 90d Revenue</strong></td>
+            <td>Number input</td>
+            <td>Hides partners below a revenue floor. e.g., ₹1,00,000 removes microdistributors from view.</td>
+            <td>₹0 (no filter)</td>
+          </tr>
+          <tr>
+            <td><strong>Search by Name</strong></td>
+            <td>Text search</td>
+            <td>Case-insensitive substring match on company_name. Filters all lanes simultaneously.</td>
+            <td>None</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>All filters are additive (AND logic)</strong>
+        If you pick "Maharashtra" AND "High credit risk" AND "min revenue ₹50,000", you see only partners that satisfy all three conditions simultaneously. This is intentional — a sales manager doing a focused session (say, collections in Maharashtra) needs to see exactly that slice, not everything that matches any one condition.
+      </div>
+    </div>
+  </div>
+
+  <!-- S8 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">08</div>
+      <h2>Performance Design &amp; Improvements</h2>
+    </div>
+
+    <h3>Caching Strategy</h3>
+    <div class="formula"><span class="comment">@st.cache_data(ttl=300, show_spinner=False)</span>
+<span class="comment">def _build_kanban_df(_pf_df): ...</span>
+
+<span class="comment">The heavy data slicing (selecting only needed columns, filling defaults,</span>
+<span class="comment">computing fallback revenue-at-risk) runs once and is cached for 5 minutes.</span>
+<span class="comment">All subsequent filter/sort operations run on the cached slice — not the full matrix.</span>
+
+<span class="comment">Result: first load takes ~1–2 seconds. Subsequent filter changes: &lt;100ms.</span></div>
+
+    <h3>Skeleton Loader</h3>
+    <p>While clustering and partner features are being loaded, the page shows a placeholder UI (skeleton loader) instead of a blank screen. This makes the dashboard feel responsive even when the ML engine is running — identical to how modern banking apps show empty card outlines while data loads.</p>
+
+    <h3>Improvements to Make Next</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Improvement</th><th>Current Limitation</th><th>Expected Impact</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><strong>Drag-and-drop lane movement</strong></td>
+            <td>Partners can only move lanes when the ML engine re-scores them. No manual override.</td>
+            <td>Sales manager can manually move a partner to a different lane (e.g., "we know this one's fine — move to Healthy") with an override log.</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><strong>Click-to-open Partner 360</strong></td>
+            <td>Cards show data but don't link directly to the partner's full 360 view</td>
+            <td>One click from the board opens that partner's full detail page. Saves 30–60 seconds of navigation per partner.</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><strong>Export filtered view</strong></td>
+            <td>No way to export a list of "At Risk partners in Maharashtra sorted by churn"</td>
+            <td>One-click Excel export of the currently filtered board. Ideal for area manager email briefings.</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><strong>Lane change history</strong></td>
+            <td>No record of when a partner moved from Healthy to At Risk</td>
+            <td>Lane change log enables trend analysis: "How many partners moved from At Risk to Critical in the last 30 days?"</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Business Impact Summary</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Scenario</th><th>Before Kanban</th><th>After Kanban</th></tr></thead>
+        <tbody>
+          <tr><td>Monday morning review</td><td>Area manager opens a spreadsheet, manually filters by state, looks for drop % columns</td><td>Opens the board, filters to their state, sees Critical lane immediately. Revenue at risk is front and centre.</td></tr>
+          <tr><td>Collections prioritisation</td><td>Finance team sorts by outstanding amount — no correlation to churn or likelihood of recovery</td><td>Filter by High/Critical credit risk, sort by revenue at risk. The hardest-to-recover AND most-at-risk partners surface first.</td></tr>
+          <tr><td>Weekly team call</td><td>"How many partners are at risk this week?" — answer requires manual counting</td><td>Top bar shows it: "47 High Churn Risk partners, ₹8.3L at risk in At Risk + Critical lanes"</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <strong>Revenue Pipeline Kanban Tracker — Technical Brief</strong> &nbsp;·&nbsp; Module 03 of 08 &nbsp;·&nbsp; April 2026<br/>
+  Files: kanban_pipeline.py · partner features matrix (df_partner_features) · churn_credit_stub_mixin.py (revenue at risk source)<br/>
+  Data refresh: @st.cache_data TTL=300s · Lane assignment: health_segment from ML engine · Cards capped at 50/lane for performance
+</div>
+
+</body>
+</html>

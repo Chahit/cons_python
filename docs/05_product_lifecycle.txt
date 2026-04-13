@@ -1,0 +1,210 @@
+================================================================================
+MODULE: PRODUCT LIFECYCLE INTELLIGENCE
+FILE:   frontend/tabs/product_lifecycle.py
+ENGINE: ml_engine/product_lifecycle_mixin.py
+================================================================================
+
+PURPOSE
+-------
+Product Lifecycle Intelligence tracks where each product GROUP sits on the
+standard business lifecycle curve (Introduction → Growth → Maturity → Decline)
+and proactively flags:
+  - Fast-growing products to stock up on and promote
+  - Declining products approaching End-of-Life (EOL)
+  - Cannibalization — when one product is rising while a close substitute falls
+  - Revenue trajectory for every product group
+
+This prevents the common scenario of over-ordering a product that is quietly
+declining while under-investing in one that is surging.
+
+
+WHAT IT SHOWS
+-------------
+1. Lifecycle Stage Summary   - Count of products in each stage
+2. Velocity Leaderboard      - Top growing and declining products
+3. Growth Stage Chart        - Bar chart of velocity scores
+4. Cannibalization Pairs     - A is rising while B (its substitute) is falling
+5. End-of-Life Predictions   - Products predicted to go to zero revenue
+6. Product Trend Drilldown   - Monthly revenue sparkline per product
+7. Urgency Flags             - Critical / Warning / Watch labels
+
+
+ALGORITHMS & FORMULAS USED
+---------------------------
+
+A. DATA LOADING (_load_product_monthly_revenue)
+------------------------------------------------
+Aggregates transaction data by PRODUCT GROUP per month:
+  SELECT group_name, DATE_TRUNC('month', date), SUM(net_amt), COUNT(DISTINCT party_id)
+  FROM transactions
+  GROUP BY group_name, month
+
+Every product group gets a time series of:
+  monthly_revenue      - net sales revenue per month
+  buyer_count          - distinct partners buying that month
+  transaction_count    - number of invoices
+
+Lookback: configurable (default 18 months)
+
+
+B. GROWTH VELOCITY SCORING (_compute_growth_velocity)
+------------------------------------------------------
+Four velocity signals are computed per product:
+
+B1. Linear Regression Slope (Revenue Trend)
+  Using month index as X (0, 1, 2, ..., N-1) and monthly_revenue as Y:
+    slope, intercept = numpy.polyfit(X, Y, deg=1)
+  
+  slope_normalized = slope / mean_revenue
+  → Positive = growing. Negative = declining.
+  → Normalized by mean ensures fair comparison across products at different scales.
+
+B2. 3-Month vs 3-Month-Prior Growth Rate
+  recent_3m   = avg revenue in last 3 months
+  prior_3m    = avg revenue in 3 months before that
+  growth_rate = (recent_3m - prior_3m) / prior_3m   [clipped at ±5.0]
+
+B3. Buyer Count Trend
+  Same regression applied to buyer_count time series
+  buyer_slope_norm = slope_of_buyer_count / mean_buyer_count
+
+B4. Transaction Intensity Trend
+  Same regression applied to transaction_count time series
+  txn_slope_norm = slope_of_transaction_count / mean_transaction_count
+
+COMBINED VELOCITY SCORE:
+  velocity_score = (0.40 × slope_normalized)
+                 + (0.35 × growth_rate)
+                 + (0.15 × buyer_slope_norm)
+                 + (0.10 × txn_slope_norm)
+
+Final score normalized to [0, 1] across all products and then
+converted to a symmetric scale where:
+  > 0.6  → Strong growth
+  0.4-0.6 → Stable
+  < 0.4  → Declining
+
+LIFECYCLE STAGE CLASSIFICATION:
+  Based on velocity_score and revenue level:
+  - "Star"     : velocity > 0.65, revenue above median → fast growth, high revenue
+  - "Growth"   : velocity > 0.55 → growing
+  - "Mature"   : velocity 0.40-0.55, stable revenue
+  - "Declining": velocity < 0.40 → trend going negative
+  - "Niche"    : low buyer count (<5) regardless of velocity
+
+
+C. CANNIBALIZATION DETECTION (_detect_cannibalization)
+-------------------------------------------------------
+Algorithm:
+  1. Take all products classified as "Growth" stage (velocity > 0.55)
+  2. Take all products classified as "Declining" stage (velocity < 0.40)
+  3. Cross-reference with MBA association rules (df_assoc_rules)
+  4. Flag pairs (A, B) where:
+        A is in "Growth"   AND
+        B is in "Declining" AND
+        A and B have an association rule A ↔ B with lift > 1.5
+
+Why association rules? If product A and B are frequently bought together,
+they serve similar or complementary use cases. If A is growing while B is
+declining among the SAME customer base, A is likely replacing B.
+
+Why this matters:
+  - Stop re-ordering product B if A is replacing it
+  - Redirect remaining B inventory via liquidation (connects to Inventory tab)
+  - Use B's decline as a signal to negotiate better terms with B's supplier
+
+Cannibalization flag output:
+  growing_product   - the one rising
+  declining_product - the one being displaced
+  association_lift  - strength of their product relationship
+  velocity_gap      - how far apart their scores are
+
+
+D. END-OF-LIFE PREDICTION (_predict_end_of_life)
+-------------------------------------------------
+For every product in "Declining" stage, EOL is predicted using 4 signals:
+
+D1. Revenue Extrapolation
+  Using the fitted regression line:
+    months_to_zero = -intercept / slope   (when the trend line crosses zero)
+  
+  If slope >= 0 or months_to_zero > 36: skip (not declining fast enough)
+
+D2. Stock Age Penalty
+  From view_ageing_stock: if this product has old unsold stock:
+    age_factor = max_age_days / 180   (normalized: 180 days = max severity)
+  Higher stock age → accelerates predicted EOL
+
+D3. Buyer Attrition
+  buyer_count in last 3 months vs same period 12 months ago:
+    attrition_rate = 1 - (current_buyers / peak_buyers)
+  High attrition → fewer partners carrying it → accelerating decline
+
+D4. Peak Distance
+  How far below the product's all-time peak revenue is it today?
+  peak_distance = (peak_revenue - current_revenue) / peak_revenue
+
+COMPOSITE EOL SCORE:
+  eol_urgency = (0.45 × revenue_slope_severity)
+              + (0.25 × buyer_attrition)
+              + (0.20 × peak_distance)
+              + (0.10 × age_factor)
+
+Estimated months to EOL:
+  = months_to_zero × (1 - 0.30 × eol_urgency)
+  (Higher urgency shortens the estimate)
+
+Urgency Labels:
+  eol_months < 3   → "Critical" (act now)
+  eol_months < 9   → "Warning" (plan phase-out)
+  eol_months < 18  → "Watch" (monitor closely)
+
+
+E. PRODUCT TREND DRILLDOWN (get_product_trend)
+-----------------------------------------------
+Returns the raw monthly revenue time series for a selected product.
+Plotted as a line chart with:
+  - Actual revenue per month (bars)
+  - Trend regression line overlay (dashed)
+  - Velocity score annotation
+  - Lifecycle stage badge
+
+
+DATA FLOW
+---------
+  PostgreSQL → transactions_dsr + transactions_dsr_products + master_products
+             → _load_product_monthly_revenue (monthly pivot by group_name)
+             → _compute_growth_velocity (regression + scoring)
+             → _detect_cannibalization (cross with df_assoc_rules)
+             → _predict_end_of_life (multi-factor EOL timeline)
+             → Results cached in engine._lifecycle_velocity, _lifecycle_cannibal, _lifecycle_eol
+             → product_lifecycle.py renders all three datasets
+
+
+IMPROVEMENTS / SUGGESTIONS
+---------------------------
+1. PROPHET / TEMPORAL FUSION TRANSFORMER: Replace linear regression with
+   Meta's Prophet or a deep learning forecaster (TFT) for better handling
+   of seasonality, holidays, and sudden demand shocks.
+
+2. COMPETITIVE SUBSTITUTION DATA: If a competitor launches a similar product,
+   flag it as an external cannibalization risk (not just internal).
+
+3. PRODUCT PROFITABILITY OVERLAY: Combine with margin data. A declining product
+   with 35% margin is worth fighting for more than a growing one at 5%.
+
+4. CUSTOMER COHORT ANALYSIS PER PRODUCT: Which type of partner buys this product?
+   If only "Critical" health partners buy it, the product may decline further
+   as those partners churn.
+
+5. NEW PRODUCT INTRODUCTION TRACKING: Flag products in their first 6 months
+   separately — they should not be penalized for having low revenue history.
+
+6. SUPPLY CHAIN INTEGRATION: Connect EOL predictions to purchase orders.
+   Automatically suggest "Do not reorder" for products in Critical EOL stage.
+
+7. CROSS-ELASTICITY MATRIX: Compute price cross-elasticity between product pairs.
+   Confirms whether cannibalization is price-driven or feature-driven.
+
+8. MLflow EXPERIMENT TRACKING: Log each lifecycle computation run with thresholds
+   and results so analysts can compare different sensitivity settings.

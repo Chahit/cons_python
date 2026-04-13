@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Market Basket Analysis — Technical Brief</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root {
+    --primary: #0891b2; --primary-light: #ecfeff; --primary-dark: #155e75;
+    --green: #059669;   --green-light: #d1fae5;
+    --amber: #d97706;   --amber-light: #fef3c7;
+    --red: #dc2626;     --red-light: #fee2e2;
+    --purple: #7c3aed;  --purple-light: #ede9fe;
+    --teal: #0d9488;    --teal-light: #ccfbf1;
+    --text: #111827; --text-secondary: #4b5563; --text-muted: #9ca3af;
+    --border: #e5e7eb; --bg: #f9fafb; --card: #ffffff; --code-bg: #1e293b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.75; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
+
+  .cover { background: linear-gradient(135deg, #083344 0%, #0e7490 55%, #0891b2 100%); color: #fff; padding: 72px 80px 60px; }
+  .cover-badge { display: inline-block; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 20px; padding: 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 24px; }
+  .cover h1 { font-size: 42px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.15; margin-bottom: 14px; }
+  .cover h1 span { color: #a5f3fc; }
+  .cover .subtitle { font-size: 16px; color: #cffafe; max-width: 620px; margin-bottom: 40px; line-height: 1.6; }
+  .cover-meta { display: flex; gap: 32px; flex-wrap: wrap; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 28px; }
+  .cover-meta-item { font-size: 12px; color: #a5f3fc; }
+  .cover-meta-item strong { display: block; color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+
+  .container { max-width: 900px; margin: 0 auto; padding: 56px 40px; }
+  .intro-box { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 10px 10px 0; padding: 20px 24px; margin-bottom: 48px; font-size: 14.5px; color: var(--primary-dark); line-height: 1.7; }
+
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 48px; }
+  .toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; margin-bottom: 16px; }
+  .toc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; }
+  .toc-item { font-size: 13.5px; color: var(--primary); font-weight: 500; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .toc-num { color: var(--text-muted); font-weight: 400; margin-right: 6px; font-size: 12px; }
+
+  .section { margin-bottom: 60px; }
+  .section-header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 2px solid var(--border); }
+  .section-num { background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .section h2 { font-size: 21px; font-weight: 700; color: var(--text); }
+  .section-file { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--code-bg); color: #7dd3fc; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
+
+  h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 26px 0 10px; }
+  p { margin-bottom: 14px; color: var(--text-secondary); font-size: 14.5px; }
+
+  .formula { background: var(--code-bg); border-radius: 10px; padding: 18px 22px; margin: 16px 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #e2e8f0; line-height: 1.9; overflow-x: auto; white-space: pre; }
+  .formula .comment { color: #64748b; }
+  .formula .highlight { color: #34d399; }
+  .formula .var { color: #93c5fd; }
+  .formula .orange { color: #fb923c; }
+
+  .callout { border-radius: 10px; padding: 16px 20px; margin: 18px 0; font-size: 14px; display: flex; gap: 12px; align-items: flex-start; }
+  .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.5; }
+  .callout-body strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+  .callout.why  { background: var(--primary-light); color: var(--primary-dark); }
+  .callout.tip  { background: var(--green-light); color: #064e3b; }
+  .callout.alt  { background: var(--amber-light); color: #78350f; }
+  .callout.info { background: var(--purple-light); color: #4c1d95; }
+  .callout.teal { background: var(--teal-light); color: #134e4a; }
+
+  .table-wrap { overflow-x: auto; margin: 18px 0; border-radius: 10px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead tr { background: #ecfeff; }
+  th { padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--primary-dark); border-bottom: 2px solid #a5f3fc; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f0fdfe; }
+  td code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; background: #ecfeff; padding: 1px 5px; border-radius: 3px; color: var(--primary); }
+  td strong { color: var(--text); font-weight: 600; }
+
+  /* KPI Cards */
+  .kpi-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 20px 0; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+  .kpi-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); margin-bottom: 6px; }
+  .kpi-val { font-size: 28px; font-weight: 700; color: var(--primary); line-height: 1; margin-bottom: 4px; }
+  .kpi-desc { font-size: 12.5px; color: var(--text-secondary); line-height: 1.4; }
+  .kpi-good { border-top: 3px solid var(--green); }
+  .kpi-warn { border-top: 3px solid var(--amber); }
+  .kpi-info { border-top: 3px solid var(--primary); }
+
+  /* Rule card demo */
+  .rule-example { background: #f0fdfe; border: 1px solid #a5f3fc; border-radius: 10px; padding: 20px 24px; margin: 20px 0; }
+  .rule-header { font-size: 13px; font-weight: 600; color: var(--primary-dark); margin-bottom: 14px; text-transform: uppercase; letter-spacing: 0.8px; }
+  .rule-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 10px 0; }
+  .rule-prod { background: var(--primary); color: #fff; padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 14px; }
+  .rule-arrow { font-size: 20px; color: var(--primary-dark); }
+  .rule-metrics { display: flex; gap: 16px; flex-wrap: wrap; }
+  .rule-metric { text-align: center; }
+  .rule-metric-val { font-size: 18px; font-weight: 700; color: var(--primary); }
+  .rule-metric-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); }
+
+  /* Script box */
+  .script-box { background: #f0fdf4; border: 1px solid #6ee7b7; border-radius: 10px; padding: 18px 22px; margin: 14px 0; }
+  .script-label { font-size: 11px; font-weight: 700; color: var(--green); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; }
+  .script-text { font-size: 14px; color: #1a3c2c; font-style: italic; line-height: 1.7; }
+
+  /* 3-tab visual */
+  .tabs-demo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 20px 0; }
+  .tab-card { border-radius: 10px; padding: 16px; border: 1px solid var(--border); background: var(--card); }
+  .tab-name { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+  .tab-sub { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+  .tab-algo { display: inline-block; margin-top: 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; padding: 2px 8px; border-radius: 10px; }
+  .tab-a1 { background: var(--primary-light); color: var(--primary-dark); }
+  .tab-a2 { background: var(--purple-light); color: #4c1d95; }
+  .tab-a3 { background: var(--teal-light); color: #134e4a; }
+
+  .pill { display: inline-block; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+  .pill-cyan   { background: var(--primary-light); color: var(--primary-dark); }
+  .pill-green  { background: var(--green-light); color: var(--green); }
+  .pill-amber  { background: var(--amber-light); color: var(--amber); }
+  .pill-purple { background: var(--purple-light); color: var(--purple); }
+  .env-tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--primary); background: var(--primary-light); padding: 2px 7px; border-radius: 4px; }
+
+  .footer { text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 12px; border-top: 1px solid var(--border); margin-top: 16px; }
+  .footer strong { color: var(--text-secondary); }
+
+  @media (max-width: 640px) {
+    .cover { padding: 40px 24px; } .cover h1 { font-size: 28px; }
+    .container { padding: 32px 20px; }
+    .toc-grid, .kpi-row, .tabs-demo { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-badge">Module 04 of 08 — Internal Technical Brief</div>
+  <h1>Market Basket<br/><span>Analysis Engine</span></h1>
+  <p class="subtitle">
+    How the system discovers which products are bought together, quantifies the strength of every pairing,
+    estimates its revenue and margin impact, and converts it into a real-time sales script —
+    covering FP-Growth, sequential and cross-category mining, and the bundle builder.
+  </p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><strong>Engine File</strong>associations_mixin.py</div>
+    <div class="cover-meta-item"><strong>UI File</strong>market_basket.py</div>
+    <div class="cover-meta-item"><strong>Algorithm</strong>FP-Growth + SQL Co-occurrence</div>
+    <div class="cover-meta-item"><strong>April 2026</strong>Version 2.4</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="intro-box">
+    Market Basket Analysis is the science of finding patterns in purchasing behaviour. Its core question is: <strong>"If a partner buys Product A, what else are they likely to buy?"</strong> The system mines these patterns from transaction history, ranks their reliability, estimates their revenue impact, and hands the rep a ready-to-deliver pitch script — all in under 2 seconds. This module also includes two advanced techniques: sequential pattern mining (what they buy <em>next</em>) and cross-category upgrade detection (when partners expand from one category to another).
+  </div>
+
+  <div class="toc">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-item"><span class="toc-num">01</span>Why Market Basket Analysis?</div>
+      <div class="toc-item"><span class="toc-num">06</span>Revenue &amp; Margin Gain Estimates</div>
+      <div class="toc-item"><span class="toc-num">02</span>The Three Core Metrics</div>
+      <div class="toc-item"><span class="toc-num">07</span>The Sales Script Generator</div>
+      <div class="toc-item"><span class="toc-num">03</span>How Association Rules Are Mined</div>
+      <div class="toc-item"><span class="toc-num">08</span>Sequential Pattern Mining</div>
+      <div class="toc-item"><span class="toc-num">04</span>Adaptive Min-Support Formula</div>
+      <div class="toc-item"><span class="toc-num">09</span>Cross-Category Upgrade Detection</div>
+      <div class="toc-item"><span class="toc-num">05</span>Rule Strength Classification</div>
+      <div class="toc-item"><span class="toc-num">10</span>Bundle Builder &amp; Improvements</div>
+    </div>
+  </div>
+
+  <!-- S1 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">01</div>
+      <h2>Why Market Basket Analysis?</h2>
+    </div>
+    <p>In physical retail, this technique is famous for discovering things like "people who buy nappies on Friday evenings also buy beer" — which led to stores placing those items near each other. In our B2B context, the insight is similar but commercially more valuable: <strong>"Partners who buy smartphones almost always also buy smartphone accessories in the same month."</strong></p>
+    <p>There are three ways this insight is used in the dashboard:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Use Case</th><th>Where it shows</th><th>Business value</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Global rules table</strong></td><td>Market Basket tab — all partner view</td><td>Gives the sales team a product catalogue with built-in cross-sell intelligence</td></tr>
+          <tr><td><strong>Partner-specific recommendations</strong></td><td>Market Basket + Partner 360</td><td>"This specific partner buys X but not Y — pitch Y" based on what their cluster peers do</td></tr>
+          <tr><td><strong>Affinity Bundle recommendations</strong></td><td>Recommendation Hub</td><td>High-confidence rules feed directly into the recommendation engine as primary actions</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout why">
+      <div class="callout-icon">🔍</div>
+      <div class="callout-body">
+        <strong>Why use mining rather than just asking the sales team what goes together?</strong>
+        Sales teams have strong intuition for their top 5–10 products. But a typical distribution catalogue has 50–200 products across 8–15 categories. No human can reliably track which of the 4,950+ possible product pairs actually co-occur frequently enough to be reliable cross-sell signals. Mining discovers patterns from data that human intuition would miss — especially in long-tail categories.
+      </div>
+    </div>
+  </div>
+
+  <!-- S2 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">02</div>
+      <h2>The Three Core Metrics — Support, Confidence, Lift</h2>
+    </div>
+    <p>Every association rule in the system is described by three numbers. Understanding these three is the key to reading the Market Basket table correctly.</p>
+
+    <div class="kpi-row">
+      <div class="kpi kpi-info">
+        <div class="kpi-label">Support</div>
+        <div class="kpi-val">N</div>
+        <div class="kpi-desc">How many baskets (partner-month combinations) contained this product pair. A raw count, not a percentage. Default minimum: 5 baskets.</div>
+      </div>
+      <div class="kpi kpi-good">
+        <div class="kpi-label">Confidence</div>
+        <div class="kpi-val">%</div>
+        <div class="kpi-desc">P(Buy B | Buy A). "Of all the times partners bought A, what % also bought B?" Default minimum: 15%. The primary reliability signal.</div>
+      </div>
+      <div class="kpi kpi-warn">
+        <div class="kpi-label">Lift</div>
+        <div class="kpi-val">×</div>
+        <div class="kpi-desc">How much better than random is this pairing? Lift = 1.0 means no affinity. Lift > 1.0 means genuinely correlated. Default minimum: 1.0×.</div>
+      </div>
+    </div>
+
+    <div class="formula"><span class="comment">The exact formulas computed in PostgreSQL:</span>
+
+<span class="var">confidence_a_to_b</span>  = times_bought_together ÷ support_a
+<span class="comment">  support_a = number of baskets containing Product A</span>
+
+<span class="var">confidence_b_to_a</span>  = times_bought_together ÷ support_b
+<span class="comment">  (stored for bidirectional analysis but not yet shown in UI)</span>
+
+<span class="var">lift_a_to_b</span>        = confidence_a_to_b ÷ (support_b ÷ total_baskets)
+<span class="comment">  = P(A∩B) ÷ (P(A) × P(B))  if baskets are the unit</span>
+
+<span class="comment">Where total_baskets = count(distinct partner_id + sale_month combinations)</span></div>
+
+    <h3>A Worked Example</h3>
+    <div class="rule-example">
+      <div class="rule-header">Example Rule: Smartphones → Accessories</div>
+      <div class="rule-row">
+        <div class="rule-prod">📱 Smartphones</div>
+        <div class="rule-arrow">→</div>
+        <div class="rule-prod">🎧 Accessories</div>
+        <div style="flex:1"></div>
+        <div class="rule-metrics">
+          <div class="rule-metric"><div class="rule-metric-val">87</div><div class="rule-metric-label">Times Together</div></div>
+          <div class="rule-metric"><div class="rule-metric-val">73%</div><div class="rule-metric-label">Confidence</div></div>
+          <div class="rule-metric"><div class="rule-metric-val">2.1×</div><div class="rule-metric-label">Lift</div></div>
+        </div>
+      </div>
+      <p style="margin-top:12px; font-size:13.5px; color:#155e75;">
+        <strong>Reading this:</strong> Of all the months when a partner bought Smartphones, 73% of those months they also bought Accessories. That's 2.1× more than you'd expect by chance (i.e., if buying accessories was unrelated to buying smartphones). This rule has high confidence and meaningful lift — it should be in every rep's pitch for a Smartphone-buying partner.</p>
+    </div>
+
+    <div class="callout alt">
+      <div class="callout-icon">⚖️</div>
+      <div class="callout-body">
+        <strong>Why does Lift matter if Confidence is already high?</strong>
+        A product bought by 95% of all partners (e.g., SIM cards) will show high confidence in almost every rule — not because of affinity, but because it's universally purchased. Lift corrects for this by dividing by P(B) — if B is bought 80% of the time anyway, a rule with 85% confidence is not impressive. But if B is bought only 20% of the time and your rule shows 60% confidence, Lift = 3.0 — that's a real signal.
+      </div>
+    </div>
+  </div>
+
+  <!-- S3 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">03</div>
+      <h2>How Association Rules Are Mined — The SQL Pipeline</h2>
+      <span class="section-file">associations_mixin.py → _load_associations_with_metrics()</span>
+    </div>
+    <p>The primary mining method uses a 5-step SQL query rather than a Python library. This is a deliberate design choice — it keeps the computation inside the database engine (which is already optimised for set operations) rather than pulling millions of rows into memory.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>SQL CTE Step</th><th>What it computes</th><th>Why this step?</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>max_date_cte</strong></td>
+            <td>Maximum approved transaction date</td>
+            <td>Ensures lookback window anchors on actual data, not today's date (handles data gaps gracefully)</td>
+          </tr>
+          <tr>
+            <td><strong>baskets</strong></td>
+            <td>Distinct (partner, month, product) triples within the lookback window</td>
+            <td>Defines what a "basket" is: one partner's purchases in one calendar month. Monthly granularity prevents count inflation from a partner buying the same product daily.</td>
+          </tr>
+          <tr>
+            <td><strong>basket_total / product_support</strong></td>
+            <td>Total basket count; per-product basket count</td>
+            <td>Denominators needed to compute confidence and lift accurately</td>
+          </tr>
+          <tr>
+            <td><strong>pair_support</strong></td>
+            <td>Self-join of baskets on same partner + same month, product A &lt; product B</td>
+            <td>Finds co-occurring pairs. The <code>A &lt; B</code> condition prevents duplicate counting (A→B and B→A counted once)</td>
+          </tr>
+          <tr>
+            <td><strong>avg_product_value / avg_product_margin</strong></td>
+            <td>Average revenue and margin per line item for each product</td>
+            <td>Enables financial estimates: how much money does this rule actually generate?</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>Why SQL instead of the mlxtend FP-Growth library?</strong>
+        The mlxtend library loads the full transaction matrix into Python memory as a one-hot encoded DataFrame. For 500 partners × 200 products × 12 months = 1.2M cells, this can use 500MB+ of RAM before any computation starts. The SQL approach computes pair counts directly in the database — only the result set (typically 200–2,000 rows) is transferred to Python. This trades Python flexibility for a 10–50× memory reduction, which matters on shared deployment environments.
+      </div>
+    </div>
+
+    <h3>Basket Definition — Why Monthly?</h3>
+    <div class="formula"><span class="var">basket</span> = DISTINCT (party_id, TO_CHAR(date, 'YYYY-MM'), product_name)
+
+<span class="comment">A "basket" = one partner's purchase activity for one calendar month.</span>
+<span class="comment"></span>
+<span class="comment">Alternative considered: daily baskets (each invoice = one basket)</span>
+<span class="comment">Problem: a partner placing 15 small daily orders in January would count</span>
+<span class="comment">as 15 separate baskets. If they buy Product A every day and Product B once,</span>
+<span class="comment">the confidence is artificially diluted. Monthly granularity treats the full</span>
+<span class="comment">month's activity as a single purchasing decision — which better reflects</span>
+<span class="comment">how B2B distributors actually replenish their stock.</span>
+
+<span class="comment">Lookback window: configurable via MBA_LOOKBACK_MONTHS (.env), default = 12 months</span></div>
+  </div>
+
+  <!-- S4 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">04</div>
+      <h2>Adaptive Min-Support Formula</h2>
+      <span class="section-file">associations_mixin.py → _compute_adaptive_min_support()</span>
+    </div>
+    <p>Every association mining algorithm needs a minimum support threshold — a cut-off below which a product pair is considered too rare to be reliable. Set it too high, and you miss valid patterns. Set it too low, and spurious one-off coincidences dominate the results.</p>
+    <p>The old system used a fixed <code>min_support = 2%</code>. This is fine for a grocery retailer with 10,000 transactions. In a B2B distribution network with 200 partners and 50 products buying once a month, the average pair occurs in only 4–8 baskets — meaning 2% would require at least 2–4 occurrences per pair, which might eliminate many real patterns.</p>
+
+    <div class="formula"><span class="comment">Step 1: Measure the actual sparsity of the data</span>
+<span class="var">sparsity</span> = actual_co-occurrences ÷ max_possible_co-occurrences
+<span class="comment">         = Σ(pairs seen > 0) ÷ (n_products × (n_products-1) ÷ 2)</span>
+
+<span class="comment">Step 2: Choose min_support based on sparsity band</span>
+sparsity &lt; 0.10  →  min_support = max(0.005,  2 ÷ n_baskets)
+<span class="comment">                   (Very sparse: require at least 2 real co-occurrences)</span>
+
+sparsity 0.10–0.30 → min_support = 0.01
+<span class="comment">                   (Moderate density: standard B2B range)</span>
+
+sparsity > 0.30  →  min_support = 0.02
+<span class="comment">                   (Dense data: safe to use retail-style default)</span>
+
+<span class="comment">Floor guarantee: min_support ≥ 2/n_baskets = "at least 2 real occurrences"</span>
+<span class="comment">This prevents rules like "Product A and B were ordered together exactly once"</span>
+<span class="comment">from appearing as reliable cross-sell recommendations.</span></div>
+
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>What does sparsity mean in practice?</strong>
+        If you have 50 products, the maximum possible distinct pairs is 50×49÷2 = 1,225. If only 120 of these pairs were ever bought together, sparsity = 120/1,225 = 9.8%. That's under 10% — so the system will use the ultra-low support threshold (2/n_baskets) to avoid discarding the patterns that actually exist. A grocery retailer with 1,000 products and 100,000 daily transactions might have 60% pair sparsity — there the standard 2% threshold is appropriate.
+      </div>
+    </div>
+  </div>
+
+  <!-- S5 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">05</div>
+      <h2>Rule Strength Classification</h2>
+      <span class="section-file">associations_mixin.py → _decorate_rule_quality()</span>
+    </div>
+    <p>Every rule is tagged as High, Medium, or Low strength based on both confidence and lift together — not just one of them. A rule high in one but low in the other may not be as reliable as it appears.</p>
+    <div class="formula"><span class="var">rule_strength</span>:
+
+"High"   = confidence ≥ 0.40  AND  lift ≥ 1.5
+<span class="comment">           Reliable and meaningfully above random. Pitch with confidence.</span>
+
+"Medium" = confidence ≥ 0.20  AND  lift ≥ 1.1
+<span class="comment">           Decent signal. Useful cross-sell but validate with the partner.</span>
+
+"Low"    = everything else
+<span class="comment">           Weak signal. Might be coincidental. Use only if no better options exist.</span></div>
+
+    <h3>Low Support Flag</h3>
+    <div class="formula"><span class="var">low_support_flag</span> = True  if support_a &lt; min_support OR support_b &lt; min_support
+                    = False otherwise
+
+<span class="comment">By default: low-support rules are hidden (include_low_support = False)</span>
+<span class="comment">Checkbox in the UI allows showing them for research/exploration purposes</span>
+<span class="comment">Low-support rules are tagged but not removed when the checkbox is on —</span>
+<span class="comment">so the rep can see them but knows to treat them as tentative signals.</span></div>
+  </div>
+
+  <!-- S6 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">06</div>
+      <h2>Revenue &amp; Margin Gain Estimates</h2>
+      <span class="section-file">associations_mixin.py SQL → avg_product_value + avg_product_margin CTEs</span>
+    </div>
+    <p>The engine doesn't just tell you that Product B is frequently bought with Product A — it tells you how much extra revenue and margin that cross-sell generates per occurrence, per week, per month, and per year.</p>
+
+    <div class="formula"><span class="comment">Base gain estimations (computed in SQL):</span>
+<span class="var">expected_revenue_gain</span> = times_bought_together × avg_line_revenue(Product B)
+<span class="var">expected_margin_gain</span>  = times_bought_together × avg_line_margin(Product B)
+<span class="var">margin_rate</span>           = avg_line_margin(B) ÷ avg_line_revenue(B)  (clipped 2%–60%)
+
+<span class="comment">Where avg_line_margin = avg(net_amt - transfer_price × qty) over lookback period</span>
+
+<span class="comment">Weekly / Monthly / Yearly projections (Python-side post-processing):</span>
+<span class="var">expected_gain_weekly</span>  = expected_revenue_gain × (7  ÷ lookback_days)
+<span class="var">expected_gain_monthly</span> = expected_revenue_gain × (30 ÷ lookback_days)
+<span class="var">expected_gain_yearly</span>  = expected_revenue_gain × (365 ÷ lookback_days)
+<span class="comment">(Same formula applied to margin columns)</span></div>
+
+    <div class="callout alt">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>Important limitation on gain estimates</strong>
+        The gain estimate is based on how often the pair was bought together historically — not on how many new sales could be made. If Product A and B were bought together 87 times in 12 months, the gain is estimated as if those 87 co-purchases all had an incremental B sale. In reality, some partners would have bought B anyway (no rep influence needed). The actual incremental gain is some fraction of this number — likely 30–60% if the cross-sell is well-targeted. The estimates are a ceiling, useful for prioritisation but not for P&amp;L forecasting.
+      </div>
+    </div>
+  </div>
+
+  <!-- S7 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">07</div>
+      <h2>The Sales Script Generator</h2>
+      <span class="section-file">market_basket.py → right column "Sales Script"</span>
+    </div>
+    <p>The best association rule is automatically converted into a three-part sales conversation script. No AI API, no manual writing — it's a template with the real product names, confidence numbers, and gain estimates filled in.</p>
+
+    <div class="script-box">
+      <div class="script-label">Opening Line</div>
+      <div class="script-text">"We noticed you regularly order <strong>[Product A]</strong>. Most of our partners who buy this also pick up <strong>[Product B]</strong> at the same time — shall I add it to today's order?"</div>
+    </div>
+    <div class="script-box">
+      <div class="script-label">Follow-Up (if hesitant)</div>
+      <div class="script-text">"It's a popular combination — about <strong>[Confidence %]</strong> of [Product A] buyers also take [Product B]. We have stock ready and can deliver together."</div>
+    </div>
+    <div class="script-box">
+      <div class="script-label">Value Pitch</div>
+      <div class="script-text">"Bundling both saves a delivery, and cross-selling this pair typically adds <strong>Rs [expected_gain_monthly:,]/month</strong> in business value."</div>
+    </div>
+
+    <h3>Confidence Indicator</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Confidence Level</th><th>Indicator shown</th><th>Colour</th></tr></thead>
+        <tbody>
+          <tr><td><strong>≥ 60%</strong></td><td>● High Confidence — XX% confidence, X.Xx lift</td><td style="color:#059669">●  Green</td></tr>
+          <tr><td><strong>30–60%</strong></td><td>● Medium Confidence — XX% confidence, X.Xx lift</td><td style="color:#d97706">●  Amber</td></tr>
+          <tr><td><strong>&lt; 30%</strong></td><td>● Low Confidence — XX% confidence, X.Xx lift</td><td style="color:#9ca3af">●  Grey</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The script automatically adapts to whichever rule is at the top of the filtered table — so if a manager filters to "Accessories" rules and sorts by lift, the script updates to reflect the best Accessories cross-sell, not a generic one.</p>
+  </div>
+
+  <!-- S8 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">08</div>
+      <h2>Sequential Pattern Mining</h2>
+      <span class="section-file">associations_mixin.py → mine_sequential_patterns()</span>
+    </div>
+    <p>Standard association rules are "simultaneous" — they find what's bought <em>together in the same month</em>. Sequential patterns find what partners tend to buy <em>afterwards</em>, typically 7–90 days later. This is a fundamentally different and valuable signal.</p>
+    <p><strong>Example:</strong> A partner who just ordered a new product category for the first time tends to follow up with accessories from that category in the next 30 days. Standard MBA wouldn't catch this because the purchases are in different months.</p>
+
+    <div class="formula"><span class="comment">Sequential pattern definition:</span>
+Partner buys Product A in month M
+Partner buys Product B in month M+1 (within max_gap_days)
+→ This is an "A then B" pattern
+
+<span class="var">confidence_a_then_b</span>  = count(partners with "A then B") ÷ count(partners who bought A)
+<span class="var">lift</span>                 = same formula as standard — corrects for random chance
+
+<span class="comment">Key difference from standard MBA:</span>
+<span class="comment">  Standard: A and B in the SAME basket (same month)</span>
+<span class="comment">  Sequential: A first, then B in a LATER basket (next N days)</span></div>
+
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>Business use case for sequential patterns</strong>
+        When a distributor is onboarded to a new product category, they typically place a trial order first. Sequential mining tells you: "Of every partner who placed a trial Smartphones order, 68% placed an Accessories order within 30 days." Armed with this, the rep can proactively call with an Accessories offer 15 days after the Smartphones trial — before the partner even knows they need it. This turns reactive order-taking into proactive demand generation.
+      </div>
+    </div>
+
+    <h3>Parameters</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Parameter</th><th>UI Control</th><th>Range</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><strong>max_gap_days</strong></td><td>Slider "Max Gap (days)"</td><td>7–90d, default 30d</td><td>Maximum days allowed between the two purchases to count as a sequence</td></tr>
+          <tr><td><strong>min_confidence</strong></td><td>Slider "Min Confidence"</td><td>0.05–0.50, default 0.10</td><td>Minimum % of A-buyers who must also show the B sequence to surface the rule</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- S9 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">09</div>
+      <h2>Cross-Category Upgrade Detection</h2>
+      <span class="section-file">associations_mixin.py → mine_cross_category_upgrades()</span>
+    </div>
+    <p>This is the most strategically valuable of the three mining methods. It answers the question: <strong>"Which partners in Category X tend to eventually expand into Category Y?"</strong> — and critically, which ones haven't yet.</p>
+    <p><strong>Example:</strong> Partners who buy Telecom equipment tend to start buying Battery &amp; Power products within 60 days. If you have 30 Telecom partners who haven't yet bought Power products — you have 30 warm leads already identified.</p>
+
+    <div class="formula"><span class="comment">Upgrade pattern definition:</span>
+  Partner is active in Category X (at least 1 purchase in last gap_days)
+  Partner buys from Category Y for the FIRST TIME within gap_days
+
+<span class="var">confidence</span> = count(X→Y upgrades) ÷ count(partners active in X)
+<span class="var">lift</span>      = confidence ÷ (count(Y buyers) ÷ total_active_partners)
+
+<span class="comment">Output: for each upgrade pattern (category X → category Y):</span>
+<span class="comment">  - upgrade_count: how many times this upgrade happened</span>
+<span class="comment">  - partners_in_x: how many partners are currently active in X (potential converts)</span>
+<span class="comment">  - partner_names: the specific partners who showed this pattern (for targeting)</span></div>
+
+    <h3>The Three Mining Methods — Side by Side</h3>
+    <div class="tabs-demo">
+      <div class="tab-card">
+        <div class="tab-name">Standard Rules</div>
+        <div class="tab-sub">What's bought <strong>together</strong> in the same month. Best for in-visit upselling and bundle offers.</div>
+        <span class="tab-algo tab-a1">SQL Co-occurrence + FP-Growth</span>
+      </div>
+      <div class="tab-card">
+        <div class="tab-name">Sequential Patterns</div>
+        <div class="tab-sub">What's bought <strong>next</strong>, within N days. Best for automated follow-up timing and nurture campaigns.</div>
+        <span class="tab-algo tab-a2">Temporal Sequence Mining</span>
+      </div>
+      <div class="tab-card">
+        <div class="tab-name">Cross-Category Upgrades</div>
+        <div class="tab-sub">Which categories lead to <strong>expansion</strong> into new categories. Best for strategic account planning.</div>
+        <span class="tab-algo tab-a3">Category-Level Transition Mining</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- S10 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">10</div>
+      <h2>Bundle Builder &amp; Temporal Decay</h2>
+    </div>
+
+    <h3>Bundle Builder Simulator</h3>
+    <p>A manager selects any product from a dropdown and instantly sees the top 5 products to bundle with it, sorted by confidence. This is a live filter over the association rules table — no computation happens, just fast lookups.</p>
+    <div class="formula"><span class="comment">Bundle Builder logic:</span>
+selected_product = user's dropdown choice
+bundle_options   = df_assoc[product_a == selected_product]
+                   sorted by confidence_a_to_b descending
+                   top 5 shown as green cards
+
+<span class="comment">Each card shows: product name + Confidence % + Lift ×</span>
+<span class="comment">If no rules exist for this product: "No strong bundle partners found"</span></div>
+
+    <h3>Temporal Decay in Enhanced Mining</h3>
+    <p>The enhanced FP-Growth tab applies a recency weight to transaction data before running the algorithm. More recent purchases count more than older ones — reflecting that a pattern from 18 months ago may not reflect current buying behaviour.</p>
+    <div class="formula"><span class="var">decay_weight</span> = e^(-λ × days_since_purchase)
+<span class="comment">  λ (lambda) controls how fast older purchases lose weight</span>
+<span class="comment">  Higher λ = stronger recency bias</span>
+<span class="comment">  Lower λ  = more weight on historical patterns</span>
+
+<span class="comment">Applied to basket frequency before FP-Growth itemset counting,</span>
+<span class="comment">so recent baskets contribute more to support/confidence calculations.</span></div>
+
+    <h3>Improvements to Make Next</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Improvement</th><th>Current Limitation</th><th>Expected Impact</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><strong>Cluster-filtered association rules</strong></td>
+            <td>Rules are mined across all partners — a pattern driven by VIP accounts may be irrelevant for growth-tier partners</td>
+            <td>Rules filtered per cluster type will be more reliable and actionable for each partner segment</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><strong>Incremental gain attribution</strong></td>
+            <td>Gain estimates assume all co-purchases were incremental (i.e., the cross-sell caused the B purchase)</td>
+            <td>A/B test framework or uplift modelling would isolate true incremental gain from baseline purchase rates</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><strong>Partner notification when upgrade window opens</strong></td>
+            <td>Cross-category upgrades identified but no automated alert to the rep</td>
+            <td>Alert: "Partner X just ordered Telecom for the first time — 68% chance they order Power within 30 days. Call now."</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><strong>Real FP-Growth with mlxtend or PySpark</strong></td>
+            <td>Enhanced mining is computationally expensive for large catalogues</td>
+            <td>PySpark-based FP-Growth handles 10,000+ products and 50,000+ baskets efficiently. Use for big partner networks.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Config Reference</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Variable</th><th>Default</th><th>What it controls</th></tr></thead>
+        <tbody>
+          <tr><td><span class="env-tag">MBA_LOOKBACK_MONTHS</span></td><td>12</td><td>How many months of transaction history to use for basket construction</td></tr>
+          <tr><td><span class="env-tag">MBA_MIN_SUPPORT</span></td><td>0.02</td><td>Default min support for initial mining (overridden by adaptive formula)</td></tr>
+          <tr><td><span class="env-tag">MBA_MIN_CONFIDENCE</span></td><td>0.15</td><td>Default confidence threshold. UI slider allows real-time override.</td></tr>
+          <tr><td><span class="env-tag">MBA_MIN_LIFT</span></td><td>1.0</td><td>Default lift threshold. Values below 1.0 are statistically meaningless.</td></tr>
+          <tr><td><span class="env-tag">MBA_RULE_LIMIT</span></td><td>2000</td><td>Maximum rules retrieved from DB. Prevents memory issues on large catalogues.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <strong>Market Basket Analysis Engine — Technical Brief</strong> &nbsp;·&nbsp; Module 04 of 08 &nbsp;·&nbsp; April 2026<br/>
+  Files: associations_mixin.py · market_basket.py (UI) · view_product_associations (DB fallback view)<br/>
+  Methods: SQL co-occurrence · FP-Growth (adaptive) · Sequential pattern mining · Cross-category upgrade detection · Temporal decay weighting
+</div>
+
+</body>
+</html>

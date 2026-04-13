@@ -1,0 +1,356 @@
+================================================================================
+MODULE: CLUSTER INTELLIGENCE — v3.0
+FILE:   frontend/tabs/clustering.py
+ENGINE: ml_engine/clustering_mixin.py
+GOVERNANCE: ml_engine/services/cluster_governance_repository.py
+================================================================================
+
+PURPOSE
+-------
+Cluster Intelligence automatically groups partners into meaningful segments
+based on their buying behavior using unsupervised machine learning. Unlike
+manual segmentation (e.g., "Top 20% by revenue"), this finds NATURAL groupings
+from actual purchasing patterns using a multi-algorithm ensemble consensus.
+
+Business use cases:
+  - Tailor promotions to each cluster archetype
+  - Identify underpenetrated clusters (healthy partners buying few categories)
+  - Spot geographic concentration within clusters
+  - Benchmark partner performance against cluster peers
+  - Auto-generate segment playbooks with next-best-actions
+
+
+WHAT CHANGED IN v3.0
+---------------------
+  1. ENSEMBLE CONSENSUS replaced 2-algorithm competition (HDBSCAN vs GMM)
+     → Now runs KMeans + GMM + Spectral/HDBSCAN at SAME forced K
+     → Consensus matrix + hierarchical cut for final labels
+  2. PARETO VIP TIERING replaced fixed percentile cutoff
+     → VIP tier = partners covering top 60% cumulative revenue (capped 35%)
+  3. BUSINESS-RULE K SELECTION replaced silhouette-based search
+     → K = ceil(n_partners / 12), clamped 4–15
+  4. GEMINI LLM LABELLING with heuristic fallback
+     → Auto-generates archetype names like "VIP — High-Value · Diversified"
+  5. QUALITY GATE with auto-fallback to last approved DB assignments
+  6. TEMPORAL TRACKING via Hungarian algorithm (promotions/demotions)
+  7. BUSINESS VALIDATION benchmarks cluster-guided vs baselines
+  8. REMOVED PCA→UMAP pipeline (features go directly to ensemble after scaler)
+
+
+WHAT IT SHOWS (UI)
+------------------
+  1. Cluster Summary Table    - Count and avg revenue per cluster
+  2. 3D Partner DNA Map       - PCA-reduced interactive scatter plot
+  3. Business Archetype Labels- Auto-generated descriptive names
+  4. Strategic Tags            - Per-cluster action labels
+  5. Quality Metrics           - Silhouette, Calinski-Harabasz, ARI stability
+  6. Business Validation       - Cluster-guided vs baseline targeting comparison
+  7. Export (PDF / Excel)
+
+
+ALGORITHMS & FORMULAS USED
+---------------------------
+
+A. FEATURE ENGINEERING (7 Groups)
+-----------------------------------
+
+A1. CATEGORY MIX (mix::rw::) — Primary Signal
+  Recency-weighted spend share across 3 temporal windows:
+    mix_90d   = category_spend_90d  / total_spend_90d
+    mix_180d  = category_spend_180d / total_spend_180d
+    mix_365d  = category_spend_365d / total_spend_365d
+
+    mix::rw::{category} = 0.5 × mix_90d + 0.3 × mix_180d + 0.2 × mix_365d
+
+  Recent behavior changes reflect immediately without manual re-tagging.
+
+A2. SCALE (scale::)
+  log_total_spend         = log1p(12m total spend)
+  active_groups           = count of categories with spend > 0
+  portfolio_concentration = Σ(category_share²) — HHI index
+  active_group_momentum   = active_groups_90d − active_groups_365d
+    Positive = expanding portfolio, Negative = contracting
+
+A3. RFM (rfm::)
+  log_recency   = log1p(days since last purchase)
+  log_frequency = log1p(count of distinct transactions)
+  log_monetary  = log1p(total net spend)
+
+A4. PURCHASE VELOCITY (vel::)
+  log_mean_gap = log1p(average days between consecutive orders)
+  gap_cv       = std_gap / mean_gap, clipped to [0, 5]
+    High CV = erratic buyer, Low CV = regular/predictable buyer
+
+A5. CATEGORY DIVERSITY ENTROPY (div::)
+  Shannon entropy:
+    H = −Σ [ pᵢ × log₂(pᵢ) ]   where pᵢ = spend share on category i
+    H_norm = H / log₂(N)         normalized to [0, 1]
+
+  High entropy = diverse buyer. Low entropy = concentrated buyer.
+  Captures nuance that simply counting categories misses.
+
+A6. SEASONALITY (season::)
+  monthly_cv          = std(monthly_revenue) / mean(monthly_revenue)
+  seasonal_amplitude  = (max_quarter − min_quarter) / mean_quarter
+  season_q1–q4        = one-hot dominant quarter encoding
+
+A7. NETWORK CO-PURCHASE SIMILARITY (net::)
+  Cosine similarity of spend vectors between all partner pairs:
+    sim(A,B) = (A · B) / (||A|| × ||B||)
+
+  net_mean_peer_sim  = avg similarity to top-5 most similar partners
+  net_max_peer_sim   = highest similarity to any single partner
+  net_centrality     = mean similarity to ALL partners (hub score)
+
+  High centrality = "typical" distributor, safe for standard recommendations.
+  Low centrality = unique buying pattern, often assigned to outlier bucket.
+
+
+B. FEATURE PREPROCESSING
+--------------------------
+  1. Null Handling:   All NaN → 0.0. Max null ratio logged for monitoring.
+  2. Zero-Variance:   Columns with std < 1e-9 dropped. If ALL pruned → dummy.
+  3. Mix Validation:  mix::rw:: rows should sum ≈ 1.0; MAE reported.
+  4. RobustScaler:    Median + IQR scaling (resilient to 50x revenue outliers).
+
+  NOTE: v3.0 REMOVED the PCA→UMAP pipeline. Features go directly to
+  ensemble algorithms after RobustScaler. Eliminates umap-learn dependency
+  and removes stochastic instability on small datasets.
+
+
+C. PARETO VIP/GROWTH TIERING
+-------------------------------
+  Before clustering, partners are split into two tiers:
+
+  1. Sort all partners by total_spend (descending)
+  2. Compute cumulative spend share
+  3. VIP = partners whose cumulative contribution ≤ 60% of total revenue
+  4. Bounds: min(3, 8% of partners) ≤ VIP count ≤ 35% of partners
+  5. Safety: if Growth tier < 2 partners, force 70/30 split
+  6. Remaining partners → Growth tier
+
+  Why Pareto instead of fixed percentile?
+    Fixed percentile treats 50 and 500 partner networks identically.
+    Pareto adapts: concentrated networks get small focused VIP tier,
+    distributed networks get broader VIP tier.
+
+
+D. ENSEMBLE CONSENSUS CLUSTERING
+-----------------------------------
+  The core engine runs MULTIPLE algorithms at the SAME forced K.
+
+  D1. K SELECTION (Business Rule)
+    target_cluster_size = 12 (configurable)
+    business_k = ceil(n_partners / target_cluster_size)
+    best_k = clamp(business_k, min=4, max=15)
+
+    All algorithms run at this same K for label consistency.
+
+  D2. ALGORITHM SELECTION BY TIER
+    VIP:    KMeans(n_init=15) + GMM(full/diag cov) + Spectral(k-NN)
+    Growth: KMeans(n_init=15) + GMM + HDBSCAN(leaf, ≤25% outlier gate)
+
+    HDBSCAN excluded from consensus if outlier ratio > 25%.
+    Spectral only used when best_k ≤ 12 and n ≥ best_k + 2.
+
+  D3. CONSENSUS MATRIX CONSTRUCTION
+    For each pair (i, j) across M algorithm runs:
+      C[i,j] = fraction of runs where i and j share same cluster
+      (outlier labels −1 excluded from co-assignment counts)
+    Range: 0.0 (never co-clustered) → 1.0 (always co-clustered)
+
+  D4. FINAL LABELS FROM CONSENSUS
+    distance = 1.0 − C[i,j]
+    → AgglomerativeClustering(metric='precomputed', linkage='average')
+    → Cut at target K
+    → Verify K clusters produced; fallback to KMeans on consensus if not
+    → If consensus fails entirely → use KMeans labels directly
+
+  D5. GROWTH OUTLIER REASSIGNMENT (_reassign_growth_outliers)
+    For each outlier (label = −1):
+      1. Compute distance to every cluster centroid
+      2. Find nearest cluster
+      3. Reassign IF distance ≤ cutoff × multiplier
+         cutoff    = 70th percentile of intra-cluster distances
+         base_mult = 0.9 (standard partners)
+         high_mult = 1.1 (high-value: > 80th percentile log_total_spend)
+      Partners still outside range → "Uncategorized"
+
+
+E. AUTO-GENERATED CLUSTER LABELS
+-----------------------------------
+
+  E1. CENTROID PROFILING (_build_cluster_centroid_profile)
+    For each cluster, generates text profile from:
+      - Spend level: High-spend / Medium-spend / Low-spend
+      - Breadth: diversified (≥6 active cats) / moderate (≥3) / focused
+      - Concentration: HHI > 0.5 = highly concentrated, < 0.25 = distributed
+      - Top 5 categories with spend share %
+
+  E2. GEMINI LLM LABELLING (Primary — _generate_cluster_labels_llm)
+    If GEMINI_API_KEY present:
+      - Send all profiles to Gemini with structured prompt
+      - Request 2-4 word title-cased labels
+      - Validate: 3-80 chars, no JSON artifacts
+      - Accept if ≥ 50% of clusters get valid labels
+
+  E3. HEURISTIC FALLBACK (_generate_cluster_labels_heuristic)
+    Rule-based label assembly from profile keywords:
+      High-spend → "High-Value"   | Medium → "Mid-Tier" | Low → "Emerging"
+      diversified → "Diversified"  | moderate → "Balanced" | focused → "Specialist"
+      concentrated → "Category-Focused" | distributed → "Multi-Category"
+    Format: "{Tier} — {SpendLevel} · {Breadth}"
+    Example: "VIP — High-Value · Diversified"
+    Deduplication: if label collision → append #cluster_num
+
+
+F. CLUSTER TYPE CLASSIFICATION
+--------------------------------
+  VIP tier:   cluster_label prefix "VIP-{n}"   (n = cluster − 1000)
+  Growth tier: cluster_label prefix "Growth-{n}" or "Uncategorized"
+
+  After auto-labelling, these generic prefixes are replaced by
+  business archetype names (see E above).
+
+
+G. QUALITY METRICS
+-------------------
+
+  Silhouette Score:
+    s(i) = (b(i) − a(i)) / max(a(i), b(i))
+    Range: −1 to 1. > 0.4 is good for real-world B2B data.
+
+  Calinski-Harabasz Score (Variance Ratio):
+    CH = [Between-cluster variance / (K−1)] / [Within-cluster variance / (N−K)]
+    Higher = better-defined, compact clusters.
+
+  Bootstrap ARI Stability:
+    - 5 runs on 80% random subsets (no replacement, min 10 partners)
+    - Re-cluster using KMeans at same K
+    - ARI(base_labels[subset], new_labels)
+    - stability = mean(ARI)
+    - ARI = 1.0 → identical, 0.0 → random, < 0.3 → unstable
+
+
+H. QUALITY GATE & AUTO-FALLBACK
+----------------------------------
+  Every run passes through a quality gate:
+    1. cluster_count ≥ CLUSTER_MIN_COUNT (default 2)
+    2. outlier_ratio within [CLUSTER_OUTLIER_MIN, CLUSTER_OUTLIER_MAX]
+    3. VIP stability_ari ≥ CLUSTER_MIN_STABILITY_ARI (default 0.0)
+    4. Growth stability_ari ≥ CLUSTER_MIN_STABILITY_ARI
+
+  Gate PASSES:
+    → Run saved (approved=true) to cluster_model_runs
+    → Assignments persisted to cluster_assignments table
+
+  Gate FAILS:
+    → Run saved (approved=false, reject_reason)
+    → Load last approved assignments from DB → overwrite current matrix
+    → If no approved history → use current (degraded) result
+
+
+I. TEMPORAL STABILITY TRACKING
+---------------------------------
+  On every run, compare against last approved assignments:
+
+  I1. HUNGARIAN ALGORITHM FOR LABEL MATCHING
+    Problem: cluster labels are arbitrary across runs.
+    Cost matrix: cost[new_i, old_j] = −overlap(partners)
+    Hungarian minimizes total mismatching cost in O(n³)
+    Produces mapping: {new_label → prev_label}
+
+  I2. TRANSITION DETECTION
+    For each partner in both runs:
+      Stable:     same cluster (or matched via Hungarian)
+      Promoted:   Growth → VIP tier change
+      Demoted:    VIP → Growth tier change
+      Reassigned: moved to different cluster within same tier
+    stability_score = stable / total_common_partners
+
+  I3. STRUCTURAL CHANGES
+    - Stable clusters (matched in both runs)
+    - New clusters (no match in previous run)
+    - Dissolved clusters (previous clusters not matched)
+    - Top 50 partner transition details
+
+
+J. FEATURE DRIFT DETECTION
+-----------------------------
+  mean_abs_z_shift = mean(| (current_mean − baseline_mean) / baseline_std |)
+
+  Interpretation:
+    z < 0.5   → normal variation
+    z 0.5–1.0 → moderate shift, investigate pipeline
+    z > 1.0   → significant change (new partners, seasonal, data issue)
+
+  Baseline updates every run (adaptive). A sudden spike is the signal
+  worth investigating — indicates data problem vs gradual business trend.
+
+
+K. BUSINESS VALIDATION BENCHMARKING
+--------------------------------------
+  After every clustering run, three targeting strategies compared:
+
+  1. Cluster-Guided: rank clusters by avg churn + total loss, then
+     rank partners by 0.7 × churn_probability + 0.3 × normalized_loss
+     Select top 20% of partners.
+
+  2. Top-Revenue Baseline: select top 20% by recent_90_revenue.
+
+  3. Random Baseline: random 20% sample.
+
+  Each evaluated on:
+    - hit_rate_degrowth_pct
+    - captured_est_monthly_loss
+    - avg_churn_probability
+
+  Cluster-guided should capture more at-risk revenue than baselines.
+  If not → feature engineering may need improvement.
+
+
+L. PARTNER INTELLIGENCE & PLAYBOOKS
+--------------------------------------
+  get_partner_intelligence() is the final consumer of clustering.
+  Each partner gets:
+    - Facts: health segment, revenue drop%, churn, credit risk, forecast
+    - Peer Gaps: product-level gaps vs cluster avg, annualized opportunity
+    - Alerts: sharp revenue drop, churn jump, credit risk jump (severity-ranked)
+    - Playbook: segment-aware actions (Champion/Healthy/At Risk/Critical)
+      - VIP partners → executive cadence
+      - Outlier partners → state-level peer benchmarking
+      - Includes strategic tag context and affinity pitch suggestion
+
+
+DATA FLOW
+---------
+  PostgreSQL → _load_temporal_group_spend (90d/180d/365d pivots)
+             → _build_cluster_features (7 feature groups combined)
+             → _feature_quality_guardrails (null/zero-var/mix validation)
+             → RobustScaler
+             → Pareto VIP/Growth split
+             → _ensemble_segment (KMeans + GMM + Spectral/HDBSCAN → consensus)
+             → _auto_label_clusters (Gemini LLM or heuristic)
+             → _cluster_quality_gate (approve or rollback)
+             → _persist_cluster_run + _track_temporal_transitions
+             → run_cluster_business_validation (benchmark vs baselines)
+             → matrix DataFrame stored in ai.matrix
+             → clustering.py renders with PCA scatter + st.dataframe
+
+
+CONFIGURATION REFERENCE
+-------------------------
+  CLUSTER_TARGET_SIZE              12    Target partners per cluster (K)
+  CLUSTER_VIP_REVENUE_SHARE        0.60  Cumulative share for VIP split
+  CLUSTER_VIP_MAX_SHARE            0.35  Max % of partners in VIP
+  CLUSTER_MIN_COUNT                2     Min clusters for quality gate
+  CLUSTER_MIN_STABILITY_ARI        0.0   Min ARI for gate approval
+  CLUSTER_GROWTH_OUTLIER_REASSIGN  true  Enable outlier reassignment
+  CLUSTER_GROWTH_REASSIGN_DISTANCE_Q 0.70  Distance quantile for reassign
+  CLUSTER_GROWTH_HIGH_VALUE_Q      0.80  Revenue quantile for wider radius
+  GEMINI_API_KEY                   —     Enables LLM cluster labelling
+  GEMINI_MODEL                     gemini-2.5-flash  LLM model
+
+DATABASE TABLES (cluster_governance_repository.py)
+  cluster_model_runs       - One row per clustering execution (metrics, gate)
+  cluster_assignments      - Partner-level cluster assignments per approved run

@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Consistent AI — Documentation Hub</title>
+<meta name="description" content="Sales Intelligence Platform — complete technical documentation for all modules including Cluster Intelligence, Kanban Pipeline, Market Basket Analysis, and more."/>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #080b14;
+    --surface: #0d1117;
+    --surface2: #12161f;
+    --border: #1e2535;
+    --border-light: #252d40;
+    --text: #e2e8f0;
+    --text-muted: #64748b;
+    --text-secondary: #94a3b8;
+    --accent: #6366f1;
+    --accent2: #4f46e5;
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --blue: #3b82f6;
+    --purple: #a78bfa;
+    --teal: #14b8a6;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── HERO ─────────────────────────────────────────────────────── */
+  .hero {
+    background:
+      radial-gradient(ellipse 80% 60% at 50% -10%, rgba(99,102,241,0.18) 0%, transparent 70%),
+      linear-gradient(180deg, #0c0f1e 0%, #080b14 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 72px 48px 60px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(99,102,241,0.08) 1px, transparent 0);
+    background-size: 32px 32px;
+    pointer-events: none;
+  }
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(99,102,241,0.12);
+    border: 1px solid rgba(99,102,241,0.3);
+    border-radius: 20px;
+    padding: 5px 16px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: #a5b4fc;
+    margin-bottom: 28px;
+  }
+  .hero-badge::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    background: #22c55e;
+    border-radius: 50%;
+    box-shadow: 0 0 6px #22c55e;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.5; transform: scale(1.3); }
+  }
+  .hero h1 {
+    font-size: 52px;
+    font-weight: 800;
+    letter-spacing: -1.5px;
+    line-height: 1.1;
+    margin-bottom: 16px;
+    background: linear-gradient(135deg, #e2e8f0 30%, #a5b4fc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p {
+    font-size: 17px;
+    color: var(--text-secondary);
+    max-width: 580px;
+    margin: 0 auto 40px;
+    line-height: 1.7;
+  }
+  .hero-stats {
+    display: inline-flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .hero-stat {
+    padding: 14px 28px;
+    border-right: 1px solid var(--border);
+    text-align: center;
+  }
+  .hero-stat:last-child { border-right: none; }
+  .hero-stat-val {
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--accent);
+    letter-spacing: -0.5px;
+  }
+  .hero-stat-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-top: 3px;
+  }
+
+  /* ── SEARCH ────────────────────────────────────────────────────── */
+  .search-wrap {
+    max-width: 560px;
+    margin: 0 auto 16px;
+    position: relative;
+  }
+  .search-icon {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 16px;
+    pointer-events: none;
+  }
+  #doc-search {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border-light);
+    border-radius: 10px;
+    padding: 13px 16px 13px 44px;
+    font-size: 14px;
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  #doc-search:focus { border-color: rgba(99,102,241,0.6); }
+  #doc-search::placeholder { color: var(--text-muted); }
+
+  /* ── LAYOUT ────────────────────────────────────────────────────── */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 52px 40px 80px;
+  }
+  .section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── MODULE CARDS GRID ─────────────────────────────────────────── */
+  .modules-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 18px;
+    margin-bottom: 52px;
+  }
+
+  .module-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px 26px;
+    cursor: pointer;
+    text-decoration: none;
+    display: block;
+    transition: all 0.22s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .module-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--card-accent, #6366f1);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.25s ease;
+  }
+  .module-card:hover {
+    border-color: var(--border-light);
+    background: var(--surface2);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+  .module-card:hover::before { transform: scaleX(1); }
+  .module-card:hover .card-arrow { opacity: 1; transform: translateX(0); }
+
+  .card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .card-icon-wrap {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    background: var(--card-icon-bg, rgba(99,102,241,0.12));
+    flex-shrink: 0;
+  }
+  .card-arrow {
+    color: var(--text-muted);
+    font-size: 16px;
+    opacity: 0;
+    transform: translateX(-4px);
+    transition: all 0.2s ease;
+    margin-top: 4px;
+  }
+  .card-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .card-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+    line-height: 1.3;
+  }
+  .card-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.65;
+    margin-bottom: 16px;
+  }
+  .card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .tag {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 20px;
+    background: rgba(255,255,255,0.05);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    letter-spacing: 0.03em;
+  }
+  .card-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    padding: 2px 8px;
+    border-radius: 20px;
+  }
+  .status-live    { background: rgba(34,197,94,0.12); color: #4ade80; border: 1px solid rgba(34,197,94,0.25); }
+  .status-solid   { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); }
+  .status-hardening { background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.25); }
+
+  /* ── MASTER DOC CARD ───────────────────────────────────────────── */
+  .master-card {
+    background: linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(79,70,229,0.06) 100%);
+    border: 1px solid rgba(99,102,241,0.3);
+    border-radius: 14px;
+    padding: 28px 32px;
+    cursor: pointer;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    margin-bottom: 52px;
+    transition: all 0.22s ease;
+  }
+  .master-card:hover {
+    background: linear-gradient(135deg, rgba(99,102,241,0.16) 0%, rgba(79,70,229,0.10) 100%);
+    border-color: rgba(99,102,241,0.5);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(99,102,241,0.12);
+  }
+  .master-icon {
+    width: 64px;
+    height: 64px;
+    background: rgba(99,102,241,0.15);
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 30px;
+    flex-shrink: 0;
+  }
+  .master-body { flex: 1; }
+  .master-badge {
+    display: inline-block;
+    background: rgba(99,102,241,0.2);
+    color: #a5b4fc;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 2px 10px;
+    border-radius: 20px;
+    margin-bottom: 8px;
+  }
+  .master-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+  .master-desc { font-size: 13.5px; color: var(--text-secondary); line-height: 1.6; }
+  .master-cta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #a5b4fc;
+    font-weight: 700;
+    font-size: 13px;
+    margin-top: 12px;
+  }
+
+  /* ── FOOTER ────────────────────────────────────────────────────── */
+  .footer {
+    border-top: 1px solid var(--border);
+    padding: 32px 40px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.9;
+  }
+  .footer strong { color: var(--text-secondary); }
+
+  /* ── EMPTY STATE ───────────────────────────────────────────────── */
+  #empty-state {
+    display: none;
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+  }
+  #empty-state .empty-icon { font-size: 40px; margin-bottom: 14px; }
+  #empty-state p { font-size: 15px; }
+
+  @media (max-width: 768px) {
+    .hero { padding: 48px 24px 40px; }
+    .hero h1 { font-size: 34px; }
+    .container { padding: 36px 20px 60px; }
+    .modules-grid { grid-template-columns: 1fr; }
+    .master-card { flex-direction: column; text-align: center; }
+    .hero-stats { flex-direction: column; }
+    .hero-stat { border-right: none; border-bottom: 1px solid var(--border); }
+    .hero-stat:last-child { border-bottom: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-badge">Consistent AI · Sales Intelligence Suite</div>
+  <h1>Documentation Hub</h1>
+  <p>Technical documentation for all platform modules. Select a module below to open its full reference guide in a new tab.</p>
+
+  <div class="search-wrap">
+    <span class="search-icon">🔍</span>
+    <input type="text" id="doc-search" placeholder="Search modules, topics, features..." autocomplete="off"/>
+  </div>
+
+  <div class="hero-stats">
+    <div class="hero-stat">
+      <div class="hero-stat-val">9</div>
+      <div class="hero-stat-label">Modules</div>
+    </div>
+    <div class="hero-stat">
+      <div class="hero-stat-val">8+</div>
+      <div class="hero-stat-label">ML Models</div>
+    </div>
+    <div class="hero-stat">
+      <div class="hero-stat-val">April 2026</div>
+      <div class="hero-stat-label">Last Updated</div>
+    </div>
+    <div class="hero-stat">
+      <div class="hero-stat-val">v2.5</div>
+      <div class="hero-stat-label">Platform Version</div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN CONTENT -->
+<div class="container">
+
+  <!-- Master Review Card (featured) -->
+  <a class="master-card" href="MASTER_REVIEW_AND_PRECISION_GUIDE.html" target="_blank" rel="noopener" id="master-doc">
+    <div class="master-icon">🎯</div>
+    <div class="master-body">
+      <div class="master-badge">Recommended First Read</div>
+      <div class="master-title">Master System Review &amp; Precision Audit</div>
+      <div class="master-desc">
+        A consolidated audit across all 8 modules — what is correct, what is risky, whether each approach is best-in-class,
+        and a prioritised 4-phase fix plan to reach enterprise-grade precision.
+      </div>
+      <div class="master-cta">Open Master Guide → <span style="font-size:11px;opacity:0.7;">Opens in new tab</span></div>
+    </div>
+  </a>
+
+  <div class="section-title">Module Documentation — Select to Open in New Tab</div>
+
+  <!-- Module Grid -->
+  <div class="modules-grid" id="modules-grid">
+
+    <a class="module-card" href="MODULE_02_CLUSTER_INTELLIGENCE.html" target="_blank" rel="noopener"
+       style="--card-accent:#6366f1; --card-icon-bg:rgba(99,102,241,0.12);"
+       data-search="cluster intelligence segmentation hdbscan gmm umap purchase2vec hierarchy uplift drift minibatch ml engine">
+      <div class="card-top">
+        <div class="card-icon-wrap">🔬</div>
+        <div class="card-arrow">↗</div>
+      </div>
+      <div class="card-num">MODULE 02</div>
+      <div class="card-title">Cluster Intelligence</div>
+      <div class="card-desc">
+        Customer segmentation engine — HDBSCAN + GMM ensemble, purchase2vec embeddings, 2-level hierarchy,
+        uplift modeling, and MiniBatch drift detection.
+      </div>
+      <div class="card-tags">
+        <span class="tag">HDBSCAN</span>
+        <span class="tag">GMM</span>
+        <span class="tag">UMAP</span>
+        <span class="tag">purchase2vec</span>
+        <span class="tag">Uplift</span>
+        <span class="card-status status-live">● V2 Live</span>
+      </div>
+    </a>
+
+    <a class="module-card" href="MODULE_03_KANBAN_PIPELINE.html" target="_blank" rel="noopener"
+       style="--card-accent:#6366f1; --card-icon-bg:rgba(99,102,241,0.12);"
+       data-search="kanban pipeline revenue tracker champion healthy at risk critical churn credit filter category state area">
+      <div class="card-top">
+        <div class="card-icon-wrap">📊</div>
+        <div class="card-arrow">↗</div>
+      </div>
+      <div class="card-num">MODULE 03</div>
+      <div class="card-title">Revenue Pipeline Tracker</div>
+      <div class="card-desc">
+        Kanban board translating ML scores into visual pipeline stages. Category &amp; area filters,
+        probability-weighted revenue-at-risk, and smart card rendering.
+      </div>
+      <div class="card-tags">
+        <span class="tag">Kanban</span>
+        <span class="tag">Revenue at Risk</span>
+        <span class="tag">Category Filter</span>
+        <span class="tag">Area Filter</span>
+        <span class="card-status status-solid">● Solid</span>
+      </div>
+    </a>
+
+    <a class="module-card" href="MODULE_04_MARKET_BASKET_ANALYSIS.html" target="_blank" rel="noopener"
+       style="--card-accent:#14b8a6; --card-icon-bg:rgba(20,184,166,0.12);"
+       data-search="market basket analysis mba association rules cross sell support confidence lift apriori">
+      <div class="card-top">
+        <div class="card-icon-wrap">🛒</div>
+        <div class="card-arrow">↗</div>
+      </div>
+      <div class="card-num">MODULE 04</div>
+      <div class="card-title">Market Basket Analysis</div>
+      <div class="card-desc">
+        Explainable cross-sell recommendations using association rules. Support, confidence, and lift mining
+        on monthly B2B transaction baskets with adaptive support logic.
+      </div>
+      <div class="card-tags">
+        <span class="tag">Apriori</span>
+        <span class="tag">Support / Lift</span>
+        <span class="tag">Cross-sell</span>
+        <span class="card-status status-solid">● Strong</span>
+      </div>
+    </a>
+
+    <a class="module-card" href="MODULE_05_PRODUCT_LIFECYCLE.html" target="_blank" rel="noopener"
+       style="--card-accent:#22c55e; --card-icon-bg:rgba(34,197,94,0.12);"
+       data-search="product lifecycle velocity score prophet stage trend cannibalization EOL growth decline">
+      <div class="card-top">
+        <div class="card-icon-wrap">🔄</div>
+        <div class="card-arrow">↗</div>
+      </div>
+      <div class="card-num">MODULE 05</div>
+      <div class="card-title">Product Lifecycle</div>
+      <div class="card-desc">
+        Multi-signal velocity score, Prophet + linear fallback for trend forecasting,
+        percentile-based stage gates, and cannibalization signal detection.
+      </div>
+      <div class="card-tags">
+        <span class="tag">Velocity Score</span>
+        <span class="tag">Prophet</span>
+        <span class="tag">Lifecycle Stage</span>
+        <span class="card-status status-solid">● Strong</span>
+      </div>
+    </a>
+
+    <a class="module-card" href="MODULE_06_MONITORING.html" target="_blank" rel="noopener"
+       style="--card-accent:#f59e0b; --card-icon-bg:rgba(245,158,11,0.12);"
+       data-search="monitoring model drift data quality alerts degrowth backtest cluster silhouette alert history">
+      <div class="card-top">
+        <div class="card-icon-wrap">📡</div>
+        <div class="card-arrow">↗</div>
+      </div>
+      <div class="card-num">MODULE 06</div>
+      <div class="card-title">System Monitoring</div>
+      <div class="card-desc">
+        Data quality alerts, degrowth backtest, cluster quality scoring, centroid drift banners,
+        and alert history log for operational observability.
+      </div>
+      <div class="card-tags">
+        <span class="tag">Drift Detection</span>
+        <span class="tag">Data Quality</span>
+        <span class="tag">Alerts</span>
+        <span class="card-status status-hardening">● Expanding</span>
+      </div>
+    </a>
+
+    <a class="module-card" href="MODULE_07_SALES_REP_PERFORMANCE.html" target="_blank" rel="noopener"
+       style="--card-accent:#3b82f6; --card-icon-bg:rgba(59,130,246,0.12);"
+       data-search="sales rep performance territory roi efficiency leaderboard forecast visit call log">
+      <div class="card-top">
+        <div class="card-icon-wrap">💼</div>
+        <div class="card-arrow">↗</div>
+      </div>
+      <div class="card-num">MODULE 07</div>
+      <div class="card-title">Sales Rep Performance</div>
+      <div class="card-desc">
+        Multi-table rep analytics — ROI, call efficiency, territory view, rep-level revenue forecasting,
+        and portfolio health linkage beyond simple revenue ranking.
+      </div>
+      <div class="card-tags">
+        <span class="tag">ROI</span>
+        <span class="tag">Territory</span>
+        <span class="tag">Forecast</span>
+        <span class="card-status status-hardening">● Needs Fixes</span>
+      </div>
+    </a>
+
+    <a class="module-card" href="MODULE_08_AI_CHATBOT.html" target="_blank" rel="noopener"
+       style="--card-accent:#a78bfa; --card-icon-bg:rgba(167,139,250,0.12);"
+       data-search="ai chatbot groq llm question answer structured context routing quick insights">
+      <div class="card-top">
+        <div class="card-icon-wrap">🤖</div>
+        <div class="card-arrow">↗</div>
+      </div>
+      <div class="card-num">MODULE 08</div>
+      <div class="card-title">AI Sales Chatbot</div>
+      <div class="card-desc">
+        Structured BI Q&amp;A chatbot using keyword routing + LLM (Groq). Context builder preloads relevant
+        data slices before answering queries about revenue, partners, and clusters.
+      </div>
+      <div class="card-tags">
+        <span class="tag">Groq / LLM</span>
+        <span class="tag">BI Q&amp;A</span>
+        <span class="tag">Context Routing</span>
+        <span class="card-status status-hardening">● Hardening</span>
+      </div>
+    </a>
+
+    <a class="module-card" href="MODULE_09_INVENTORY_LIQUIDATION.html" target="_blank" rel="noopener"
+       style="--card-accent:#f97316; --card-icon-bg:rgba(249,115,22,0.12);"
+       data-search="inventory liquidation ageing stock clearance dead stock lookalike exposure score cluster">
+      <div class="card-top">
+        <div class="card-icon-wrap">📦</div>
+        <div class="card-arrow">↗</div>
+      </div>
+      <div class="card-num">MODULE 09</div>
+      <div class="card-title">Inventory Liquidation</div>
+      <div class="card-desc">
+        Converts dead/ageing stock into targeted clearance campaigns. Cluster-based lookalike buyer matching,
+        exposure scoring, and discount recommendation engine.
+      </div>
+      <div class="card-tags">
+        <span class="tag">Stock Ageing</span>
+        <span class="tag">Lookalike</span>
+        <span class="tag">Clearance</span>
+        <span class="card-status status-solid">● Solid</span>
+      </div>
+    </a>
+
+  </div><!-- /modules-grid -->
+
+  <!-- Empty search state -->
+  <div id="empty-state">
+    <div class="empty-icon">🔍</div>
+    <p>No modules match your search. Try a different keyword.</p>
+  </div>
+
+  <!-- Quick Reference Section -->
+  <div class="section-title" style="margin-top: 8px;">Quick Reference — Key Concepts</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:52px;">
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;">
+      <div style="font-weight:700;font-size:13.5px;color:var(--text);margin-bottom:8px;">📐 INR Number Format</div>
+      <div style="font-size:12.5px;color:var(--text-secondary);line-height:1.7;">
+        All revenue values use Indian format:<br/>
+        <code style="color:#a5b4fc;font-family:'JetBrains Mono',monospace;font-size:11px;">₹750 → ₹750</code><br/>
+        <code style="color:#a5b4fc;font-family:'JetBrains Mono',monospace;font-size:11px;">₹45,000 → ₹45K</code><br/>
+        <code style="color:#a5b4fc;font-family:'JetBrains Mono',monospace;font-size:11px;">₹4,50,000 → ₹4.5L</code><br/>
+        <code style="color:#a5b4fc;font-family:'JetBrains Mono',monospace;font-size:11px;">₹1,20,00,000 → ₹1.2Cr</code>
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;">
+      <div style="font-weight:700;font-size:13.5px;color:var(--text);margin-bottom:8px;">🏥 Health Segments</div>
+      <div style="font-size:12.5px;color:var(--text-secondary);line-height:1.85;">
+        <span style="color:#22c55e;font-weight:600;">🏆 Champion</span> — score ≥ 0.80, drop &lt; 10%<br/>
+        <span style="color:#3b82f6;font-weight:600;">✅ Healthy</span> — score ≥ 0.60<br/>
+        <span style="color:#f59e0b;font-weight:600;">⚠️ At Risk</span> — score ≥ 0.40<br/>
+        <span style="color:#ef4444;font-weight:600;">🔴 Critical</span> — score &lt; 0.40
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;">
+      <div style="font-weight:700;font-size:13.5px;color:var(--text);margin-bottom:8px;">🔄 Data Refresh</div>
+      <div style="font-size:12.5px;color:var(--text-secondary);line-height:1.75;">
+        Partner features: <strong style="color:var(--text);">5 min TTL</strong><br/>
+        Clustering: <strong style="color:var(--text);">On demand</strong><br/>
+        Churn / Credit: <strong style="color:var(--text);">Full mode only</strong><br/>
+        Association rules: <strong style="color:var(--text);">30 min TTL</strong>
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;">
+      <div style="font-weight:700;font-size:13.5px;color:var(--text);margin-bottom:8px;">⚡ Revenue at Risk</div>
+      <div style="font-size:12.5px;color:var(--text-secondary);line-height:1.75;">
+        Probability-weighted loss formula:<br/>
+        <code style="color:#a5b4fc;font-family:'JetBrains Mono',monospace;font-size:11px;">At Risk = churn_prob × 90d_revenue</code><br/>
+        Applied as fallback when full scoring is unavailable (FAST_MODE).
+      </div>
+    </div>
+
+  </div>
+
+</div><!-- /container -->
+
+<div class="footer">
+  <strong>Consistent AI — Sales Intelligence Platform</strong> &nbsp;·&nbsp; Documentation Hub &nbsp;·&nbsp; April 2026<br/>
+  Modules: Cluster Intelligence · Kanban Pipeline · Market Basket · Product Lifecycle · Monitoring · Sales Rep · AI Chatbot · Inventory Liquidation<br/>
+  Click any module card to open its full technical documentation in a new browser tab.
+</div>
+
+<script>
+  // ── Live search filtering ─────────────────────────────────────────────────
+  const searchInput = document.getElementById('doc-search');
+  const grid        = document.getElementById('modules-grid');
+  const emptyState  = document.getElementById('empty-state');
+  const masterCard  = document.getElementById('master-doc');
+  const cards       = Array.from(grid.querySelectorAll('.module-card'));
+
+  searchInput.addEventListener('input', function() {
+    const q = this.value.trim().toLowerCase();
+    let visible = 0;
+
+    cards.forEach(card => {
+      const searchData = [
+        (card.dataset.search || ''),
+        (card.querySelector('.card-title')?.textContent || ''),
+        (card.querySelector('.card-desc')?.textContent || ''),
+        (card.querySelector('.card-num')?.textContent || ''),
+      ].join(' ').toLowerCase();
+
+      const match = !q || searchData.includes(q);
+      card.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+
+    // Show/hide master card
+    const masterMatch = !q || 'master review audit precision plan system'.includes(q);
+    masterCard.style.display = masterMatch ? '' : 'none';
+
+    // Empty state
+    emptyState.style.display = (visible === 0 && !masterMatch) ? 'block' : 'none';
+  });
+
+  // ── Keyboard shortcut: / to focus search ─────────────────────────────────
+  document.addEventListener('keydown', function(e) {
+    if (e.key === '/' && document.activeElement !== searchInput) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+    if (e.key === 'Escape') {
+      searchInput.value = '';
+      searchInput.dispatchEvent(new Event('input'));
+      searchInput.blur();
+    }
+  });
+</script>
+</body>
+</html>

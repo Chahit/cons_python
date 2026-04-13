@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Market Intelligence — Technical Documentation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root {
+    --primary: #6366f1; --primary-light: #eef2ff; --primary-dark: #3730a3;
+    --green: #16a34a;   --green-light: #dcfce7;
+    --blue: #2563eb;    --blue-light: #dbeafe;
+    --amber: #d97706;   --amber-light: #fef3c7;
+    --red: #dc2626;     --red-light: #fee2e2;
+    --text: #111827; --text-secondary: #4b5563; --text-muted: #9ca3af;
+    --border: #e5e7eb; --bg: #f9fafb; --card: #ffffff; --code-bg: #1e293b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.75; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
+
+  .cover { background: linear-gradient(135deg, #1e1b4b 0%, #4338ca 55%, #6366f1 100%); color: #fff; padding: 72px 80px 60px; }
+  .cover-badge { display: inline-block; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 20px; padding: 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 24px; }
+  .cover h1 { font-size: 42px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.15; margin-bottom: 14px; }
+  .cover h1 span { color: #c7d2fe; }
+  .cover .subtitle { font-size: 16px; color: #e0e7ff; max-width: 640px; margin-bottom: 40px; line-height: 1.6; }
+  .cover-meta { display: flex; gap: 32px; flex-wrap: wrap; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 28px; }
+  .cover-meta-item { font-size: 12px; color: #c7d2fe; }
+  .cover-meta-item strong { display: block; color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+
+  .container { max-width: 900px; margin: 0 auto; padding: 56px 40px; }
+  .intro-box { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 10px 10px 0; padding: 20px 24px; margin-bottom: 48px; font-size: 14.5px; color: var(--primary-dark); line-height: 1.7; }
+
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 48px; }
+  .toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; margin-bottom: 16px; }
+  .toc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; }
+  .toc-item { font-size: 13.5px; color: var(--primary); font-weight: 500; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .toc-num { color: var(--text-muted); font-weight: 400; margin-right: 6px; font-size: 12px; }
+
+  .section { margin-bottom: 60px; }
+  .section-header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 2px solid var(--border); }
+  .section-num { background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .section h2 { font-size: 21px; font-weight: 700; color: var(--text); }
+  .section-file { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--code-bg); color: #7dd3fc; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
+
+  h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 26px 0 10px; }
+  p { margin-bottom: 14px; color: var(--text-secondary); font-size: 14.5px; }
+
+  .formula { background: var(--code-bg); border-radius: 10px; padding: 18px 22px; margin: 16px 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #e2e8f0; line-height: 1.9; overflow-x: auto; white-space: pre; }
+  .formula .comment   { color: #64748b; }
+  .formula .highlight { color: #34d399; }
+  .formula .var       { color: #93c5fd; }
+
+  .callout { border-radius: 10px; padding: 16px 20px; margin: 18px 0; font-size: 14px; display: flex; gap: 12px; align-items: flex-start; }
+  .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.5; }
+  .callout-body strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+  .callout.why  { background: var(--primary-light); color: var(--primary-dark); }
+  .callout.tip  { background: var(--green-light); color: #14532d; }
+  .callout.alt  { background: var(--amber-light); color: #78350f; }
+  .callout.info { background: var(--blue-light); color: #1e3a8a; }
+  .callout.warn { background: var(--red-light); color: #7f1d1d; }
+
+  .table-wrap { overflow-x: auto; margin: 18px 0; border-radius: 10px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead tr { background: #eef2ff; }
+  th { padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--primary-dark); border-bottom: 2px solid #c7d2fe; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f5f3ff; }
+  td code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; background: #eef2ff; padding: 1px 5px; border-radius: 3px; color: var(--primary); }
+  td strong { color: var(--text); font-weight: 600; }
+
+  .tab-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 18px 0; }
+  .tab-chip { border-radius: 10px; padding: 14px 20px; flex: 1; min-width: 200px; border: 1px solid var(--border); background: var(--card); }
+  .tab-chip .tab-icon { font-size: 20px; margin-bottom: 8px; }
+  .tab-chip .tab-name { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .tab-chip .tab-desc { font-size: 12px; color: var(--text-muted); }
+
+  .flow { display: flex; align-items: center; gap: 0; margin: 20px 0; flex-wrap: wrap; }
+  .flow-step { background: var(--primary-light); border: 1px solid #c7d2fe; border-radius: 8px; padding: 8px 14px; font-size: 12.5px; font-weight: 600; color: var(--primary-dark); white-space: nowrap; }
+  .flow-arrow { color: var(--text-muted); font-size: 18px; padding: 0 6px; }
+
+  .api-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-bottom: 12px; }
+  .api-name { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; color: var(--primary); margin-bottom: 6px; }
+  .api-desc { font-size: 13px; color: var(--text-secondary); }
+
+  @media (max-width: 700px) {
+    .cover { padding: 40px 24px; }
+    .cover h1 { font-size: 28px; }
+    .container { padding: 32px 20px; }
+    .toc-grid { grid-template-columns: 1fr; }
+    .tab-row { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-badge">Module 10 · Market Intelligence</div>
+  <h1>Market <span>Intelligence</span></h1>
+  <p class="subtitle">
+    Live market data layer — RSS news briefing via GPT-4o, Google Shopping price tracking via SerpAPI,
+    and urgency-ranked partner alerts cross-referenced with your real distributor database.
+  </p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><strong>File</strong>frontend/tabs/market_intelligence.py</div>
+    <div class="cover-meta-item"><strong>External APIs</strong>OpenAI GPT-4o · SerpAPI Google Shopping</div>
+    <div class="cover-meta-item"><strong>Storage</strong>SQLite (market_prices.db)</div>
+    <div class="cover-meta-item"><strong>Cache</strong>News: 4h · Prices: 6h</div>
+    <div class="cover-meta-item"><strong>Updated</strong>April 2026</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Intro -->
+  <div class="intro-box">
+    Market Intelligence bridges the gap between internal sales data and external market signals.
+    It combines <strong>AI-driven news analysis</strong> (5 RSS sources → GPT-4o), <strong>live price benchmarking</strong>
+    (Google Shopping via SerpAPI), and a <strong>partner alert engine</strong> that ranks which distributors
+    to call based on a category's price movement and their risk profile.
+    All data is cached locally — no repeated API costs.
+  </div>
+
+  <!-- TOC -->
+  <div class="toc">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-item"><span class="toc-num">1.</span>Module Overview &amp; Architecture</div>
+      <div class="toc-item"><span class="toc-num">2.</span>Configuration &amp; API Keys</div>
+      <div class="toc-item"><span class="toc-num">3.</span>Tab 1: News Briefing</div>
+      <div class="toc-item"><span class="toc-num">4.</span>Tab 2: Price Tracker</div>
+      <div class="toc-item"><span class="toc-num">5.</span>Tab 3: Partner Alerts</div>
+      <div class="toc-item"><span class="toc-num">6.</span>SQLite Persistence Layer</div>
+      <div class="toc-item"><span class="toc-num">7.</span>Urgency Score Formula</div>
+      <div class="toc-item"><span class="toc-num">8.</span>GPT-4o Integration Points</div>
+      <div class="toc-item"><span class="toc-num">9.</span>Caching Strategy</div>
+      <div class="toc-item"><span class="toc-num">10.</span>Known Limitations &amp; Roadmap</div>
+    </div>
+  </div>
+
+  <!-- §1 Overview -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">1</div>
+      <h2>Module Overview &amp; Architecture</h2>
+      <span class="section-file">market_intelligence.py</span>
+    </div>
+    <p>
+      The module is a <strong>3-tab interface</strong>, each tab operating independently with its own
+      data sources, caching, and AI integration:
+    </p>
+    <div class="tab-row">
+      <div class="tab-chip">
+        <div class="tab-icon">📰</div>
+        <div class="tab-name">News Briefing</div>
+        <div class="tab-desc">5 RSS feeds → GPT-4o analysis → impact cards per product category</div>
+      </div>
+      <div class="tab-chip">
+        <div class="tab-icon">📊</div>
+        <div class="tab-name">Price Tracker</div>
+        <div class="tab-desc">SerpAPI Google Shopping → price comparison → 30-day trend chart</div>
+      </div>
+      <div class="tab-chip">
+        <div class="tab-icon">⚡</div>
+        <div class="tab-name">Partner Alerts</div>
+        <div class="tab-desc">Category selection → partner risk scoring → urgency-sorted outreach list</div>
+      </div>
+    </div>
+    <h3>High-Level Architecture</h3>
+    <div class="flow">
+      <div class="flow-step">RSS Feeds (5 sources)</div><div class="flow-arrow">→</div>
+      <div class="flow-step">feedparser</div><div class="flow-arrow">→</div>
+      <div class="flow-step">GPT-4o Analysis</div><div class="flow-arrow">→</div>
+      <div class="flow-step">Impact Cards</div>
+    </div>
+    <div class="flow">
+      <div class="flow-step">User Search Query</div><div class="flow-arrow">→</div>
+      <div class="flow-step">SerpAPI Google Shopping</div><div class="flow-arrow">→</div>
+      <div class="flow-step">SQLite cache</div><div class="flow-arrow">→</div>
+      <div class="flow-step">Price + Trend Chart</div>
+    </div>
+    <div class="flow">
+      <div class="flow-step">Category Select</div><div class="flow-arrow">→</div>
+      <div class="flow-step">df_recent_group_spend filter</div><div class="flow-arrow">→</div>
+      <div class="flow-step">Urgency Score</div><div class="flow-arrow">→</div>
+      <div class="flow-step">Partner Table</div>
+    </div>
+  </div>
+
+  <!-- §2 Configuration -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">2</div>
+      <h2>Configuration &amp; API Keys</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ENV Variable</th><th>Required For</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr><td><code>OPENAI_API_KEY</code></td><td>News Briefing GPT analysis · Partner Alerts GPT talking points</td><td>platform.openai.com</td></tr>
+          <tr><td><code>SERPAPI_KEY</code></td><td>Price Tracker (Google Shopping search)</td><td>serpapi.com (100 free/month)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Keys are read via <code>os.environ.get()</code> at render time. A status bar at the top of the tab
+      shows ✅ / ❌ connection status for each key. The module degrades gracefully — missing keys
+      disable the relevant sub-feature without crashing.
+    </p>
+    <div class="callout alt">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>Security Note</strong>
+        API keys must be set in the <code>.env</code> file (project root) and loaded by the
+        dashboard entrypoint. Never commit keys to version control. The keys are never exposed
+        to the frontend HTML or logged.
+      </div>
+    </div>
+    <h3>Product Category Auto-Population</h3>
+    <p>
+      The module calls <code>ai.ensure_product_lifecycle()</code> to populate <code>df_product_velocity</code>,
+      from which the category list is built (<code>product_name</code> column). If unavailable,
+      it falls back to a hardcoded list: IT Hardware, Networking, Storage, RAM, Printers, UPS.
+    </p>
+  </div>
+
+  <!-- §3 News Briefing -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">3</div>
+      <h2>Tab 1: News Briefing</h2>
+    </div>
+    <h3>RSS Feed Sources</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Source</th><th>Focus</th><th>Feed URL</th></tr></thead>
+        <tbody>
+          <tr><td>Tom's Hardware</td><td>IT hardware product news</td><td><code>tomshardware.com/feeds/all</code></td></tr>
+          <tr><td>The Register</td><td>Enterprise tech &amp; supply chain</td><td><code>theregister.com/headlines.atom</code></td></tr>
+          <tr><td>Ars Technica</td><td>Technology lab / components</td><td><code>feeds.arstechnica.com/...</code></td></tr>
+          <tr><td>Economic Times</td><td>Indian tech market news</td><td><code>economictimes.indiatimes.com/tech/...</code></td></tr>
+          <tr><td>SlashDot</td><td>Broad technology / open-source</td><td><code>rss.slashdot.org/Slashdot/slashDot</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Up to 5 headlines per feed are fetched (max 25 total) using <code>feedparser</code>.</p>
+
+    <h3>GPT-4o Analysis Pipeline</h3>
+    <div class="flow">
+      <div class="flow-step">fetch headlines (25)</div><div class="flow-arrow">→</div>
+      <div class="flow-step">build_news_briefing()</div><div class="flow-arrow">→</div>
+      <div class="flow-step">GPT-4o JSON</div><div class="flow-arrow">→</div>
+      <div class="flow-step">Impact Cards UI</div>
+    </div>
+    <p>GPT-4o receives:</p>
+    <ul style="margin-left:20px; margin-bottom:14px; color:var(--text-secondary);">
+      <li>List of our product categories (live from DB)</li>
+      <li>25 top headlines with source names</li>
+      <li>Instruction to produce structured JSON (not markdown)</li>
+    </ul>
+    <h3>GPT Output Schema</h3>
+    <div class="formula">{
+  "top_stories": [
+    {
+      "headline": <span class="var">string</span>,
+      "source": <span class="var">string</span>,
+      "impact_category": <span class="var">"one of our categories or 'General'"</span>,
+      "impact_level": <span class="var">"High | Medium | Low"</span>,
+      "impact_summary": <span class="var">"1-2 sentences on business impact"</span>,
+      "recommended_action": <span class="var">"specific sales team action"</span>
+    }
+  ],
+  "overall_market_mood": <span class="var">"Bullish | Bearish | Neutral"</span>,
+  "mood_reason": <span class="var">string</span>,
+  "supply_chain_alert": <span class="var">string | null</span>
+}</div>
+
+    <h3>Caching</h3>
+    <p>
+      The briefing is cached in <code>st.session_state["_news_cache"]</code> with a 4-hour TTL
+      (<code>_NEWS_CACHE_SECONDS = 14400</code>). A "🔄 Refresh Briefing" button forces re-fetch.
+      The cache age is displayed in minutes when valid.
+    </p>
+
+    <h3>UI Output</h3>
+    <p>
+      Each story renders as a dark card with a left color-coded border
+      (🔴 High / 🟡 Medium / 🟢 Low impact), plus the <strong>market mood banner</strong>
+      and any supply chain alert detected by GPT.
+    </p>
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>Cost Management</strong>
+        Each refresh costs approximately 1,500–2,000 GPT tokens (~$0.006 at GPT-4o pricing).
+        The 4-hour cache means a team of 10 users incurs at most 6 API calls per day.
+      </div>
+    </div>
+  </div>
+
+  <!-- §4 Price Tracker -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">4</div>
+      <h2>Tab 2: Price Tracker</h2>
+    </div>
+    <p>
+      Users enter a product name + category, then click "Search Prices". The module calls SerpAPI's
+      Google Shopping endpoint and stores results in SQLite. Each search adds one row to the
+      <code>price_history</code> table, enabling trend charts over time.
+    </p>
+
+    <h3>SerpAPI Call Parameters</h3>
+    <div class="formula">params = {
+    "engine":  "google_shopping",
+    "q":       <span class="var">user_query</span>,
+    "api_key": <span class="var">SERPAPI_KEY</span>,
+    "gl":      <span class="var">"in"</span>,   <span class="comment"># India region</span>
+    "hl":      <span class="var">"en"</span>,
+    "num":     <span class="var">10</span>,
+}</div>
+
+    <h3>Price Metrics Computed</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>Formula</th><th>Displayed As</th></tr></thead>
+        <tbody>
+          <tr><td>Avg Price</td><td>mean(valid prices)</td><td>₹ formatted</td></tr>
+          <tr><td>Min Price</td><td>min(valid prices)</td><td>₹ formatted</td></tr>
+          <tr><td>Max Price</td><td>max(valid prices)</td><td>₹ formatted</td></tr>
+          <tr><td>Price Spread</td><td>(max − min) / min × 100</td><td>% (tooltip explains)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>GPT-4o Price Summary</h3>
+    <p>
+      After fetching prices, the top 10 results are formatted as text and sent to GPT-4o for
+      a 2–3 sentence summary covering: price range observed, competitiveness assessment,
+      and one procurement recommendation (e.g. "good time to stock up" or "hold off").
+    </p>
+
+    <h3>30-Day Trend Chart</h3>
+    <p>
+      A Plotly area chart appears after ≥2 searches on the same query. It shows Avg Price as a
+      line with a min–max shaded range. The chart is populated from <code>price_history</code>
+      filtered to the last 30 days for the exact query string.
+    </p>
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>Cache-First Logic</strong>
+        Before calling SerpAPI, the module checks for a cached result within the last 6 hours
+        from SQLite. If found, no API call is made and the cached result is displayed instantly.
+        This prevents duplicate charges for repeated searches.
+      </div>
+    </div>
+
+    <h3>Past Searches Log</h3>
+    <p>
+      A collapsible expander at the bottom of the tab shows all searches from the last 30 days:
+      query, category, date, and average price.
+    </p>
+  </div>
+
+  <!-- §5 Partner Alerts -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">5</div>
+      <h2>Tab 3: Partner Alerts</h2>
+    </div>
+    <p>
+      This tab cross-references price data with the partner database to surface
+      <strong>which distributors to call, and why, right now</strong> based on market movement.
+    </p>
+    <h3>Data Sources</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Source</th><th>Usage</th></tr></thead>
+        <tbody>
+          <tr><td><code>ai.df_recent_group_spend</code></td><td>Primary: category-level spend per partner (group_name = category)</td></tr>
+          <tr><td><code>ai.df_partner_features</code></td><td>Enrichment: churn_probability, revenue_drop_pct, recency_days, cluster_label, health_segment</td></tr>
+          <tr><td>SQLite <code>price_history</code></td><td>Latest price and trend% for the selected category</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Partner Filtering Logic</h3>
+    <div class="formula"><span class="comment"># Step 1: filter spend data for selected category</span>
+cat_partners = df_recent_group_spend[
+    group_name.str.lower().contains(alert_cat[:15], na=False)
+]
+
+<span class="comment"># Fallback if no spend breakdown:</span>
+<span class="comment">  use df_partner_features with recent_90_revenue as spend</span>
+
+<span class="comment"># Step 2: merge partner health fields</span>
+cat_partners.merge(df_partner_features[enrich_cols], on="company_name", how="left")</div>
+
+    <h3>Price Trend Indicator</h3>
+    <p>
+      If price history exists for the selected category:
+    </p>
+    <div class="formula">trend_pct = (latest_avg_price − oldest_avg_price) / oldest_avg_price × 100
+
+<span class="var">Rising ↑</span>  : trend_pct &gt; 5%   <span class="comment"># Call partners now to lock in orders before price rise</span>
+<span class="var">Falling ↓</span> : trend_pct &lt; -5%  <span class="comment"># Alert partners to buying opportunity</span>
+<span class="var">Stable →</span>  : otherwise</div>
+  </div>
+
+  <!-- §6 SQLite -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">6</div>
+      <h2>SQLite Persistence Layer</h2>
+    </div>
+    <p>All price data is stored in <code>market_prices.db</code> at the project root.</p>
+    <h3>Schema: <code>price_history</code></h3>
+    <div class="formula">CREATE TABLE price_history (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_query    TEXT,       <span class="comment">-- exact search string (case-insensitive lookup)</span>
+    product_category TEXT,       <span class="comment">-- category tag selected by user</span>
+    search_date      TEXT,       <span class="comment">-- YYYY-MM-DD</span>
+    avg_price        REAL,
+    min_price        REAL,
+    max_price        REAL,
+    results_json     TEXT,       <span class="comment">-- full SerpAPI result as JSON string</span>
+    gpt_summary      TEXT,       <span class="comment">-- GPT-4o procurement summary</span>
+    created_at       TEXT        <span class="comment">-- UTC timestamp for cache cutoff</span>
+)</div>
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>DB Initialization</strong>
+        <code>_init_db()</code> is called on every tab render with <code>CREATE TABLE IF NOT EXISTS</code>,
+        so no manual setup is required. The DB file is auto-created in the project root.
+      </div>
+    </div>
+  </div>
+
+  <!-- §7 Urgency Score -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">7</div>
+      <h2>Urgency Score Formula</h2>
+    </div>
+    <p>
+      Each partner in the alerts tab receives an urgency score [0,1] that determines call priority.
+    </p>
+    <div class="formula">urgency_score = (
+   <span class="var">0.40</span> × churn_probability.clip(0, 1)
+ + <span class="var">0.30</span> × revenue_drop_pct.clip(0, 100) / 100
+ + <span class="var">0.20</span> × recency_days.clip(0, 90) / 90
+ + <span class="var">0.10</span> × (total_spend / max_spend_in_category)
+)</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Urgency Score</th><th>Priority Label</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>≥ 0.65</td><td>🔴 CALL TODAY</td><td>Highest churn risk + category exposure</td></tr>
+          <tr><td>0.40 – 0.64</td><td>🟡 CALL THIS WEEK</td><td>Moderate risk; market timing window</td></tr>
+          <tr><td>&lt; 0.40</td><td>🟢 MONITOR</td><td>Stable partner; bookmark for next cycle</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout why">
+      <div class="callout-icon">🎯</div>
+      <div class="callout-body">
+        <strong>Why 40/30/20/10 Weights?</strong>
+        Churn probability is the strongest leading indicator of lost revenue — hence 40%.
+        Revenue drop and recency provide lagging confirmation (30%/20%).
+        Spend weight (10%) ensures we prioritize high-value partners even when risk signals are moderate.
+      </div>
+    </div>
+  </div>
+
+  <!-- §8 GPT Integration Points -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">8</div>
+      <h2>GPT-4o Integration Points</h2>
+    </div>
+    <p>The module uses GPT at three places, all routed through the <code>_gpt(system, user, model, max_tokens)</code> helper:</p>
+    <div class="api-card">
+      <div class="api-name">_build_news_briefing() → 1,500 tokens</div>
+      <div class="api-desc">Converts 25 raw headlines into structured JSON with impact level, category, and recommended action per story. Output: top_stories array + mood + supply alert.</div>
+    </div>
+    <div class="api-card">
+      <div class="api-name">Price summary in Price Tracker → 200 tokens</div>
+      <div class="api-desc">Summarises top 10 Google Shopping results in 2–3 sentences: price range, competitiveness, procurement recommendation. Cached to SQLite alongside price data.</div>
+    </div>
+    <div class="api-card">
+      <div class="api-name">GPT talking points in Partner Alerts → 500 tokens</div>
+      <div class="api-desc">Generates personalised outreach talking points for the top 5 partners in a given category, referencing the price trend and framing around urgency to order.</div>
+    </div>
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>Graceful Degradation</strong>
+        All three GPT calls are wrapped in try/except. Errors return
+        <code>"[GPT error: ...]"</code> strings that are checked before rendering.
+        The UI skips the GPT section silently if the key is missing.
+      </div>
+    </div>
+  </div>
+
+  <!-- §9 Caching Strategy -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">9</div>
+      <h2>Caching Strategy</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Cache Layer</th><th>Type</th><th>TTL</th><th>Scope</th></tr></thead>
+        <tbody>
+          <tr><td>News briefing</td><td><code>st.session_state</code></td><td>4 hours</td><td>Per browser session (user-level)</td></tr>
+          <tr><td>Price results</td><td>SQLite <code>price_history</code></td><td>6 hours per query</td><td>Global (all users share)</td></tr>
+          <tr><td>Price history chart</td><td>SQLite <code>price_history</code></td><td>Persistent</td><td>30-day rolling window displayed</td></tr>
+          <tr><td>Partner alerts spend data</td><td><code>ai.df_recent_group_spend</code></td><td>300s (Streamlit TTL)</td><td>Inherited from core engine</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout alt">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>Session vs Global Cache</strong>
+        News briefing is session-scoped — different browsers get independent caches.
+        Price db is global — one search in one browser benefits all users for 6 hours.
+        This is intentional: price data doesn't change user-to-user but news analysis may vary.
+      </div>
+    </div>
+  </div>
+
+  <!-- §10 Known Limitations -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">10</div>
+      <h2>Known Limitations &amp; Roadmap</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Limitation</th><th>Impact</th><th>Planned Fix</th></tr></thead>
+        <tbody>
+          <tr><td>RSS feeds are English-only tech sources</td><td>Limited India-specific supply chain coverage</td><td>Add ET Markets, Business Standard, Indian Express Tech feeds</td></tr>
+          <tr><td>SerpAPI Google Shopping (India region)</td><td>Price data may not match B2B distributor pricing</td><td>Integrate distributor price APIs or manual price input</td></tr>
+          <tr><td>News cache is session-scoped</td><td>Each new session re-fetches and re-analyzes</td><td>Move to server-side cache (Redis or SQLite) with shared TTL</td></tr>
+          <tr><td>Category matching uses substring (first 15 chars)</td><td>May miss categories with similar prefixes</td><td>Replace with fuzzy matching or exact ID-based lookup</td></tr>
+          <tr><td>GPT talking points not cached</td><td>Re-generated on every expander open</td><td>Cache output to SQLite with 24h TTL</td></tr>
+          <tr><td>market_prices.db grows unbounded</td><td>Storage accumulation over months</td><td>Add cleanup job: delete records older than 90 days</td></tr>
+          <tr><td>No auth on SQLite DB</td><td>Any local process can modify price history</td><td>Acceptable for single-tenant; add row-level integrity checks for multi-tenant</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>Roadmap Items</h3>
+    <ul style="margin-left:20px; margin-bottom:14px; color: var(--text-secondary);">
+      <li>Push notifications (email/Slack) when CALL TODAY threshold is crossed</li>
+      <li>Automated daily price refresh for all tracked queries (background worker)</li>
+      <li>Multi-region price comparison (not just India)</li>
+      <li>Competitor price benchmarking (track specific competitor SKUs)</li>
+      <li>Partner-specific price alert subscriptions</li>
+    </ul>
+  </div>
+
+</div><!-- /container -->
+
+<div style="background:#1e1b4b;color:#c7d2fe;padding:28px 80px;font-size:12px;text-align:center;line-height:1.9;">
+  <strong style="color:#fff;">Consistent AI — Sales Intelligence Platform</strong> &nbsp;·&nbsp; Module 10: Market Intelligence &nbsp;·&nbsp; April 2026<br/>
+  Part of the Sales Intelligence Suite · See INDEX.html for all module documentation
+</div>
+
+</body>
+</html>

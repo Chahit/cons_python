@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Cluster Intelligence Engine — Technical Brief v3.0</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root {
+    --primary: #8b5cf6; --primary-light: #ede9fe; --primary-dark: #5b21b6;
+    --green: #059669;   --green-light: #d1fae5;
+    --amber: #d97706;   --amber-light: #fef3c7;
+    --red: #dc2626;     --red-light: #fee2e2;
+    --blue: #2563eb;    --blue-light: #dbeafe;
+    --teal: #0d9488;    --teal-light: #ccfbf1;
+    --text: #111827; --text-secondary: #4b5563; --text-muted: #9ca3af;
+    --border: #e5e7eb; --bg: #f9fafb; --card: #ffffff; --code-bg: #1e293b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.75; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
+  .cover { background: linear-gradient(135deg, #1e1b4b 0%, #3730a3 50%, #8b5cf6 100%); color: #fff; padding: 72px 80px 60px; }
+  .cover-badge { display: inline-block; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 20px; padding: 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 24px; }
+  .cover h1 { font-size: 42px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.15; margin-bottom: 14px; }
+  .cover h1 span { color: #c4b5fd; }
+  .cover .subtitle { font-size: 16px; color: #ddd6fe; max-width: 620px; margin-bottom: 40px; line-height: 1.6; }
+  .cover-meta { display: flex; gap: 32px; flex-wrap: wrap; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 28px; }
+  .cover-meta-item { font-size: 12px; color: #c4b5fd; }
+  .cover-meta-item strong { display: block; color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+  .container { max-width: 900px; margin: 0 auto; padding: 56px 40px; }
+  .intro-box { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 10px 10px 0; padding: 20px 24px; margin-bottom: 48px; font-size: 14.5px; color: #4c1d95; line-height: 1.7; }
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 48px; }
+  .toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; margin-bottom: 16px; }
+  .toc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; }
+  .toc-item { font-size: 13.5px; color: var(--primary); font-weight: 500; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .toc-num { color: var(--text-muted); font-weight: 400; margin-right: 6px; font-size: 12px; }
+  .section { margin-bottom: 60px; }
+  .section-header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 2px solid var(--border); }
+  .section-num { background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .section h2 { font-size: 21px; font-weight: 700; color: var(--text); }
+  .section-file { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--code-bg); color: #7dd3fc; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
+  h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 26px 0 10px; }
+  p { margin-bottom: 14px; color: var(--text-secondary); font-size: 14.5px; }
+  .formula { background: var(--code-bg); border-radius: 10px; padding: 18px 22px; margin: 16px 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #e2e8f0; line-height: 1.9; overflow-x: auto; white-space: pre; }
+  .formula .comment   { color: #64748b; }
+  .formula .highlight { color: #34d399; }
+  .formula .var       { color: #93c5fd; }
+  .formula .orange    { color: #fb923c; }
+  .formula .pink      { color: #f472b6; }
+  .callout { border-radius: 10px; padding: 16px 20px; margin: 18px 0; font-size: 14px; display: flex; gap: 12px; align-items: flex-start; }
+  .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.5; }
+  .callout-body strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+  .callout.why  { background: var(--primary-light); color: #4c1d95; }
+  .callout.tip  { background: var(--green-light); color: #064e3b; }
+  .callout.alt  { background: var(--amber-light); color: #78350f; }
+  .callout.info { background: var(--blue-light); color: #1e3a8a; }
+  .callout.teal { background: var(--teal-light); color: #134e4a; }
+  .callout.red  { background: var(--red-light); color: #991b1b; }
+  .table-wrap { overflow-x: auto; margin: 18px 0; border-radius: 10px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead tr { background: #f5f3ff; }
+  th { padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--primary-dark); border-bottom: 2px solid #ddd6fe; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #faf5ff; }
+  td code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; background: #f5f3ff; padding: 1px 5px; border-radius: 3px; color: var(--primary); }
+  td strong { color: var(--text); font-weight: 600; }
+  .weight-row { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+  .weight-label { width: 90px; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); text-align: right; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; }
+  .weight-bar-track { flex: 1; background: #ede9fe; border-radius: 4px; height: 18px; }
+  .weight-bar-fill { height: 18px; border-radius: 4px; background: var(--primary); }
+  .weight-pct { font-size: 12px; font-weight: 700; color: var(--primary); min-width: 38px; }
+  .pipeline { margin: 20px 0; }
+  .p-step { display: flex; gap: 16px; margin-bottom: 20px; }
+  .p-num { background: var(--primary); color: #fff; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0; margin-top: 4px; }
+  .p-body { flex: 1; }
+  .p-title { font-weight: 600; font-size: 14.5px; color: var(--text); margin-bottom: 4px; }
+  .p-desc { font-size: 13.5px; color: var(--text-secondary); line-height: 1.65; }
+  .archetype-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 18px 0; }
+  .arch-card { border-radius: 10px; padding: 14px 16px; border: 1px solid var(--border); }
+  .arch-card.vip    { background: linear-gradient(135deg, #f5f3ff, #ede9fe); border-color: #ddd6fe; }
+  .arch-card.growth { background: linear-gradient(135deg, #f0fdf4, #dcfce7); border-color: #bbf7d0; }
+  .arch-icon { font-size: 22px; margin-bottom: 6px; }
+  .arch-name { font-weight: 700; font-size: 13.5px; color: var(--text); margin-bottom: 4px; }
+  .arch-action { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+  .arch-tag { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; padding: 1px 7px; border-radius: 10px; margin-bottom: 6px; }
+  .arch-tag.vip    { background: var(--primary-light); color: var(--primary-dark); }
+  .arch-tag.growth { background: var(--green-light); color: var(--green); }
+  .quality-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0; }
+  .q-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .q-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); margin-bottom: 6px; }
+  .q-val { font-size: 22px; font-weight: 700; color: var(--primary); }
+  .q-desc { font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4; }
+  .env-tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--primary); background: var(--primary-light); padding: 2px 7px; border-radius: 4px; }
+  .footer { text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 12px; border-top: 1px solid var(--border); margin-top: 16px; }
+  .footer strong { color: var(--text-secondary); }
+  @media (max-width: 640px) {
+    .cover { padding: 40px 24px; } .cover h1 { font-size: 28px; }
+    .container { padding: 32px 20px; }
+    .toc-grid, .archetype-grid, .quality-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-badge">Module 02 of 08 — Internal Technical Brief</div>
+  <h1>Cluster<br/><span>Intelligence Engine</span></h1>
+  <p class="subtitle">
+    How the system automatically groups every partner into business-meaningful segments
+    using 7 layers of behavioural signals, multi-algorithm ensemble consensus, business-aware K selection,
+    and automated archetype labelling — fully updated for the v3.0 architecture.
+  </p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><strong>Primary File</strong>clustering_mixin.py (~98KB, 2240 lines)</div>
+    <div class="cover-meta-item"><strong>Governance</strong>cluster_governance_repository.py</div>
+    <div class="cover-meta-item"><strong>Algorithms</strong>KMeans · GMM · Spectral · HDBSCAN · Consensus</div>
+    <div class="cover-meta-item"><strong>April 2026</strong>Version 3.0</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="intro-box">
+    <strong>What changed in v3.0?</strong> The clustering engine was overhauled from a 2-algorithm competition (HDBSCAN vs GMM) to a full <em>multi-algorithm ensemble consensus</em> pipeline. K selection is now business-rule-driven with composite scoring. VIP/Growth tiering uses a Pareto revenue split instead of fixed percentile. Labels are generated via Gemini LLM with heuristic fallback. A quality gate with auto-fallback to last-approved assignments prevents bad clusters from reaching production. Temporal stability tracking via Hungarian algorithm detects partner-level promotions and demotions across runs.
+  </div>
+
+  <div class="toc">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-item"><span class="toc-num">01</span>Why Clustering Matters</div>
+      <div class="toc-item"><span class="toc-num">08</span>Business Archetype Labelling (LLM + Heuristic)</div>
+      <div class="toc-item"><span class="toc-num">02</span>The 7 Feature Groups</div>
+      <div class="toc-item"><span class="toc-num">09</span>Cluster Quality Validation</div>
+      <div class="toc-item"><span class="toc-num">03</span>Shannon Entropy — Category Diversity</div>
+      <div class="toc-item"><span class="toc-num">10</span>Quality Gate &amp; Auto-Fallback</div>
+      <div class="toc-item"><span class="toc-num">04</span>Network Co-Purchase Similarity</div>
+      <div class="toc-item"><span class="toc-num">11</span>Temporal Stability Tracking</div>
+      <div class="toc-item"><span class="toc-num">05</span>Feature Preprocessing &amp; Guardrails</div>
+      <div class="toc-item"><span class="toc-num">12</span>Feature Drift Detection</div>
+      <div class="toc-item"><span class="toc-num">06</span>Ensemble Consensus Clustering</div>
+      <div class="toc-item"><span class="toc-num">13</span>Business Validation Benchmarking</div>
+      <div class="toc-item"><span class="toc-num">07</span>VIP vs Growth — Pareto Tiering</div>
+      <div class="toc-item"><span class="toc-num">14</span>Partner Intelligence &amp; Playbooks</div>
+    </div>
+  </div>
+
+  <!-- S1 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">01</div>
+      <h2>Why Clustering Matters — And What Breaks Without It</h2>
+    </div>
+    <p>Clustering is the foundation of the entire intelligence engine. Every peer comparison, every cross-sell gap, every "similar partner" badge in the recommendation hub depends on having meaningful, stable, business-relevant groups.</p>
+    <p>Without clustering, a small regional distributor buying ₹3L/month in feature phones would be benchmarked against metro key accounts buying ₹50L/month across 12 categories. The gaps would be enormous, irrelevant, and would destroy trust.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Feature</th><th>Depends on Clustering</th><th>What breaks if clusters are wrong</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Peer Gap Analysis</strong></td><td>Compares partner spend to cluster peers</td><td>Gap numbers are inflated or meaningless</td></tr>
+          <tr><td><strong>Cross-Sell Recommendations</strong></td><td>Built from peer gap signals per cluster</td><td>Wrong products recommended — rep loses trust</td></tr>
+          <tr><td><strong>SPIN Scripts</strong></td><td>References the cluster's typical product</td><td>Script mentions irrelevant category</td></tr>
+          <tr><td><strong>VIP Classification</strong></td><td>Revenue percentile within cluster</td><td>VIP labels applied incorrectly</td></tr>
+          <tr><td><strong>Partner Alerts</strong></td><td>Alerts reference cluster context</td><td>Playbooks show generic unhelpful actions</td></tr>
+          <tr><td><strong>Business Validation</strong></td><td>Cluster-guided targeting vs baselines</td><td>Cannot prove clustering adds value</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- S2 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">02</div>
+      <h2>The 7 Feature Groups</h2>
+      <span class="section-file">_build_cluster_features()</span>
+    </div>
+    <p>The engine builds features from 7 distinct behavioural signals, grouped by namespace prefix and combined into a single feature matrix before clustering.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Group</th><th>Prefix</th><th>Features</th><th>What it captures</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Category Mix</strong></td><td><code>mix::rw::</code></td><td>Recency-weighted mix across 90d/180d/365d</td><td>What type of buyer — product category shares. <strong>Primary clustering signal.</strong></td></tr>
+          <tr><td><strong>Scale</strong></td><td><code>scale::</code></td><td>log_total_spend, active_groups, portfolio_concentration, active_group_momentum</td><td>Account size, breadth, and momentum</td></tr>
+          <tr><td><strong>RFM</strong></td><td><code>rfm::</code></td><td>log_recency, log_frequency, log_monetary</td><td>Classic Recency-Frequency-Monetary</td></tr>
+          <tr><td><strong>Velocity</strong></td><td><code>vel::</code></td><td>log_mean_gap, gap_cv</td><td>Buying rhythm regularity</td></tr>
+          <tr><td><strong>Diversity</strong></td><td><code>div::</code></td><td>entropy, entropy_norm (Shannon)</td><td>How spread out is spend across categories</td></tr>
+          <tr><td><strong>Seasonality</strong></td><td><code>season::</code></td><td>monthly_cv, seasonal_amplitude, season_q1–q4 (one-hot)</td><td>Festival-driven vs steady buyers</td></tr>
+          <tr><td><strong>Network</strong></td><td><code>net::</code></td><td>net_mean_peer_sim, net_max_peer_sim, net_centrality</td><td>Portfolio similarity to peers (cosine)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Recency-Weighted Category Mix (The Key Formula)</h3>
+    <div class="formula"><span class="comment">For each time window, compute category share of spend:</span>
+<span class="var">mix_90d</span>   = category spend in last 90 days  ÷ total spend in last 90 days
+<span class="var">mix_180d</span>  = category spend in last 180 days ÷ total spend in last 180 days
+<span class="var">mix_365d</span>  = category spend in last 365 days ÷ total spend in last 365 days
+
+<span class="comment">Recency-weighted combination (50/30/20 weighting):</span>
+<span class="var">mix::rw::{category}</span> = <span class="highlight">0.5</span> × mix_90d + <span class="highlight">0.3</span> × mix_180d + <span class="highlight">0.2</span> × mix_365d
+
+<span class="comment">Result: recent behaviour changes are reflected immediately without manual re-tagging.</span></div>
+
+    <h3>Scale: Portfolio Concentration (HHI)</h3>
+    <div class="formula"><span class="var">portfolio_concentration</span> = Σ(category_share²)
+<span class="comment">Range: 1/N (diversified) to 1.0 (all spend in one category)</span>
+
+<span class="var">active_group_momentum</span> = active_groups_90d − active_groups_365d
+<span class="comment">Positive = expanding portfolio, Negative = contracting</span></div>
+  </div>
+
+  <!-- S3 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">03</div>
+      <h2>Shannon Entropy — Measuring Category Diversity</h2>
+      <span class="section-file">_compute_category_entropy()</span>
+    </div>
+    <div class="formula"><span class="var">H</span> = −Σ [ p_i × log₂(p_i) ]   <span class="comment">where p_i = share of category i</span>
+
+<span class="var">H_norm</span> = H ÷ log₂(N)   <span class="comment">where N = number of categories (0 to 1 scale)</span>
+
+<span class="comment">Examples:</span>
+<span class="comment">  100% mobiles only            → H = 0      (zero diversity)</span>
+<span class="comment">  Split evenly across 4 cats   → H ≈ 2.0    (H_norm = 1.0)</span>
+<span class="comment">  70% mobiles + 20% + 10%      → H ≈ 1.16   (H_norm ≈ 0.73)</span></div>
+    <div class="callout why">
+      <div class="callout-icon">🔍</div>
+      <div class="callout-body">
+        <strong>Why not just count categories?</strong>
+        A partner spending ₹9.5L in mobiles and ₹0.5L in 3 others looks diverse by count (4 categories) but is highly concentrated. Entropy captures this nuance — the more unequal the distribution, the lower the score.
+      </div>
+    </div>
+  </div>
+
+  <!-- S4 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">04</div>
+      <h2>Network Co-Purchase Similarity</h2>
+      <span class="section-file">_compute_network_features()</span>
+    </div>
+    <div class="formula"><span class="comment">1. Build spend vector per partner → normalise to unit length</span>
+<span class="comment">2. Compute pairwise cosine similarity (self-similarity excluded)</span>
+
+<span class="var">cosine_sim(A, B)</span> = (A · B) ÷ (|A| × |B|)
+
+<span class="comment">Derived features (top-K = 5 neighbours):</span>
+<span class="var">net_mean_peer_sim</span>  = avg cosine sim to top-5 most similar partners
+<span class="var">net_max_peer_sim</span>   = highest cosine sim to any partner
+<span class="var">net_centrality</span>     = mean cosine sim to ALL partners (hub score)</div>
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>Business meaning of centrality</strong>
+        High centrality = "typical" distributor, safe for standard recommendations. Low centrality = unique buying pattern, needs customised attention. The algorithm often assigns low-centrality partners to outlier buckets.
+      </div>
+    </div>
+  </div>
+
+  <!-- S5 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">05</div>
+      <h2>Feature Preprocessing &amp; Quality Guardrails</h2>
+      <span class="section-file">_feature_quality_guardrails()</span>
+    </div>
+    <p>Before clustering, the combined feature matrix passes through quality guardrails and preprocessing:</p>
+    <div class="pipeline">
+      <div class="p-step"><div class="p-num">1</div><div class="p-body"><div class="p-title">Null Handling</div><div class="p-desc">All NaN values filled with 0.0. Max null ratio per column is logged for monitoring.</div></div></div>
+      <div class="p-step"><div class="p-num">2</div><div class="p-body"><div class="p-title">Zero-Variance Pruning</div><div class="p-desc">Columns with standard deviation &lt; 1e-9 are dropped. Prevents constant features from polluting distance calculations. If ALL columns pruned, a dummy_feature column is injected.</div></div></div>
+      <div class="p-step"><div class="p-num">3</div><div class="p-body"><div class="p-title">Mix Sum Consistency</div><div class="p-desc">For <code>mix::rw::</code> features, validates that each row sums to ≈1.0. Reports mean absolute error (mix_sum_mae) for auditing.</div></div></div>
+      <div class="p-step"><div class="p-num">4</div><div class="p-body"><div class="p-title">RobustScaler</div><div class="p-desc">Scales using median &amp; IQR instead of mean/std — a VIP spending 50× the average won't compress everyone else to near-zero.</div></div></div>
+    </div>
+    <div class="callout alt">
+      <div class="callout-icon">⚙️</div>
+      <div class="callout-body">
+        <strong>v3.0 change: No more UMAP</strong>
+        The previous PCA → UMAP pipeline has been replaced. Features are now sent directly to the ensemble after RobustScaler. This eliminates the <code>umap-learn</code> dependency and removes a stochastic step that caused instability in smaller datasets.
+      </div>
+    </div>
+  </div>
+
+  <!-- S6 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">06</div>
+      <h2>Ensemble Consensus Clustering</h2>
+      <span class="section-file">_ensemble_segment()</span>
+    </div>
+    <p>The core clustering engine runs <strong>multiple algorithms at the same forced K</strong>, builds a consensus co-association matrix, and derives final labels via hierarchical clustering on the consensus. This is the biggest change from v2.</p>
+
+    <h3>Algorithm Selection by Tier</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Tier</th><th>Algorithms Run</th><th>Consensus Method</th></tr></thead>
+        <tbody>
+          <tr><td><strong>VIP</strong></td><td>KMeans (n_init=15) + GMM (full/diag covariance) + Spectral (k-NN affinity)</td><td>Forced-K consensus → Agglomerative (average linkage) on distance = 1−C</td></tr>
+          <tr><td><strong>Growth</strong></td><td>KMeans (n_init=15) + GMM + HDBSCAN (leaf selection, ≤25% outlier gate)</td><td>Forced-K consensus (excludes HDBSCAN if outlier-heavy) → same hierarchical cut</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Business-Rule K Selection</h3>
+    <div class="formula"><span class="comment">Target: ~12 partners per cluster (actionable for sales teams)</span>
+<span class="var">business_k</span> = ceil(n_partners ÷ target_cluster_size)
+<span class="var">best_k</span>     = clamp(business_k, min=4, max=15)
+
+<span class="comment">All algorithms run at this SAME K for label consistency.</span>
+<span class="comment">No silhouette-based K search — K is fixed by business rule.</span></div>
+
+    <h3>Consensus Matrix Construction</h3>
+    <div class="formula"><span class="comment">For each pair of partners (i, j) across M algorithm runs:</span>
+<span class="var">C[i,j]</span> = fraction of runs where i and j share the same cluster
+         (outlier labels −1 excluded from co-assignment counts)
+
+<span class="comment">Range: 0.0 (never co-clustered) → 1.0 (always co-clustered)</span>
+
+<span class="comment">Final labels:</span>
+  <span class="var">distance</span> = 1.0 − C[i,j]
+  → AgglomerativeClustering(metric='precomputed', linkage='average')
+  → Cut at target K
+  → If Agglomerative fails: fallback to KMeans on consensus matrix</div>
+
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>Why force all algorithms to the same K?</strong>
+        In v2, each algorithm chose its own K, leading to consensus matrices where different algorithms disagreed on granularity (e.g., HDBSCAN found 3 clusters while GMM found 8). The consensus was noisy. Forcing a common K makes the co-association signal much stronger and more interpretable.
+      </div>
+    </div>
+
+    <h3>Growth Segment: Outlier Reassignment</h3>
+    <div class="formula"><span class="comment">For each partner with label = −1 (outlier):</span>
+1. Compute distance to every non-outlier cluster centroid
+2. Find nearest cluster
+
+<span class="comment">Reassign IF distance ≤ cutoff × multiplier</span>
+<span class="var">cutoff</span>     = 70th percentile of intra-cluster distances
+<span class="var">base_mult</span>  = 0.9  (conservative for standard partners)
+<span class="var">high_mult</span>  = 1.1  (more permissive for high-value partners)
+<span class="var">high_value</span> = partners above 80th percentile of log_total_spend
+
+<span class="comment">Partners still outside range → remain "Uncategorized"</span></div>
+  </div>
+
+  <!-- S7 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">07</div>
+      <h2>VIP vs Growth — Pareto Revenue Tiering</h2>
+      <span class="section-file">run_clustering()</span>
+    </div>
+    <p>Before clustering, partners are split into VIP and Growth tiers using a Pareto revenue split — not a fixed percentile cutoff.</p>
+    <div class="formula"><span class="comment">Step 1: Sort partners by total spend (descending)</span>
+<span class="comment">Step 2: Compute cumulative spend share</span>
+
+<span class="var">vip_revenue_share</span> = 0.60  <span class="comment">(top 60% of cumulative revenue)</span>
+<span class="var">vip_max_share</span>     = 0.35  <span class="comment">(at most 35% of partners can be VIP)</span>
+<span class="var">vip_min_count</span>     = max(3, 8% of partners)
+
+<span class="comment">Partners whose cumulative contribution ≤ 60% → VIP tier</span>
+<span class="comment">Remaining partners → Growth tier</span>
+<span class="comment">Bounds enforced: min 3 VIP, max 35% of base</span>
+<span class="comment">Safety: if Growth has &lt; 2 partners, force 70/30 split</span></div>
+    <div class="callout why">
+      <div class="callout-icon">🔍</div>
+      <div class="callout-body">
+        <strong>Why Pareto instead of fixed 80th percentile?</strong>
+        A fixed percentile treats a top-20 partner base the same whether it contains 50 or 500 partners. Pareto adapts: in a concentrated network (few large accounts), the VIP tier is small and focused; in a distributed network, it's broader. This matches real B2B distribution dynamics.
+      </div>
+    </div>
+  </div>
+
+  <!-- S8 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">08</div>
+      <h2>Business Archetype Labelling — LLM + Heuristic</h2>
+      <span class="section-file">_auto_label_clusters()</span>
+    </div>
+    <p>Every cluster gets a human-readable business label. The system tries Gemini LLM first, then falls back to a rule-based heuristic.</p>
+
+    <h3>Step 1: Build Centroid Profiles</h3>
+    <p>For each cluster, a text profile is generated from: spend level (High/Medium/Low), portfolio breadth (diversified/moderate/focused), HHI concentration, and top 5 categories with spend share %.</p>
+
+    <h3>Step 2: Gemini LLM Labelling (Primary)</h3>
+    <div class="formula"><span class="comment">If GEMINI_API_KEY is present:</span>
+  Send all cluster profiles to Gemini with structured prompt
+  Request: 2-4 word title-cased labels per cluster
+  Validate: non-empty string, 3-80 chars, no JSON artifacts
+  Accept if ≥ 50% of clusters get valid labels</div>
+
+    <h3>Step 3: Heuristic Fallback</h3>
+    <div class="formula"><span class="comment">Rule-based label construction from profile keywords:</span>
+
+<span class="comment">Spend level mapping:</span>
+  High-spend → "High-Value"  |  Medium-spend → "Mid-Tier"  |  Low-spend → "Emerging"
+
+<span class="comment">Breadth mapping:</span>
+  diversified → "Diversified"  |  moderate → "Balanced"  |  focused → "Specialist"
+
+<span class="comment">Concentration mapping:</span>
+  highly concentrated → "Category-Focused"  |  well-distributed → "Multi-Category"
+
+<span class="comment">Final label format:</span>
+<span class="highlight">  {Tier} — {SpendLevel} · {Breadth|Concentration}</span>
+<span class="comment">  Example: "VIP — High-Value · Diversified"</span>
+<span class="comment">  Deduplication: if label collision, append #cluster_num</span></div>
+
+    <h3>Business Archetypes (Heuristic Examples)</h3>
+    <div class="archetype-grid">
+      <div class="arch-card vip"><div class="arch-tag vip">VIP</div><div class="arch-icon">💎</div><div class="arch-name">High-Value · Diversified</div><div class="arch-action">Expand to new categories with curated premium bundles.</div></div>
+      <div class="arch-card vip"><div class="arch-tag vip">VIP</div><div class="arch-icon">🏆</div><div class="arch-name">High-Value · Category-Focused</div><div class="arch-action">Deepen share in dominant category with exclusive deals.</div></div>
+      <div class="arch-card vip"><div class="arch-tag vip">VIP</div><div class="arch-icon">⭐</div><div class="arch-name">Mid-Tier · Balanced</div><div class="arch-action">Fast-track relationship. Assign senior account owner.</div></div>
+      <div class="arch-card growth"><div class="arch-tag growth">Growth</div><div class="arch-icon">🚀</div><div class="arch-name">High-Value · Multi-Category</div><div class="arch-action">Accelerate with priority fulfilment and advance orders.</div></div>
+      <div class="arch-card growth"><div class="arch-tag growth">Growth</div><div class="arch-icon">🎯</div><div class="arch-name">Mid-Tier · Specialist</div><div class="arch-action">Offer category exclusivity deal to lock in spend.</div></div>
+      <div class="arch-card growth"><div class="arch-tag growth">Growth</div><div class="arch-icon">🔄</div><div class="arch-name">Emerging · Category-Focused</div><div class="arch-action">Recovery call within 48 hours. 14-day offer window.</div></div>
+    </div>
+  </div>
+
+  <!-- S9 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">09</div>
+      <h2>Cluster Quality Validation</h2>
+      <span class="section-file">_compute_quality_scores() · _estimate_stability()</span>
+    </div>
+    <div class="quality-row">
+      <div class="q-card"><div class="q-label">Silhouette</div><div class="q-val">&gt; 0.4</div><div class="q-desc">Measures cluster separation. Range: −1 to +1. Above 0.4 is good for real-world B2B data.</div></div>
+      <div class="q-card"><div class="q-label">Calinski-Harabasz</div><div class="q-val">Higher = Better</div><div class="q-desc">Ratio of between-cluster to within-cluster variance. Compact + well-separated simultaneously.</div></div>
+      <div class="q-card"><div class="q-label">Bootstrap ARI</div><div class="q-val">≈ 1.0</div><div class="q-desc">5 runs on 80% subsets using KMeans resampling. ARI=1 = identical, &lt;0.3 = unstable.</div></div>
+    </div>
+
+    <h3>Stability Estimation (Bootstrap ARI)</h3>
+    <div class="formula"><span class="comment">For each of 5 bootstrap runs:</span>
+  sample = 80% of partners (random, no replacement, min 10)
+  Re-cluster sample using same algorithm (KMeans for consensus)
+  Compute ARI(base_labels[sample], new_labels)
+
+<span class="var">stability_score</span> = mean(ARI across 5 runs)
+
+<span class="comment">ARI = 1.0 → identical every time</span>
+<span class="comment">ARI = 0.0 → no better than random</span>
+<span class="comment">ARI &lt; 0.3 → unstable, flag for review</span></div>
+  </div>
+
+  <!-- S10 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">10</div>
+      <h2>Quality Gate &amp; Auto-Fallback</h2>
+      <span class="section-file">_cluster_quality_gate() · _persist_cluster_run()</span>
+    </div>
+    <p>Every clustering run passes through a quality gate. If the gate fails, the system automatically rolls back to the last approved assignments from the database.</p>
+
+    <div class="formula"><span class="comment">Quality gate checks (all must pass):</span>
+
+1. <span class="var">cluster_count</span> ≥ CLUSTER_MIN_COUNT (default: 2)
+2. <span class="var">outlier_ratio</span> within [CLUSTER_OUTLIER_MIN, CLUSTER_OUTLIER_MAX]
+3. VIP <span class="var">stability_ari</span> ≥ CLUSTER_MIN_STABILITY_ARI (default: 0.0)
+4. Growth <span class="var">stability_ari</span> ≥ CLUSTER_MIN_STABILITY_ARI
+
+<span class="comment">If gate PASSES:</span>
+<span class="highlight">  → Save run to cluster_model_runs (approved=true)</span>
+<span class="highlight">  → Save assignments to cluster_assignments table</span>
+
+<span class="comment">If gate FAILS:</span>
+<span class="pink">  → Save run to cluster_model_runs (approved=false, reject_reason)</span>
+<span class="pink">  → Load last approved assignments from DB and overwrite current matrix</span>
+<span class="pink">  → If no historical approved run exists → use current (degraded) result</span></div>
+
+    <div class="callout red">
+      <div class="callout-icon">🛡️</div>
+      <div class="callout-body">
+        <strong>Why auto-fallback matters</strong>
+        Without fallback, a single bad data load (e.g., missing transactions) could cause all partners to collapse into 1 cluster, wiping out all peer comparisons and triggering wrong recommendations for every sales rep simultaneously. The quality gate prevents this cascade.
+      </div>
+    </div>
+  </div>
+
+  <!-- S11 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">11</div>
+      <h2>Temporal Stability Tracking</h2>
+      <span class="section-file">_match_clusters_hungarian() · _track_temporal_transitions()</span>
+    </div>
+    <p>On every clustering run, the system compares current assignments against the last approved run using the Hungarian algorithm to detect promotions, demotions, and cluster dissolutions.</p>
+
+    <h3>Hungarian Algorithm for Label Matching</h3>
+    <div class="formula"><span class="comment">Problem: cluster labels are arbitrary (0, 1, 2...) across runs.</span>
+<span class="comment">"Cluster 0" today may correspond to "Cluster 3" yesterday.</span>
+
+<span class="comment">Solution: match by maximum partner overlap</span>
+<span class="var">cost[new_i, old_j]</span> = −overlap(partners in new_i ∩ partners in old_j)
+→ Hungarian algorithm minimises total cost in O(n³)
+→ Produces mapping: {new_label → prev_label}
+
+<span class="comment">Only maps pairs with actual overlap &gt; 0.</span></div>
+
+    <h3>Transition Detection</h3>
+    <div class="formula"><span class="comment">For each partner present in both runs:</span>
+  <span class="highlight">Stable</span>:     same cluster (or matched cluster)
+  <span class="orange">Promoted</span>:   Growth → VIP tier change
+  <span class="pink">Demoted</span>:    VIP → Growth tier change
+  <span class="var">Reassigned</span>: moved to different cluster within same tier
+
+<span class="comment">Output: stability_score = stable_count / total_common_partners</span>
+<span class="comment">Also reports: new_clusters, dissolved_clusters, top 50 transition details</span></div>
+  </div>
+
+  <!-- S12 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">12</div>
+      <h2>Feature Drift Detection</h2>
+      <span class="section-file">_compute_feature_drift()</span>
+    </div>
+    <div class="formula"><span class="var">mean_abs_z_shift</span> = mean(| (current_mean − baseline_mean) ÷ baseline_std |)
+
+<span class="comment">Interpretation:</span>
+  z &lt; 0.5  → normal variation
+  z 0.5–1.0 → moderate shift, investigate pipeline
+  z &gt; 1.0  → significant change (new partners, seasonal shift, or data issue)
+
+<span class="comment">Baseline updates on every run → adapts to real business trends.</span>
+<span class="comment">A sudden spike (0.3 → 2.1) is the actionable signal.</span></div>
+  </div>
+
+  <!-- S13 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">13</div>
+      <h2>Business Validation Benchmarking</h2>
+      <span class="section-file">run_cluster_business_validation()</span>
+    </div>
+    <p>After every clustering run, the system automatically benchmarks cluster-guided targeting against two baselines to prove clustering adds business value.</p>
+
+    <div class="formula"><span class="comment">Three targeting strategies compared (top 20% selection):</span>
+
+<span class="highlight">1. Cluster-Guided</span>: rank clusters by avg churn + total loss,
+   then rank partners within clusters by:
+   0.7 × churn_probability + 0.3 × normalised_loss
+   Select top 20% of partners
+
+<span class="var">2. Top-Revenue Baseline</span>: select top 20% by recent_90_revenue
+
+<span class="orange">3. Random Baseline</span>: random 20% sample
+
+<span class="comment">Each strategy evaluated on:</span>
+  - hit_rate_degrowth_pct: % of selected partners with degrowth flag
+  - captured_est_monthly_loss: total estimated monthly loss in selection
+  - avg_churn_probability: average churn risk in selection</div>
+
+    <div class="callout tip">
+      <div class="callout-icon">📊</div>
+      <div class="callout-body">
+        <strong>Expected result</strong>
+        Cluster-guided targeting should capture significantly more at-risk revenue than top-revenue or random baselines. If it doesn't, the clustering may not be capturing meaningful risk segmentation — a signal to revisit feature engineering.
+      </div>
+    </div>
+  </div>
+
+  <!-- S14 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">14</div>
+      <h2>Partner Intelligence &amp; Segment Playbooks</h2>
+      <span class="section-file">get_partner_intelligence() · _build_segment_playbook()</span>
+    </div>
+    <p>The partner intelligence report is the final consumer of clustering — every partner gets a personalised dossier that combines cluster context with individual signals.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Section</th><th>Source</th><th>What it contains</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Facts</strong></td><td>Partner features + live scores</td><td>Health segment, revenue drop %, churn probability, credit risk, forecast</td></tr>
+          <tr><td><strong>Peer Gaps</strong></td><td>Cluster peer comparison</td><td>Product-level gaps vs cluster average, annualised revenue opportunity</td></tr>
+          <tr><td><strong>Alerts</strong></td><td>Alert engine</td><td>Sharp revenue drop, high churn jump, credit risk jump (severity-ranked)</td></tr>
+          <tr><td><strong>Playbook</strong></td><td>Segment + alerts</td><td>Priority (Critical/High/Normal), next best action, 4-6 concrete action steps</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Playbooks are segment-aware: Champions get wallet-defence tactics, At-Risk partners get retention interventions, VIP partners get executive cadence recommendations, and Outlier partners are benchmarked against state-level peers instead of cluster peers.</p>
+  </div>
+
+  <!-- Config Reference -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">⚙</div>
+      <h2>Configuration Reference</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Variable</th><th>Default</th><th>What it controls</th></tr></thead>
+        <tbody>
+          <tr><td><span class="env-tag">CLUSTER_TARGET_SIZE</span></td><td>12</td><td>Target partners per cluster (drives K selection)</td></tr>
+          <tr><td><span class="env-tag">CLUSTER_VIP_REVENUE_SHARE</span></td><td>0.60</td><td>Cumulative revenue share for Pareto VIP split</td></tr>
+          <tr><td><span class="env-tag">CLUSTER_VIP_MAX_SHARE</span></td><td>0.35</td><td>Max % of partners that can be VIP</td></tr>
+          <tr><td><span class="env-tag">CLUSTER_MIN_COUNT</span></td><td>2</td><td>Minimum clusters to pass quality gate</td></tr>
+          <tr><td><span class="env-tag">CLUSTER_MIN_STABILITY_ARI</span></td><td>0.0</td><td>Minimum ARI for quality gate approval</td></tr>
+          <tr><td><span class="env-tag">CLUSTER_GROWTH_OUTLIER_REASSIGN</span></td><td>true</td><td>Enable outlier reassignment for Growth tier</td></tr>
+          <tr><td><span class="env-tag">CLUSTER_GROWTH_REASSIGN_DISTANCE_Q</span></td><td>0.70</td><td>Distance quantile for reassignment radius</td></tr>
+          <tr><td><span class="env-tag">CLUSTER_GROWTH_HIGH_VALUE_Q</span></td><td>0.80</td><td>Revenue quantile for wider reassignment radius</td></tr>
+          <tr><td><span class="env-tag">GEMINI_API_KEY</span></td><td>—</td><td>Enables LLM-powered cluster labelling (optional)</td></tr>
+          <tr><td><span class="env-tag">GEMINI_MODEL</span></td><td>gemini-2.5-flash</td><td>Model used for LLM label generation</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Data Flow -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">⟳</div>
+      <h2>End-to-End Data Flow</h2>
+    </div>
+    <div class="pipeline">
+      <div class="p-step"><div class="p-num">1</div><div class="p-body"><div class="p-title">PostgreSQL → Temporal Group Spend</div><div class="p-desc">Load 90d/180d/365d spend pivots per partner×category from transactions_dsr.</div></div></div>
+      <div class="p-step"><div class="p-num">2</div><div class="p-body"><div class="p-title">Feature Engineering</div><div class="p-desc">Build 7 feature groups: mix, scale, RFM, velocity, entropy, seasonality, network → single feature matrix.</div></div></div>
+      <div class="p-step"><div class="p-num">3</div><div class="p-body"><div class="p-title">Quality Guardrails</div><div class="p-desc">Null handling, zero-variance pruning, mix sum validation. Report feature quality metrics.</div></div></div>
+      <div class="p-step"><div class="p-num">4</div><div class="p-body"><div class="p-title">Pareto VIP/Growth Split</div><div class="p-desc">Split partners by cumulative revenue share. VIP gets KMeans+GMM+Spectral, Growth gets KMeans+GMM+HDBSCAN.</div></div></div>
+      <div class="p-step"><div class="p-num">5</div><div class="p-body"><div class="p-title">Ensemble Consensus</div><div class="p-desc">Build co-association matrix from forced-K label sets → hierarchical cut for final labels.</div></div></div>
+      <div class="p-step"><div class="p-num">6</div><div class="p-body"><div class="p-title">Auto-Labelling</div><div class="p-desc">Gemini LLM or heuristic fallback generates business archetype names from centroid profiles.</div></div></div>
+      <div class="p-step"><div class="p-num">7</div><div class="p-body"><div class="p-title">Quality Gate</div><div class="p-desc">Check cluster count, outlier ratio, ARI stability. If failed → rollback to last approved DB state.</div></div></div>
+      <div class="p-step"><div class="p-num">8</div><div class="p-body"><div class="p-title">Persist &amp; Track</div><div class="p-desc">Save to cluster_model_runs + cluster_assignments. Hungarian-match against previous run. Detect promotions/demotions.</div></div></div>
+      <div class="p-step"><div class="p-num">9</div><div class="p-body"><div class="p-title">Business Validation</div><div class="p-desc">Benchmark cluster-guided targeting vs top-revenue and random baselines on degrowth/churn KPIs.</div></div></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <strong>Cluster Intelligence Engine — Technical Brief v3.0</strong> &nbsp;·&nbsp; Module 02 of 08 &nbsp;·&nbsp; April 2026<br/>
+  Files: clustering_mixin.py · cluster_governance_repository.py · clustering.py (UI)<br/>
+  Algorithms: KMeans · GMM · Spectral · HDBSCAN · Consensus Matrix · Agglomerative · Hungarian · RobustScaler · Silhouette · ARI · Cosine Similarity · Shannon Entropy
+</div>
+
+</body>
+</html>

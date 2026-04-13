@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Partner 360 View — Technical Documentation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root {
+    --primary: #2563eb; --primary-light: #dbeafe; --primary-dark: #1e3a8a;
+    --green: #16a34a;   --green-light: #dcfce7;
+    --blue: #2563eb;    --blue-light: #dbeafe;
+    --amber: #d97706;   --amber-light: #fef3c7;
+    --red: #dc2626;     --red-light: #fee2e2;
+    --text: #111827; --text-secondary: #4b5563; --text-muted: #9ca3af;
+    --border: #e5e7eb; --bg: #f9fafb; --card: #ffffff; --code-bg: #1e293b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.75; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
+
+  .cover { background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #2563eb 100%); color: #fff; padding: 72px 80px 60px; }
+  .cover-badge { display: inline-block; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 20px; padding: 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 24px; }
+  .cover h1 { font-size: 42px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.15; margin-bottom: 14px; }
+  .cover h1 span { color: #bfdbfe; }
+  .cover .subtitle { font-size: 16px; color: #dbeafe; max-width: 620px; margin-bottom: 40px; line-height: 1.6; }
+  .cover-meta { display: flex; gap: 32px; flex-wrap: wrap; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 28px; }
+  .cover-meta-item { font-size: 12px; color: #bfdbfe; }
+  .cover-meta-item strong { display: block; color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+
+  .container { max-width: 900px; margin: 0 auto; padding: 56px 40px; }
+  .intro-box { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 10px 10px 0; padding: 20px 24px; margin-bottom: 48px; font-size: 14.5px; color: var(--primary-dark); line-height: 1.7; }
+
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 48px; }
+  .toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; margin-bottom: 16px; }
+  .toc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; }
+  .toc-item { font-size: 13.5px; color: var(--primary); font-weight: 500; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .toc-num { color: var(--text-muted); font-weight: 400; margin-right: 6px; font-size: 12px; }
+
+  .section { margin-bottom: 60px; }
+  .section-header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 2px solid var(--border); }
+  .section-num { background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .section h2 { font-size: 21px; font-weight: 700; color: var(--text); }
+  .section-file { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--code-bg); color: #7dd3fc; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
+
+  h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 26px 0 10px; }
+  p { margin-bottom: 14px; color: var(--text-secondary); font-size: 14.5px; }
+
+  .formula { background: var(--code-bg); border-radius: 10px; padding: 18px 22px; margin: 16px 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #e2e8f0; line-height: 1.9; overflow-x: auto; white-space: pre; }
+  .formula .comment   { color: #64748b; }
+  .formula .highlight { color: #34d399; }
+  .formula .var       { color: #93c5fd; }
+
+  .callout { border-radius: 10px; padding: 16px 20px; margin: 18px 0; font-size: 14px; display: flex; gap: 12px; align-items: flex-start; }
+  .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.5; }
+  .callout-body strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+  .callout.why  { background: var(--primary-light); color: var(--primary-dark); }
+  .callout.tip  { background: var(--green-light); color: #14532d; }
+  .callout.alt  { background: var(--amber-light); color: #78350f; }
+  .callout.info { background: var(--blue-light); color: #1e3a8a; }
+
+  .table-wrap { overflow-x: auto; margin: 18px 0; border-radius: 10px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead tr { background: #dbeafe; }
+  th { padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--primary-dark); border-bottom: 2px solid #bfdbfe; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #eff6ff; }
+  td code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; background: #dbeafe; padding: 1px 5px; border-radius: 3px; color: var(--primary); }
+  td strong { color: var(--text); font-weight: 600; }
+
+  .flow { display: flex; align-items: center; gap: 0; margin: 20px 0; flex-wrap: wrap; }
+  .flow-step { background: var(--primary-light); border: 1px solid #bfdbfe; border-radius: 8px; padding: 8px 14px; font-size: 12.5px; font-weight: 600; color: var(--primary-dark); white-space: nowrap; }
+  .flow-arrow { color: var(--text-muted); font-size: 18px; padding: 0 6px; }
+
+  .spin-card { border-radius: 10px; padding: 18px 20px; margin-bottom: 12px; display: flex; gap: 16px; align-items: flex-start; }
+  .spin-badge { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 800; color: #fff; flex-shrink: 0; }
+  .spin-body .spin-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+  .spin-body p { margin: 0; font-size: 13.5px; }
+
+  .badge-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11.5px; font-weight: 600; }
+  .badge-blue   { background: #dbeafe; color: #1e3a8a; }
+  .badge-green  { background: #dcfce7; color: #14532d; }
+  .badge-amber  { background: #fef3c7; color: #78350f; }
+  .badge-red    { background: #fee2e2; color: #7f1d1d; }
+  .badge-purple { background: #ede9fe; color: #4c1d95; }
+
+  @media (max-width: 700px) {
+    .cover { padding: 40px 24px; }
+    .cover h1 { font-size: 28px; }
+    .container { padding: 32px 20px; }
+    .toc-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-badge">Module 01 · Partner Intelligence</div>
+  <h1>Partner <span>360 View</span></h1>
+  <p class="subtitle">
+    Deep-dive into any distributor — revenue health, churn risk, credit exposure, peer gap analysis,
+    SPIN selling scripts, and AI-generated churn intelligence, all in a single unified view.
+  </p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><strong>File</strong>frontend/tabs/partner_360.py</div>
+    <div class="cover-meta-item"><strong>Engine</strong>SalesIntelligenceEngine</div>
+    <div class="cover-meta-item"><strong>Dependencies</strong>Clustering · Churn · Credit Risk · MBA</div>
+    <div class="cover-meta-item"><strong>Export</strong>PDF + Excel via export_service</div>
+    <div class="cover-meta-item"><strong>Updated</strong>April 2026</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Intro -->
+  <div class="intro-box">
+    The Partner 360 View is the <strong>single most actionable screen</strong> in the platform.
+    It aggregates every ML signal — health score, churn risk, credit risk, cluster label, peer gaps —
+    and translates them into a sales call script and SPIN framework tailored to the individual partner.
+    It is the bridge between raw ML output and real-world sales action.
+  </div>
+
+  <!-- TOC -->
+  <div class="toc">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-item"><span class="toc-num">1.</span>Module Overview</div>
+      <div class="toc-item"><span class="toc-num">2.</span>Data Inputs &amp; Dependencies</div>
+      <div class="toc-item"><span class="toc-num">3.</span>Partner Selection Flow</div>
+      <div class="toc-item"><span class="toc-num">4.</span>Health &amp; Financial Metrics</div>
+      <div class="toc-item"><span class="toc-num">5.</span>Churn Risk Intelligence v2</div>
+      <div class="toc-item"><span class="toc-num">6.</span>Credit Risk Section</div>
+      <div class="toc-item"><span class="toc-num">7.</span>Peer Gap Analysis (Cross-Sell)</div>
+      <div class="toc-item"><span class="toc-num">8.</span>SPIN Selling Script Engine</div>
+      <div class="toc-item"><span class="toc-num">9.</span>Similar Partners (SVD)</div>
+      <div class="toc-item"><span class="toc-num">10.</span>Export Capabilities</div>
+      <div class="toc-item"><span class="toc-num">11.</span>Data Confidence &amp; Freshness</div>
+      <div class="toc-item"><span class="toc-num">12.</span>Known Limitations</div>
+    </div>
+  </div>
+
+  <!-- §1 Overview -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">1</div>
+      <h2>Module Overview</h2>
+      <span class="section-file">partner_360.py</span>
+    </div>
+    <p>
+      Partner 360 is a <strong>two-step drill-down interface</strong>: the user first selects a State/Region,
+      then selects a specific partner from that state. The system then calls
+      <code>ai.get_partner_intelligence(partner_name)</code> and renders a multi-section report.
+    </p>
+    <p>The report covers:</p>
+    <ul style="margin-left:20px; margin-bottom:14px; color: var(--text-secondary);">
+      <li>Revenue health (90d vs prior 90d, drop %, monthly loss estimate)</li>
+      <li>Churn Risk Intelligence v2 (composite score, top signal, peer benchmark, outreach script)</li>
+      <li>Credit risk score, band, utilization, overdue ratio, outstanding amount</li>
+      <li>Cross-sell peer gap analysis (ranked by monthly gap value)</li>
+      <li>SPIN selling framework auto-generated from live data</li>
+      <li>Top 5 similar partners by SVD cosine similarity</li>
+      <li>PDF and Excel export</li>
+    </ul>
+    <div class="callout why">
+      <div class="callout-icon">🎯</div>
+      <div class="callout-body">
+        <strong>Design Principle</strong>
+        The goal is to compress a full pre-call research session (20–30 min) into a 30-second tab load.
+        Every section provides a recommended action, not just a metric.
+      </div>
+    </div>
+  </div>
+
+  <!-- §2 Data Inputs -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">2</div>
+      <h2>Data Inputs &amp; Dependencies</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Data Source</th><th>Used For</th><th>Availability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>ai.df_partner_features</code></td><td>Health score, churn prob, credit score, revenue metrics, recency</td><td>Always (core load)</td></tr>
+          <tr><td><code>ai.matrix</code></td><td>State list, partner selection by state</td><td>After clustering</td></tr>
+          <tr><td><code>ai.get_partner_intelligence()</code></td><td>Full report: facts, gaps, cluster_label, playbook, alerts, churn_reasons</td><td>After clustering</td></tr>
+          <tr><td><code>ai.get_similar_partners()</code></td><td>Top-5 SVD-based lookalike partners</td><td>Optional (graph_embeddings_mixin)</td></tr>
+          <tr><td><code>df_fact → health_status</code></td><td>Strict-view-only fallback for health segment</td><td>Always</td></tr>
+          <tr><td><code>export_partner_360_pdf/excel</code></td><td>Download buttons</td><td>Always</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      The module calls <code>ai.ensure_clustering()</code> on load, which triggers the full clustering pipeline
+      (partner feature loading → clustering → labeling). Churn and credit scoring are loaded on demand
+      via <code>ensure_churn_forecast()</code> and <code>ensure_credit_risk()</code> inside the engine.
+    </p>
+  </div>
+
+  <!-- §3 Flow -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">3</div>
+      <h2>Partner Selection Flow</h2>
+    </div>
+    <div class="flow">
+      <div class="flow-step">1. Load Clustering</div><div class="flow-arrow">→</div>
+      <div class="flow-step">2. Select State</div><div class="flow-arrow">→</div>
+      <div class="flow-step">3. Select Partner</div><div class="flow-arrow">→</div>
+      <div class="flow-step">4. get_partner_intelligence()</div><div class="flow-arrow">→</div>
+      <div class="flow-step">5. Render 360 Report</div>
+    </div>
+    <p>
+      The state filter uses <code>ai.matrix["state"]</code> to restrict partner selection to those with
+      recent activity in a region. If no partners are found, a warning is shown.
+    </p>
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>No Report Available</strong>
+        If <code>get_partner_intelligence()</code> returns an empty dict, a warning is shown.
+        This usually means the partner has no transactions in the look-back window.
+      </div>
+    </div>
+  </div>
+
+  <!-- §4 Health Metrics -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">4</div>
+      <h2>Health &amp; Financial Metrics</h2>
+    </div>
+    <h3>Health Score Formula</h3>
+    <p>Computed in <code>base_loader_mixin._add_health_scores()</code>:</p>
+    <div class="formula">
+health_score = (
+  <span class="var">0.35</span> × normalize(log1p(recent_90_revenue))   <span class="comment"># Revenue strength</span>
++ <span class="var">0.30</span> × normalize(growth_rate_90d.clip(-1, 1.5)) <span class="comment"># Growth trend</span>
++ <span class="var">0.20</span> × (1 − normalize(recency_days))              <span class="comment"># Purchase recency</span>
++ <span class="var">0.15</span> × (1 − normalize(log1p(revenue_volatility)))  <span class="comment"># Revenue stability</span>
+).clip(0, 1)</div>
+
+    <h3>Health Segments</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Segment</th><th>Condition</th><th>Status Label</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Champion</strong></td><td>score ≥ 0.80 AND drop &lt; 10%</td><td>Healthy (Growing)</td></tr>
+          <tr><td><strong>Healthy</strong></td><td>score ≥ 0.60 AND drop &lt; degrowth threshold</td><td>Stable</td></tr>
+          <tr><td><strong>At Risk</strong></td><td>score ≥ 0.40</td><td>At Risk (Degrowth)</td></tr>
+          <tr><td><strong>Critical</strong></td><td>score &lt; 0.40 OR recent_rev = 0 with prior activity</td><td>Critical (Immediate Action)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Key Metrics Exposed</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>Source Field</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td>Revenue Drop %</td><td><code>revenue_drop_pct</code></td><td>% decline from prev_90 to recent_90 period</td></tr>
+          <tr><td>Unlocked Potential (Yearly)</td><td><code>gaps.Potential_Revenue_Yearly.sum()</code></td><td>Cross-sell gap × peer scaling</td></tr>
+          <tr><td>Health Score</td><td><code>health_score</code></td><td>Weighted composite [0,1]</td></tr>
+          <tr><td>Est. Monthly Loss</td><td><code>estimated_monthly_loss</code></td><td>(prev_90 − recent_90).clip(0) / 3</td></tr>
+          <tr><td>Degrowth Flag</td><td><code>degrowth_flag</code></td><td>True if drop% ≥ state-level 70th percentile threshold</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout tip">
+      <div class="callout-icon">✅</div>
+      <div class="callout-body">
+        <strong>Degrowth Threshold is State-Relative</strong>
+        The threshold is the 70th percentile of positive revenue drops within the partner's state,
+        clipped between 10% and 40%. This avoids false positives in low-activity markets.
+      </div>
+    </div>
+  </div>
+
+  <!-- §5 Churn Risk Intelligence -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">5</div>
+      <h2>Churn Risk Intelligence v2</h2>
+    </div>
+    <p>
+      The churn intelligence block renders only for partners in the <strong>At Risk</strong> or
+      <strong>Critical</strong> segment. It uses a composite score (0–100) built from multiple
+      behavioral signals, each with a severity level (critical / high / medium).
+    </p>
+    <h3>Composite Score Components</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Signal</th><th>Severity Trigger</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>Revenue Stopped</td><td>recent_90 = 0, prev_90 &gt; 0</td><td>Immediate escalation call</td></tr>
+          <tr><td>High Recency (≥120d)</td><td>Critical</td><td>Outreach with incentive offer</td></tr>
+          <tr><td>Revenue Drop ≥50%</td><td>Critical</td><td>Investigate cause, offer credit review</td></tr>
+          <tr><td>Category Abandonment</td><td>High</td><td>Re-introduce lost category</td></tr>
+          <tr><td>Order Volume Drop</td><td>High / Medium</td><td>Probe for supply friction</td></tr>
+          <tr><td>AOV Decline</td><td>Medium</td><td>Upsell or bundle to lift basket size</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>Score Gauge Bar</h3>
+    <p>
+      The composite score (0–100) is rendered as a colored progress bar.
+      Color thresholds: <span style="color:#ef4444; font-weight:600;">Critical ≥80</span>,
+      <span style="color:#f59e0b; font-weight:600;">High ≥55</span>,
+      <span style="color:#6366f1; font-weight:600;">Medium ≥30</span>,
+      <span style="color:#22c55e; font-weight:600;">Low &lt;30</span>.
+    </p>
+    <h3>Peer Benchmark Row</h3>
+    <p>
+      Shows the partner's 90d revenue vs cluster average, with category breadth delta and
+      peer average recency. Source: <code>report["churn_reasons"]["peer_context"]</code>.
+    </p>
+    <h3>Recovery Potential &amp; Outreach Script</h3>
+    <p>
+      A recovery label (formatted INR) shows estimated yearly recovery if the partner returns to
+      their historical average. An outreach script is generated by the clustering engine and
+      displayed as a collapsed code block for easy copy-paste.
+    </p>
+    <div class="callout alt">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>Dual Schema Support</strong>
+        <code>churn_reasons</code> can be either a <em>list of signals</em> (old format) or
+        a <em>dict with composite_score/signals/peer_context</em> (v2 format).
+        The UI handles both via duck-typing checks.
+      </div>
+    </div>
+  </div>
+
+  <!-- §6 Credit Risk -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">6</div>
+      <h2>Credit Risk Section</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>Field</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td>Credit Risk Score</td><td><code>credit_risk_score</code></td><td>Normalized [0,1] from churn_credit_stub_mixin</td></tr>
+          <tr><td>Credit Risk Band</td><td><code>credit_risk_band</code></td><td>Low / Medium / High / Critical</td></tr>
+          <tr><td>Credit Utilization</td><td><code>credit_utilization</code></td><td>Outstanding / credit_limit ratio</td></tr>
+          <tr><td>Overdue Ratio</td><td><code>overdue_ratio</code></td><td>Overdue amount / total outstanding</td></tr>
+          <tr><td>Outstanding Amount</td><td><code>outstanding_amount</code></td><td>Current AR balance in INR</td></tr>
+          <tr><td>Credit-Adjusted Risk</td><td><code>credit_adjusted_risk_value</code></td><td>Outstanding × credit_risk_score</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>Availability</strong>
+        Credit risk data is computed by <code>ensure_credit_risk()</code> and requires the engine
+        to run in full mode (not FAST_MODE). In strict view-only or fast mode, all credit fields
+        default to 0 / "Unknown".
+      </div>
+    </div>
+  </div>
+
+  <!-- §7 Gap Analysis -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">7</div>
+      <h2>Peer Gap Analysis (Cross-Sell)</h2>
+    </div>
+    <p>
+      The gap table compares this partner's product-group purchasing against the cluster average.
+      Products where the partner spends significantly less than cluster peers represent <strong>cross-sell opportunities</strong>.
+    </p>
+    <div class="formula">
+Gap_Monthly = (Peer_Avg_Spend − Partner_Spend_in_Group) × partner_scaling_factor
+Gap_Yearly  = Gap_Monthly × 12
+
+<span class="comment"># Tiered display:</span>
+🔥 High Priority  : Gap_Monthly ≥ ₹50,000
+⚡ Medium Priority : Gap_Monthly ∈ [₹10,000, ₹50,000)
+    Low Priority   : Gap_Monthly  &lt; ₹10,000  (collapsed expander)</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Column</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>Product</code></td><td>Product group name (group_name from master_group)</td></tr>
+          <tr><td><code>Gap (Monthly)</code></td><td>Estimated monthly revenue gap vs peer average</td></tr>
+          <tr><td><code>Gap (Yearly)</code></td><td>Annualized gap</td></tr>
+          <tr><td><code>You Do</code></td><td>% of peers who buy this product group</td></tr>
+          <tr><td><code>Peers Do</code></td><td>% of cluster peers who buy this product group</td></tr>
+          <tr><td><code>Peer Avg Spend</code></td><td>Average monthly spend per peer in this group</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>Perfect Match</strong>
+        If the partner's buying matches peer averages exactly, the gaps table will be empty and
+        the UI shows "Perfect account. Matches peer average." Outlier/uncategorized partners
+        show a different warning.
+      </div>
+    </div>
+  </div>
+
+  <!-- §8 SPIN -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">8</div>
+      <h2>SPIN Selling Script Engine</h2>
+    </div>
+    <p>
+      The SPIN framework (Situation → Problem → Implication → Need-Payoff) is auto-generated
+      from live partner data. Each block is context-aware:
+    </p>
+    <div class="spin-card" style="background:#eff6ff;">
+      <div class="spin-badge" style="background:#3b82f6;">S</div>
+      <div class="spin-body">
+        <div class="spin-label" style="color:#1d4ed8;">Situation</div>
+        <p style="color:#1e3a8a;">Opens with what we know — recency, cluster type, cluster name, region context. Builds rapport from facts, not assumptions.</p>
+      </div>
+    </div>
+    <div class="spin-card" style="background:#fef2f2;">
+      <div class="spin-badge" style="background:#ef4444;">P</div>
+      <div class="spin-body">
+        <div class="spin-label" style="color:#b91c1c;">Problem</div>
+        <p style="color:#7f1d1d;">If revenue drop &gt; 5%: surfaces the decline without confrontation. If cross-sell gap: highlights what peers are buying that this partner isn't.</p>
+      </div>
+    </div>
+    <div class="spin-card" style="background:#fffbeb;">
+      <div class="spin-badge" style="background:#f59e0b;">I</div>
+      <div class="spin-body">
+        <div class="spin-label" style="color:#b45309;">Implication</div>
+        <p style="color:#78350f;">Makes the cost of inaction tangible — either the yearly revenue gap in INR, or elevated churn risk phrased as losing supplier priority.</p>
+      </div>
+    </div>
+    <div class="spin-card" style="background:#f0fdf4;">
+      <div class="spin-badge" style="background:#10b981;">N</div>
+      <div class="spin-body">
+        <div class="spin-label" style="color:#065f46;">Need-Payoff</div>
+        <p style="color:#14532d;">Closes on a concrete, low-friction action (trial allocation, no minimum commitment) — not a vague offer. Optionally mentions credit term adjustment.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- §9 SVD Similar Partners -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">9</div>
+      <h2>Similar Partners (SVD Similarity)</h2>
+    </div>
+    <p>
+      If <code>ai.get_similar_partners()</code> is available (requires <code>graph_embeddings_mixin</code>),
+      the top 5 most similar partners are displayed, ranked by cosine similarity in
+      <strong>SVD-reduced product-group embedding space</strong>.
+    </p>
+    <div class="formula">
+Similarity = cosine(SVD_vector[partner_A], SVD_vector[partner_B])
+
+<span class="comment"># Matrix = partner × product_group spend (after TF-IDF-like normalisation)
+# SVD reduces to ~50 dimensions
+# Useful for identifying substitute accounts or replication targets</span></div>
+    <div class="callout why">
+      <div class="callout-icon">🔬</div>
+      <div class="callout-body">
+        <strong>Why SVD, not Cluster Label?</strong>
+        Cluster labels are coarse (4–8 groups). SVD similarity captures fine-grained
+        buying pattern overlap — two "At Risk" partners can have very different product mix,
+        while two partners in different segments can be near-identical buyers.
+      </div>
+    </div>
+  </div>
+
+  <!-- §10 Export -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">10</div>
+      <h2>Export Capabilities</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Format</th><th>Function</th><th>Contents</th></tr></thead>
+        <tbody>
+          <tr><td><strong>PDF</strong></td><td><code>export_partner_360_pdf()</code></td><td>Summary report: health, churn, gaps, SPIN script as printable PDF</td></tr>
+          <tr><td><strong>Excel</strong></td><td><code>export_partner_360_excel()</code></td><td>Multi-sheet workbook: metrics, gap table, churn signals, cluster info</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Both export functions are in <code>ml_engine/services/export_service.py</code> and render
+    on demand — no background pre-build is required.</p>
+  </div>
+
+  <!-- §11 Data Confidence -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">11</div>
+      <h2>Data Confidence &amp; Freshness</h2>
+    </div>
+    <p>A confidence tier and freshness badge are shown in the status bar at the top of every report:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Tier</th><th>Condition</th><th>Color</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Verified</strong></td><td>active_months ≥ 6, recent_txns ≥ 3, recency ≤ 60d</td><td style="color:#10b981;">Green</td></tr>
+          <tr><td><strong>Derived</strong></td><td>active_months ≥ 2, recent_txns ≥ 1, recency ≤ 120d</td><td style="color:#3b82f6;">Blue</td></tr>
+          <tr><td><strong>Proxy</strong></td><td>recent_txns ≥ 1 (any)</td><td style="color:#f59e0b;">Amber</td></tr>
+          <tr><td><strong>Estimated</strong></td><td>No recent transactions</td><td style="color:#ef4444;">Red</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Freshness badge: 🟢 Fresh (≤30d) · 🟡 Stale (≤90d) · 🔴 Very Stale (&gt;90d since last purchase).</p>
+  </div>
+
+  <!-- §12 Known Limitations -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">12</div>
+      <h2>Known Limitations</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Issue</th><th>Impact</th><th>Fix / Workaround</th></tr></thead>
+        <tbody>
+          <tr><td>Churn/credit unavailable in FAST_MODE</td><td>All credit fields = 0, churn_prob = 0</td><td>Run without FAST_MODE for full scoring</td></tr>
+          <tr><td>Partners without recent transactions</td><td>report = empty dict, warning shown</td><td>Widen look-back window in engine config</td></tr>
+          <tr><td>SVD similarity requires separate mixin</td><td>Similar Partners section silently absent</td><td>Ensure graph_embeddings_mixin is loaded</td></tr>
+          <tr><td>SPIN script uses static templates</td><td>May repeat across similar partners</td><td>Future: LLM-personalised script generation</td></tr>
+          <tr><td>Gap table may show 0-gap for outlier clusters</td><td>"Uncategorized" partners have no peers to compare</td><td>Manual review; consider reassignment</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<div style="background:#1e3a8a;color:#bfdbfe;padding:28px 80px;font-size:12px;text-align:center;line-height:1.9;">
+  <strong style="color:#fff;">Consistent AI — Sales Intelligence Platform</strong> &nbsp;·&nbsp; Module 01: Partner 360 View &nbsp;·&nbsp; April 2026<br/>
+  Part of the Sales Intelligence Suite · See INDEX.html for all module documentation
+</div>
+
+</body>
+</html>

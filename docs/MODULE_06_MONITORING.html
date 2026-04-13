@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AI Churn Engine (Monitoring) — Technical Brief</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root {
+    --primary: #06b6d4;  --primary-light: #ecfeff; --primary-dark: #164e63;
+    --green:  #059669;   --green-light:  #d1fae5;
+    --amber:  #d97706;   --amber-light:  #fef3c7;
+    --red:    #dc2626;   --red-light:    #fee2e2;
+    --purple: #7c3aed;   --purple-light: #ede9fe;
+    --slate:  #475569;   --slate-light:  #f1f5f9;
+    --text: #111827; --text-secondary: #4b5563; --text-muted: #9ca3af;
+    --border: #e5e7eb; --bg: #f9fafb; --card: #ffffff; --code-bg: #0f172a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.75; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
+
+  .cover { background: linear-gradient(135deg, #0c1a2e 0%, #0e4f5e 55%, #06b6d4 100%); color: #fff; padding: 72px 80px 60px; }
+  .cover-badge { display: inline-block; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 20px; padding: 4px 14px; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 24px; }
+  .cover h1 { font-size: 42px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.15; margin-bottom: 14px; }
+  .cover h1 span { color: #a5f3fc; }
+  .cover .subtitle { font-size: 16px; color: #cffafe; max-width: 620px; margin-bottom: 40px; line-height: 1.6; }
+  .cover-meta { display: flex; gap: 32px; flex-wrap: wrap; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 28px; }
+  .cover-meta-item { font-size: 12px; color: #a5f3fc; }
+  .cover-meta-item strong { display: block; color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+
+  .container { max-width: 900px; margin: 0 auto; padding: 56px 40px; }
+  .intro-box { background: var(--primary-light); border-left: 4px solid var(--primary); border-radius: 0 10px 10px 0; padding: 20px 24px; margin-bottom: 48px; font-size: 14.5px; color: var(--primary-dark); line-height: 1.7; }
+
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 48px; }
+  .toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; margin-bottom: 16px; }
+  .toc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; }
+  .toc-item { font-size: 13.5px; color: var(--primary-dark); font-weight: 500; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .toc-num { color: var(--text-muted); font-weight: 400; margin-right: 6px; font-size: 12px; }
+
+  .section { margin-bottom: 60px; }
+  .section-header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 2px solid var(--border); }
+  .section-num { background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .section h2 { font-size: 21px; font-weight: 700; color: var(--text); }
+  .section-file { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--code-bg); color: #7dd3fc; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
+
+  h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 26px 0 10px; }
+  p  { margin-bottom: 14px; color: var(--text-secondary); font-size: 14.5px; }
+
+  .formula { background: var(--code-bg); border-radius: 10px; padding: 18px 22px; margin: 16px 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #e2e8f0; line-height: 1.9; overflow-x: auto; white-space: pre; }
+  .formula .comment { color: #475569; }
+  .formula .var { color: #93c5fd; }
+  .formula .yes { color: #34d399; }
+  .formula .no  { color: #f87171; }
+
+  .callout { border-radius: 10px; padding: 16px 20px; margin: 18px 0; font-size: 14px; display: flex; gap: 12px; align-items: flex-start; }
+  .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.5; }
+  .callout-body strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 5px; }
+  .callout.why  { background: var(--primary-light); color: var(--primary-dark); }
+  .callout.tip  { background: var(--green-light); color: #064e3b; }
+  .callout.alt  { background: var(--amber-light); color: #78350f; }
+  .callout.info { background: var(--purple-light); color: #4c1d95; }
+  .callout.red  { background: var(--red-light); color: #7f1d1d; }
+
+  .table-wrap { overflow-x: auto; margin: 18px 0; border-radius: 10px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead tr { background: #ecfeff; }
+  th { padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--primary-dark); border-bottom: 2px solid #a5f3fc; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #ecfeff; }
+  td code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; background: var(--primary-light); padding: 1px 5px; border-radius: 3px; color: var(--primary-dark); }
+  td strong { color: var(--text); font-weight: 600; }
+
+  /* Architecture pillars */
+  .pillars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 20px 0; }
+  .pillar { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }
+  .pillar-icon { font-size: 24px; margin-bottom: 8px; }
+  .pillar-name { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .pillar-desc { font-size: 11.5px; color: var(--text-secondary); line-height: 1.4; }
+
+  /* Alert severity cards */
+  .alert-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 20px 0; }
+  .alert-card { border-radius: 10px; padding: 16px 18px; border-left: 4px solid; }
+  .alert-card.rev  { background: #fff1f2; border-color: #fb7185; }
+  .alert-card.churn{ background: #fff7ed; border-color: #fb923c; }
+  .alert-card.credit{ background: var(--purple-light); border-color: #a78bfa; }
+  .alert-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; }
+  .alert-formula { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.7; color: var(--text-secondary); }
+  .alert-threshold { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-top: 6px; }
+
+  /* Severity score bar */
+  .sev-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px; }
+  .sev-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .sev-label { width: 150px; font-weight: 600; color: var(--text-secondary); }
+  .sev-score { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--primary-dark); background: var(--primary-light); padding: 1px 8px; border-radius: 4px; }
+
+  /* Step timing visual */
+  .timing-list { display: flex; flex-direction: column; gap: 6px; margin: 16px 0; }
+  .timing-row { display: flex; align-items: center; gap: 10px; }
+  .timing-step { font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--primary-dark); min-width: 200px; }
+  .timing-bar-track { flex: 1; background: #cffafe; border-radius: 3px; height: 14px; }
+  .timing-bar-fill { height: 14px; background: var(--primary); border-radius: 3px; }
+  .timing-num { font-size: 11px; color: var(--text-muted); min-width: 50px; }
+
+  /* Quality gate */
+  .gate-flow { display: flex; gap: 0; align-items: stretch; margin: 20px 0; flex-wrap: wrap; }
+  .gate-step { flex: 1; min-width: 120px; background: var(--card); border: 1px solid var(--border); padding: 14px 12px; text-align: center; position: relative; }
+  .gate-step:not(:last-child)::after { content: "→"; position: absolute; right: -10px; top: 50%; transform: translateY(-50%); color: var(--primary); font-weight: 700; z-index: 1; }
+  .gate-step-name { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--primary-dark); margin-bottom: 4px; }
+  .gate-step-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.4; }
+  .gate-step.fail { background: var(--red-light); }
+  .gate-step.pass { background: var(--green-light); }
+
+  /* Backtest signal */
+  .bt-metric { display: inline-block; background: var(--slate-light); border-radius: 8px; padding: 10px 18px; text-align: center; margin: 6px; }
+  .bt-val { font-size: 22px; font-weight: 700; color: var(--primary-dark); }
+  .bt-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); }
+
+  .pill { display: inline-block; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+  .pill-cyan  { background: var(--primary-light); color: var(--primary-dark); }
+  .pill-green { background: var(--green-light); color: var(--green); }
+  .pill-amber { background: var(--amber-light); color: var(--amber); }
+  .pill-red   { background: var(--red-light); color: var(--red); }
+  .env-tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--primary-dark); background: var(--primary-light); padding: 2px 7px; border-radius: 4px; }
+
+  .footer { text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 12px; border-top: 1px solid var(--border); margin-top: 16px; }
+  .footer strong { color: var(--text-secondary); }
+
+  @media (max-width: 640px) {
+    .cover { padding: 40px 24px; } .cover h1 { font-size: 28px; }
+    .container { padding: 32px 20px; }
+    .toc-grid, .pillars, .alert-grid { grid-template-columns: 1fr 1fr; }
+    .gate-flow { flex-direction: column; }
+    .gate-step:not(:last-child)::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -12px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-badge">Module 06 of 08 — Internal Technical Brief</div>
+  <h1>AI Churn Engine<br/><span>Monitoring &amp; Diagnostics</span></h1>
+  <p class="subtitle">
+    How the system monitors its own accuracy in real time — covering operational alerts, cluster quality validation, 
+    the degrowth backtest framework, data quality checks, stock exposure scoring, 
+    and the performance cache that keeps every tab fast.
+  </p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><strong>Engine File</strong>monitoring_mixin.py (367 lines)</div>
+    <div class="cover-meta-item"><strong>UI File</strong>monitoring.py</div>
+    <div class="cover-meta-item"><strong>Classification</strong>Precision/Recall backtest</div>
+    <div class="cover-meta-item"><strong>April 2026</strong>Version 2.4</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="intro-box">
+    A prediction system that cannot check its own accuracy is a liability, not an asset. The Monitoring module is the <strong>self-audit layer</strong> of the Sales Intelligence Dashboard. It watches for anomalies in model outputs, validates that the clustering algorithm is producing business-meaningful groups, backtests the degrowth signal against historical outcomes, and surfaces immediate one-liner operational alerts when something needs urgent attention. Think of it as the engine's own health check — running alongside everything else every time the dashboard loads.
+  </div>
+
+  <div class="toc">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-item"><span class="toc-num">01</span>Module Architecture — Four Pillars</div>
+      <div class="toc-item"><span class="toc-num">06</span>Cluster Quality Report</div>
+      <div class="toc-item"><span class="toc-num">02</span>Operational Alerts Engine</div>
+      <div class="toc-item"><span class="toc-num">07</span>Cluster Business Validation</div>
+      <div class="toc-item"><span class="toc-num">03</span>Alert Severity Scoring</div>
+      <div class="toc-item"><span class="toc-num">08</span>Degrowth Backtest Framework</div>
+      <div class="toc-item"><span class="toc-num">04</span>Data Quality Checks</div>
+      <div class="toc-item"><span class="toc-num">09</span>Stock Exposure Score</div>
+      <div class="toc-item"><span class="toc-num">05</span>Performance Cache &amp; Timings</div>
+      <div class="toc-item"><span class="toc-num">10</span>Config Reference &amp; Improvements</div>
+    </div>
+  </div>
+
+  <!-- S1 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">01</div>
+      <h2>Module Architecture — Four Pillars</h2>
+    </div>
+    <p>The Monitoring tab brings together four independent monitoring streams. Each runs on separate data, catches different types of problems, and feeds into the same central dashboard view for the operations team.</p>
+
+    <div class="pillars">
+      <div class="pillar">
+        <div class="pillar-icon">🚨</div>
+        <div class="pillar-name">Operational Alerts</div>
+        <div class="pillar-desc">Real-time flags when a partner's churn, credit, or revenue metrics cross danger thresholds. Sorted by severity.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">🔬</div>
+        <div class="pillar-name">Cluster Quality</div>
+        <div class="pillar-desc">Silhouette scores, entropy, stability ARI, outlier ratios, and drift detection — all automated each run.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">📋</div>
+        <div class="pillar-name">Degrowth Backtest</div>
+        <div class="pillar-desc">Precision/recall evaluation of the degrowth alerting rule against what actually happened in subsequent windows.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">🗄️</div>
+        <div class="pillar-name">Data Quality</div>
+        <div class="pillar-desc">Missing columns, null ratios, zero-variance features, and critical field health checks before any ML runs.</div>
+      </div>
+    </div>
+
+    <div class="callout why">
+      <div class="callout-icon">🎯</div>
+      <div class="callout-body">
+        <strong>Why build monitoring into the same dashboard instead of a separate tool?</strong>
+        Separate monitoring dashboards are almost always ignored. By embedding it as a tab within the same tool that sales managers and analysts use daily, it becomes part of the natural workflow. When a senior manager sees an alert on the Monitoring tab while reviewing their Kanban pipeline, they act on it. When it's in a separate Grafana dashboard that nobody checks, it doesn't.
+      </div>
+    </div>
+  </div>
+
+  <!-- S2 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">02</div>
+      <h2>Operational Alerts Engine</h2>
+      <span class="section-file">monitoring_mixin.py → get_alert_snapshot()</span>
+    </div>
+    <p>The alert engine checks every partner in the partner features matrix against three independent rule conditions. A partner is flagged if any one of these conditions is true. The more conditions that trigger simultaneously, the higher the alert severity.</p>
+
+    <div class="alert-grid">
+      <div class="alert-card rev">
+        <div class="alert-title" style="color:#be123c;">⬇ Sharp Revenue Drop</div>
+        <div class="alert-formula">
+          revenue_drop_pct<br/>
+          ≥ max(degrowth_threshold, 35%)
+        </div>
+        <div class="alert-threshold">Default threshold: 35% drop vs prior period</div>
+      </div>
+      <div class="alert-card churn">
+        <div class="alert-title" style="color:#c2410c;">↑ High Churn Jump</div>
+        <div class="alert-formula">
+          live_churn > batch_churn + 0.15<br/>
+          AND batch_churn ≥ 0.45
+        </div>
+        <div class="alert-threshold">Requires realtime scoring to be active</div>
+      </div>
+      <div class="alert-card credit">
+        <div class="alert-title" style="color:#6d28d9;">⚠ High Credit Risk Jump</div>
+        <div class="alert-formula">
+          live_credit > batch_credit + 0.15<br/>
+          AND batch_credit ≥ 0.55
+        </div>
+        <div class="alert-threshold">Requires realtime scoring to be active</div>
+      </div>
+    </div>
+
+    <h3>How the Three Rules Were Designed</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Rule</th><th>Why this structure?</th><th>Why these thresholds?</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Sharp Revenue Drop</strong></td>
+            <td>Compares revenue_drop_pct to the maximum of the partner's personalised degrowth threshold or the global floor. Partners with volatile revenue naturally have higher personal thresholds — prevents false alerts on seasonally cyclical partners.</td>
+            <td>35% was chosen as the global floor because at this level, a partner's revenue decline is unlikely to be explained by seasonal cycles alone. Below 20%, too many seasonal partners trigger falsely.</td>
+          </tr>
+          <tr>
+            <td><strong>High Churn Jump</strong></td>
+            <td>Two-condition gate: the jump (delta between live score and batch score) must be large, AND the absolute churn level must be high. Jump alone is insufficient — a partner going from 0.05 to 0.20 churn is not urgent. But going from 0.40 to 0.55 is.</td>
+            <td>0.15 jump delta and 0.45 level align with the system's CHURN_PROB_MEDIUM threshold, ensuring alerts fire in the same probability band where the Kanban pipeline starts showing "High Churn" cards.</td>
+          </tr>
+          <tr>
+            <td><strong>High Credit Risk Jump</strong></td>
+            <td>Same two-condition structure as churn. Credit risk uses a higher level threshold (0.55 vs 0.45) because false positives in credit risk have commercial consequences — triggering a credit review for a partner wrongly can damage the relationship.</td>
+            <td>0.55 is the CREDIT_HIGH band entry point. Below this, a partner is still "Medium" risk and doesn't require urgent escalation.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- S3 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">03</div>
+      <h2>Alert Severity Scoring</h2>
+      <span class="section-file">monitoring_mixin.py → lines 235–239</span>
+    </div>
+    <p>When multiple alert conditions trigger for the same partner, the system computes a severity score to rank which partners need attention first. Revenue drops are weighted more heavily than the others because they are immediately visible in financial reports, actionable by the sales team, and a leading indicator of everything else deteriorating.</p>
+
+    <div class="formula"><span class="var">alert_severity_score</span> =
+  3 × alert_sharp_revenue_drop
+  + 2 × alert_high_churn_jump
+  + 2 × alert_high_credit_risk_jump
+
+<span class="comment">Possible scores:</span>
+<span class="comment">  7 = Revenue Drop + Churn Jump + Credit Jump (all 3 — emergency)</span>
+<span class="comment">  5 = Revenue Drop + Churn Jump OR Credit Jump</span>
+<span class="comment">  4 = Churn Jump + Credit Jump (no revenue drop yet)</span>
+<span class="comment">  3 = Revenue Drop only</span>
+<span class="comment">  2 = Churn Jump OR Credit Jump only</span>
+
+<span class="comment">Table sorted by: severity_score DESC → active_alerts DESC → revenue_drop_pct DESC → churn DESC</span>
+<span class="comment">Partners with the same score are sorted by revenue drop magnitude.</span></div>
+
+    <div style="margin: 20px 0;">
+      <div class="sev-row"><div class="sev-dot" style="background:#dc2626"></div><div class="sev-label">All 3 alerts</div><div class="sev-score">Score = 7</div><div style="font-size:12px; color:#9ca3af; margin-left:8px;">Immediate escalation to senior management</div></div>
+      <div class="sev-row"><div class="sev-dot" style="background:#ea580c"></div><div class="sev-label">Rev + 1 other</div><div class="sev-score">Score = 5</div><div style="font-size:12px; color:#9ca3af; margin-left:8px;">Same-day call from sales manager</div></div>
+      <div class="sev-row"><div class="sev-dot" style="background:#d97706"></div><div class="sev-label">Churn + Credit</div><div class="sev-score">Score = 4</div><div style="font-size:12px; color:#9ca3af; margin-left:8px;">Review before next visit</div></div>
+      <div class="sev-row"><div class="sev-dot" style="background:#ca8a04"></div><div class="sev-label">Revenue only</div><div class="sev-score">Score = 3</div><div style="font-size:12px; color:#9ca3af; margin-left:8px;">Investigate cause; may be seasonal</div></div>
+      <div class="sev-row"><div class="sev-dot" style="background:#16a34a"></div><div class="sev-label">Single model alert</div><div class="sev-score">Score = 2</div><div style="font-size:12px; color:#9ca3af; margin-left:8px;">Monitor in next weekly cycle</div></div>
+    </div>
+  </div>
+
+  <!-- S4 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">04</div>
+      <h2>Data Quality Checks</h2>
+      <span class="section-file">monitoring_mixin.py → get_data_quality_report()</span>
+    </div>
+    <p>Before any ML model runs, the engine validates the incoming data. This prevents garbage-in-garbage-out scenarios where a missing column silently produces incorrect scores rather than an error. The quality check produces both <strong>warnings</strong> (non-blocking) and <strong>errors</strong> (blocking — shown prominently).</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Check</th><th>What's validated</th><th>Impact if failed</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Missing critical columns</strong></td><td>Company name, revenue, date, product ID — the minimum set required for any feature to be computed</td><td>Blocking error. The corresponding module feature returns empty data.</td></tr>
+          <tr><td><strong>Null ratios</strong></td><td>% of null values in each feature column. <code>null_ratio_max</code> shown in cluster feature report</td><td>High nullity features are dropped before clustering runs. Shown as warning.</td></tr>
+          <tr><td><strong>Zero-variance features</strong></td><td>Features where all partners have the same value (e.g., every partner has the same cluster assignment)</td><td>Zero-variance features are pruned — they add no information to ML models. Count shown as <code>zero_var_dropped_count</code>.</td></tr>
+          <tr><td><strong>Row count</strong></td><td>Total rows in the loaded dataset — very low row count may indicate a query filter is too restrictive</td><td>Warning if below expected minimum for clustering to be meaningful.</td></tr>
+          <tr><td><strong>Feature drift</strong></td><td><code>mean_abs_z_shift</code>: average Z-score shift of features vs prior run. High drift = distribution changed significantly since last cache.</td><td>If drift &gt; threshold, clustering is rerun from scratch rather than serving cached labels.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout alt">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>The system health banner — first thing you see</strong>
+        The top of the Monitoring tab shows a coloured banner: green if no issues, amber if any data quality issues or missing columns are detected. This banner is rendered before any computation results are shown, so a manager know immediately whether to trust the numbers on screen or investigate the data pipeline first.
+      </div>
+    </div>
+  </div>
+
+  <!-- S5 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">05</div>
+      <h2>Performance Cache &amp; Step Timing</h2>
+    </div>
+    <p>The Monitoring tab exposes the internal performance metrics of the engine — showing exactly how long each computation step takes. This enables operators to identify bottlenecks before they become user-facing slowness.</p>
+
+    <h3>Runtime Modes</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Mode / Flag</th><th>What it means</th><th>When to use</th></tr></thead>
+        <tbody>
+          <tr><td><span class="env-tag">FAST_MODE = ON</span></td><td>Skips full churn and credit risk scoring. Uses cached scores only. Clustering still runs.</td><td>Demos, large datasets &gt; 5,000 partners, slow DB connections</td></tr>
+          <tr><td><span class="env-tag">STRICT_VIEW_ONLY</span></td><td>All queries use pre-computed database views only. No raw table access. No write operations.</td><td>Audit environments, read-only DB users, restricted security contexts</td></tr>
+          <tr><td><span class="env-tag">REALTIME_SCORING</span></td><td>Partners are scored on-demand via a background job queue. live_churn and live_credit are updated asynchronously.</td><td>Production environments with frequent partner activity changes</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Step Timings Table</h3>
+    <p>Every engine computation step stores its duration in <code>ai.step_timings</code>. The Monitoring tab renders this as a sorted table (slowest first). This is critical for performance tuning — if <code>lifecycle.monthly_product_revenue</code> takes 8 seconds every run, it's a candidate for pre-computation or index optimisation.</p>
+
+    <div class="timing-list">
+      <div class="timing-row">
+        <span class="timing-step">core.load_partner_features</span>
+        <div class="timing-bar-track"><div class="timing-bar-fill" style="width:80%"></div></div>
+        <span class="timing-num">~4.0s</span>
+      </div>
+      <div class="timing-row">
+        <span class="timing-step">clustering.umap_compress</span>
+        <div class="timing-bar-track"><div class="timing-bar-fill" style="width:55%"></div></div>
+        <span class="timing-num">~2.7s</span>
+      </div>
+      <div class="timing-row">
+        <span class="timing-step">lifecycle.monthly_product_rev</span>
+        <div class="timing-bar-track"><div class="timing-bar-fill" style="width:40%"></div></div>
+        <span class="timing-num">~2.0s</span>
+      </div>
+      <div class="timing-row">
+        <span class="timing-step">associations.load_rules</span>
+        <div class="timing-bar-track"><div class="timing-bar-fill" style="width:25%"></div></div>
+        <span class="timing-num">~1.2s</span>
+      </div>
+      <div class="timing-row">
+        <span class="timing-step">monitoring.alert_snapshot</span>
+        <div class="timing-bar-track"><div class="timing-bar-fill" style="width:10%"></div></div>
+        <span class="timing-num">&lt;0.5s</span>
+      </div>
+    </div>
+    <p style="font-size:13px; color:var(--text-muted);">Illustrative figures only — actual timings depend on dataset size and DB latency.</p>
+
+    <h3>Realtime Queue</h3>
+    <p>When realtime partner scoring is enabled, a background job queue tracks which partners have been scored live vs which are still using batch-computed scores. The Monitoring tab shows Pending / Running / Failed / Scored counters, and allows the operator to manually queue a single partner for immediate scoring or re-queue all partners at once.</p>
+  </div>
+
+  <!-- S6 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">06</div>
+      <h2>Cluster Quality Report</h2>
+      <span class="section-file">clustering_mixin.py → get_cluster_quality_report()</span>
+    </div>
+    <p>After every clustering run, the system automatically computes a quality report with six metrics. These are shown in the Monitoring tab and used internally to decide whether to accept the clustering result or revert to a fallback.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>Formula / meaning</th><th>Good range</th><th>Problem if…</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Silhouette Score</strong></td>
+            <td>Average (intra-cluster cohesion − nearest-cluster distance) / max of both. Ranges −1 to +1.</td>
+            <td>≥ 0.40</td>
+            <td>&lt; 0.20: clusters are overlapping — segments aren't meaningful</td>
+          </tr>
+          <tr>
+            <td><strong>Calinski-Harabasz</strong></td>
+            <td>Ratio of between-cluster variance to within-cluster variance. Higher is better, no fixed scale.</td>
+            <td>Higher than random baseline</td>
+            <td>If lower than a single-cluster baseline — no structure found</td>
+          </tr>
+          <tr>
+            <td><strong>Stability ARI</strong></td>
+            <td>Adjusted Rand Index between two runs with different random seeds. Measures label consistency.</td>
+            <td>≥ 0.70</td>
+            <td>&lt; 0.50: small changes in data would radically change who's in which cluster</td>
+          </tr>
+          <tr>
+            <td><strong>Outlier Ratio</strong></td>
+            <td>% of partners labelled as Outlier (HDBSCAN noise points). Shown as a KPI metric.</td>
+            <td>≤ 10%</td>
+            <td>&gt; 25%: HDBSCAN parameters too strict — increase min_cluster_size</td>
+          </tr>
+          <tr>
+            <td><strong>Cluster Entropy</strong></td>
+            <td>Shannon entropy of the cluster size distribution. Low = uneven (one huge cluster), High = even split.</td>
+            <td>Depends on cluster count</td>
+            <td>Very low entropy means most partners lumped in one cluster — poor discrimination</td>
+          </tr>
+          <tr>
+            <td><strong>Feature Drift</strong></td>
+            <td>Mean absolute Z-score shift of feature distributions vs the prior cached run.</td>
+            <td>&lt; 0.30</td>
+            <td>&gt; 0.50: data distribution shifted enough that cached cluster labels are stale</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Quality Gate &amp; Fallback Logic</h3>
+    <div class="gate-flow">
+      <div class="gate-step">
+        <div class="gate-step-name">Cluster Run</div>
+        <div class="gate-step-desc">KMeans (VIP tier) + HDBSCAN (Growth tier) execute with contest winners</div>
+      </div>
+      <div class="gate-step">
+        <div class="gate-step-name">Quality Check</div>
+        <div class="gate-step-desc">Silhouette, ARI, outlier ratio evaluated. All must pass thresholds.</div>
+      </div>
+      <div class="gate-step pass">
+        <div class="gate-step-name">Gate: Approved</div>
+        <div class="gate-step-desc">New labels applied. Cluster metadata updated across all modules.</div>
+      </div>
+      <div class="gate-step fail">
+        <div class="gate-step-name">Gate: Rejected</div>
+        <div class="gate-step-desc">Fallback applied: prior cached labels retained OR revenue-percentile bucketing used.</div>
+      </div>
+    </div>
+    <p style="font-size:13px; color:var(--text-secondary);">The quality gate reason and fallback status are both visible in the Monitoring tab under "Quality Gate and Fallback". This is how an operator knows whether today's cluster labels are freshly computed or are from the last successful run.</p>
+  </div>
+
+  <!-- S7 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">07</div>
+      <h2>Cluster Business Validation</h2>
+      <span class="section-file">clustering_mixin.py → get_cluster_business_validation_report()</span>
+    </div>
+    <p>Even if a clustering result passes all statistical quality checks, it might still be useless for the sales team if the clusters don't align with business reality. The business validation report compares two approaches against the cluster-guided strategy using three "pitching" simulations:</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Strategy</th><th>How partners are selected for pitching</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Cluster-Guided</strong></td><td>Prioritise partners with highest churn risk AND positive revenue trend within each cluster — find "at risk but saveable" partners</td><td>The model's actual recommendation strategy</td></tr>
+          <tr><td><strong>Top-Revenue Baseline</strong></td><td>Just pitch to the N highest-revenue partners regardless of risk</td><td>What a naive sales manager would do — "call your biggest accounts"</td></tr>
+          <tr><td><strong>Random Baseline</strong></td><td>Random sample of N partners</td><td>What doing nothing better than random looks like — the floor for any model to beat</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>What a good validation result looks like</strong>
+        Cluster-Guided should show lower degrowth rates, higher 90d revenue retention, and lower estimated monthly loss than the Top-Revenue Baseline. If the cluster-guided strategy can't beat "just call your biggest clients", the clustering isn't adding business value and should be re-tuned.
+      </div>
+    </div>
+
+    <h3>Cluster KPIs Table</h3>
+    <p>For each cluster, the validation report shows: number of partners, degrowth rate, average 90d revenue, average growth rate, average churn probability, average credit risk, and total estimated monthly loss. This lets a manager compare "Cluster A (VIP Stable) vs Cluster B (Growth At Risk)" at a glance — which cluster needs the most attention this week?</p>
+  </div>
+
+  <!-- S8 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">08</div>
+      <h2>Degrowth Backtest Framework</h2>
+      <span class="section-file">monitoring_mixin.py → run_degrowth_backtest()</span>
+    </div>
+    <p>The degrowth alert says: "Partner X dropped more than 20% revenue in the last 90 days — flag as at risk." The backtest evaluates: <strong>was that flag actually predictive of further decline in the next 90 days?</strong> This turns the alerting rule from an assumption into a validated signal.</p>
+
+    <div class="formula"><span class="comment">For each anchor month in the history window:</span>
+prev_window  = transactions from -180 to -90 days before anchor
+curr_window  = transactions from  -90 to   0 days before anchor
+next_window  = transactions from    0 to +90 days after anchor
+
+<span class="var">drop_pct</span>        = (prev_revenue - curr_revenue) / prev_revenue × 100
+<span class="var">pred_flag</span>       = drop_pct ≥ min_drop_pct (default: 20%)
+<span class="comment">                  "The alert would have fired in this window"</span>
+
+<span class="var">actual_flag</span>     = next_revenue < curr_revenue
+<span class="comment">                  "Revenue actually continued to fall afterwards"</span>
+
+<span class="comment">Confusion matrix across all partner-window combinations:</span>
+<span class="yes">True Positive (TP)</span>: alert fired AND decline continued    ← Good
+<span class="no">False Positive (FP)</span>: alert fired BUT revenue recovered   ← Noise
+<span class="no">False Negative (FN)</span>: alert didn't fire BUT decline happened ← Missed
+
+<span class="var">precision</span> = TP / (TP + FP)   <span class="comment">← Of all alerts fired, what % were right?</span>
+<span class="var">recall</span>    = TP / (TP + FN)   <span class="comment">← Of all actual declines, what % did we catch?</span></div>
+
+    <div style="text-align:center; padding: 16px 0;">
+      <div class="bt-metric"><div class="bt-val">Precision</div><div class="bt-label">Signals That Proved Right</div></div>
+      <div class="bt-metric"><div class="bt-val">Recall</div><div class="bt-label">Actual Declines Caught</div></div>
+      <div class="bt-metric"><div class="bt-val">TP / FP / FN</div><div class="bt-label">Confusion Matrix</div></div>
+    </div>
+
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>How to interpret the backtest results</strong>
+        <br/>
+        <strong>High precision, low recall:</strong> The alert is conservative — when it fires, it's usually right, but it misses many real declines. Reduce the threshold to catch more.<br/>
+        <strong>Low precision, high recall:</strong> The alert fires too often — it catches most real declines but generates a lot of false alarms. Increase the threshold.<br/>
+        <strong>Ideal range:</strong> Precision ≥ 0.65 and Recall ≥ 0.50 for a B2B degrowth signal is typically acceptable. The imbalance (precision vs recall) depends on business preference — false alerts are annoying, missed declines are costly.
+      </div>
+    </div>
+  </div>
+
+  <!-- S9 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">09</div>
+      <h2>Stock Exposure Score</h2>
+      <span class="section-file">monitoring_mixin.py → get_stock_details()</span>
+    </div>
+    <p>For products with slow-moving stock, the engine computes a <strong>stock exposure score</strong> from 0 to 100 that quantifies how urgently a product needs liquidation attention. The score feeds into the EOL module's clearance generator and the dead stock view.</p>
+
+    <div class="formula"><span class="comment">Four components, each normalised to its contribution ceiling:</span>
+
+<span class="var">age_component</span>        = min(max_age_days / 180, 1.0)  × 55   <span class="comment">← Age (days) is the dominant signal</span>
+<span class="var">percentile_component</span> = age_percentile / 100            × 20   <span class="comment">← Relative age vs all products</span>
+<span class="var">qty_component</span>        = min(total_stock_qty / 100, 1.0) × 15   <span class="comment">← Inventory volume pressure</span>
+<span class="var">recency_component</span>    = min(demand_recency_days / 180, 1.0) × 10  <span class="comment">← Days since last buyer purchase</span>
+
+<span class="var">stock_exposure_score</span> = age_component + percentile_component + qty_component + recency_component
+<span class="comment">                       Range: 0 – 100</span>
+
+<span class="comment">Priority classification:</span>
+score ≥ 80  →  Critical    "Immediate Action"
+score ≥ 60  →  High        "Plan Sales"
+score ≥ 35  →  Medium      "Monitor Weekly"
+score &lt;  35  →  Low         "Monitor Monthly"</div>
+
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>Why age carries 55% of the weight</strong>
+        Old unsold inventory is the primary risk in distribution. It ties up working capital, occupies warehouse space, and depreciates in value (especially for tech products). A product with moderate stock quantity but sitting for 200 days is a worse problem than a product with high stock quantity that was received 30 days ago. The 55% weight on age reflects this financial reality.
+      </div>
+    </div>
+  </div>
+
+  <!-- S10 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">10</div>
+      <h2>Config Reference &amp; Improvements</h2>
+    </div>
+
+    <h3>Alert Threshold Configuration</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Variable</th><th>Default</th><th>What it controls</th></tr></thead>
+        <tbody>
+          <tr><td><span class="env-tag">ALERT_REVENUE_DROP_SHARP_PCT</span></td><td>35.0</td><td>Global floor for "sharp revenue drop" alert. Above this, always alerts regardless of partner's personal threshold.</td></tr>
+          <tr><td><span class="env-tag">ALERT_CHURN_JUMP_DELTA</span></td><td>0.15</td><td>Minimum churn probability jump between batch and live score to trigger a churn jump alert.</td></tr>
+          <tr><td><span class="env-tag">ALERT_CHURN_HIGH_LEVEL</span></td><td>0.45</td><td>Minimum absolute churn probability needed alongside the delta — prevents alerts on low-base jumps.</td></tr>
+          <tr><td><span class="env-tag">ALERT_CREDIT_JUMP_DELTA</span></td><td>0.15</td><td>Minimum credit risk jump between batch and live score to trigger a credit jump alert.</td></tr>
+          <tr><td><span class="env-tag">ALERT_CREDIT_HIGH_LEVEL</span></td><td>0.55</td><td>Minimum absolute credit risk score alongside the delta.</td></tr>
+          <tr><td><span class="env-tag">CORE_CACHE_TTL_SEC</span></td><td>900</td><td>Seconds before cached partner features are considered stale and recomputed. Default = 15 minutes.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Improvements to Make Next</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Improvement</th><th>Current state</th><th>Expected impact</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><strong>Push notifications for Critical alerts</strong></td>
+            <td>Alerts visible only in the dashboard — no email or SMS sent when severity score ≥ 5</td>
+            <td>Sales manager gets a WhatsApp/email for every severity ≥ 5 alert at 9 AM — no need to open the dashboard to catch urgent cases</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><strong>Backtest auto-tuning</strong></td>
+            <td>The backtest threshold (20%) is fixed. You run it manually to see if it's optimal.</td>
+            <td>Auto-tune the degrowth threshold to maximise F1 score on historical data — runs monthly and updates the config automatically</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><strong>Model drift detection for churn/credit scores</strong></td>
+            <td>Feature drift exists for clustering, but not for the churn and credit models' output distributions</td>
+            <td>If churn scores shift by &gt; 10% population-wide without a known data change, alert the operator that the model may need retraining</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><strong>Full precision/recall history chart</strong></td>
+            <td>Backtest runs on demand, result shown as single numbers</td>
+            <td>A rolling chart of backtest precision/recall over the last 12 months shows whether the degrowth alert is getting better or worse as the business evolves</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <strong>AI Churn Engine (Monitoring &amp; Diagnostics) — Technical Brief</strong> &nbsp;·&nbsp; Module 06 of 08 &nbsp;·&nbsp; April 2026<br/>
+  Files: monitoring_mixin.py · monitoring.py (UI) · schemas.py (MonitoringSnapshot)<br/>
+  Methods: Alert severity scoring · Cluster quality gates · Business validation comparison · Degrowth precision/recall backtest · Stock exposure scoring
+</div>
+
+</body>
+</html>
