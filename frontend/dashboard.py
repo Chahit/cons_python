@@ -15,9 +15,11 @@ from styles import apply_global_styles
 # Import Tabs
 from tabs import (
     clustering,
+    docs_hub,
     inventory,
     kanban_pipeline,
     market_basket,
+    market_intelligence,
     partner_360,
     product_lifecycle,
     recommendation_hub,
@@ -74,6 +76,8 @@ _NAV_ITEMS = [
     ("🔄", "Product Lifecycle",        "Stage & trend tracking"),
     ("💡", "Recommendation Hub",       "AI-driven cross-sell"),
     ("💼", "Sales Rep Performance",    "Rep ROI & territory view"),
+    ("🌐", "Market Intelligence",      "Live prices, news & partner alerts"),
+    ("📚", "Documentation Hub",        "Technical docs for all modules"),
 ]
 
 # Initialise active page
@@ -513,3 +517,7 @@ elif nav == "Recommendation Hub":
     recommendation_hub.render(ai)
 elif nav == "Sales Rep Performance":
     sales_rep_performance.render(ai)
+elif nav == "Market Intelligence":
+    market_intelligence.render(ai)
+elif nav == "Documentation Hub":
+    docs_hub.render(ai)

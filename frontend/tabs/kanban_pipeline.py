@@ -103,6 +103,180 @@ def _build_kanban_df(_pf_df):
     return df
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _build_category_performance(_group_spend_df):
+    """
+    Build a category→partner performance summary.
+    Returns a DataFrame: company_name, category (group_name), total_spend
+    """
+    if _group_spend_df is None or _group_spend_df.empty:
+        return pd.DataFrame(columns=["company_name", "category", "total_spend"])
+    df = _group_spend_df.copy()
+    if "group_name" in df.columns:
+        df = df.rename(columns={"group_name": "category"})
+    needed = [c for c in ["company_name", "category", "total_spend"] if c in df.columns]
+    return df[needed].copy()
+
+
+def _render_filter_bar(df, cat_perf_df):
+    """Render the inline main-page filter bar above the kanban board."""
+    st.markdown("""
+    <style>
+    .filter-bar {
+        background: #12141c;
+        border: 1px solid #1e2235;
+        border-radius: 12px;
+        padding: 16px 20px;
+        margin-bottom: 18px;
+    }
+    .filter-bar-title {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: #4b5563;
+        margin-bottom: 12px;
+    }
+    </style>
+    <div class="filter-bar">
+      <div class="filter-bar-title">🔍 Pipeline Filters</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Row 1: State/Area + Category ──────────────────────────────────────
+    c1, c2, c3, c4 = st.columns([2, 2, 1.5, 1])
+
+    with c1:
+        all_states = sorted(df["state"].dropna().unique().tolist()) if "state" in df.columns else []
+        sel_states = st.multiselect(
+            "📍 Filter by Area / State",
+            all_states,
+            default=[],
+            key="kb_states",
+            help="Show only partners from selected states. Leave empty to show all.",
+        )
+
+    with c2:
+        # Category filter — built from group_name spend data
+        all_cats = []
+        if not cat_perf_df.empty and "category" in cat_perf_df.columns:
+            all_cats = sorted(cat_perf_df["category"].dropna().unique().tolist())
+        sel_cats = st.multiselect(
+            "🏷️ Filter by Product Category",
+            all_cats,
+            default=[],
+            key="kb_cats",
+            help="Show only partners who have purchased in the selected categories.",
+        )
+
+    with c3:
+        credit_opts = ["All", "Low", "Medium", "High", "Critical"]
+        sel_credit  = st.selectbox("💳 Credit Risk", credit_opts, key="kb_credit")
+
+    with c4:
+        sort_by = st.selectbox(
+            "↕️ Sort by",
+            ["Revenue (High→Low)", "Churn Risk (High→Low)", "At Risk (High→Low)", "Name (A→Z)"],
+            key="kb_sort",
+        )
+
+    # ── Row 2: Revenue floor + Name search ────────────────────────────────
+    c5, c6, c7 = st.columns([1.5, 2, 0.5])
+    with c5:
+        min_rev = st.number_input("Min 90d Revenue (₹)", value=0, step=10000, key="kb_minrev")
+    with c6:
+        search_query = st.text_input(
+            "🔍 Search partner by name",
+            placeholder="Type a company name...",
+            key="kb_search",
+        )
+    with c7:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        show_cat_insight = st.toggle("Category View", key="kb_cat_view", value=False)
+
+    return sel_states, sel_cats, sel_credit, sort_by, min_rev, search_query, show_cat_insight
+
+
+def _render_category_insight(cat_perf_df, kanban_df):
+    """
+    Renders a category performance breakdown table:
+    For each category → best performing distributor and worst performing distributor.
+    """
+    if cat_perf_df.empty or "category" not in cat_perf_df.columns:
+        st.info("No category spend data available.")
+        return
+
+    st.markdown("""
+    <div style='background:#12141c;border:1px solid #1e2235;border-radius:12px;
+         padding:14px 20px;margin-bottom:18px;'>
+      <div style='font-size:13px;font-weight:700;color:#6366f1;margin-bottom:4px;'>
+        📊 Category Performance — Distributor Breakdown
+      </div>
+      <div style='font-size:12px;color:#64748b;'>
+        Which distributors are performing best and worst in each product category
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Merge health segment info
+    seg_map = {}
+    if not kanban_df.empty and "health_segment" in kanban_df.columns:
+        seg_map = kanban_df.set_index("company_name")["health_segment"].to_dict()
+
+    # Aggregate: sum spend per company per category
+    cat_agg = (
+        cat_perf_df.groupby(["category", "company_name"])["total_spend"]
+        .sum()
+        .reset_index()
+    )
+    cat_agg["health"] = cat_agg["company_name"].map(seg_map).fillna("—")
+
+    categories = sorted(cat_agg["category"].unique().tolist())
+
+    for cat in categories:
+        cat_slice = cat_agg[cat_agg["category"] == cat].sort_values("total_spend", ascending=False)
+        if cat_slice.empty:
+            continue
+
+        best  = cat_slice.head(3)
+        worst = cat_slice.tail(3).sort_values("total_spend")
+
+        with st.expander(f"🏷️ {cat}  •  {len(cat_slice)} distributors  •  Total: {_fmt_inr(cat_slice['total_spend'].sum())}"):
+            col_b, col_w = st.columns(2)
+
+            with col_b:
+                st.markdown("<div style='color:#22c55e;font-weight:700;font-size:12px;margin-bottom:6px;'>🥇 Top Performers</div>", unsafe_allow_html=True)
+                for _, r in best.iterrows():
+                    seg = r["health"]
+                    seg_color = {"Champion": "#22c55e", "Healthy": "#3b82f6",
+                                 "At Risk": "#f59e0b", "Critical": "#ef4444"}.get(seg, "#aaa")
+                    st.markdown(
+                        f"<div style='background:#0d1f0d;border-left:3px solid #22c55e;"
+                        f"border-radius:6px;padding:8px 12px;margin-bottom:5px;'>"
+                        f"<span style='font-weight:600;color:#e2e8f0;font-size:13px;'>{r['company_name']}</span>"
+                        f"<span style='float:right;color:#22c55e;font-weight:700;'>{_fmt_inr(r['total_spend'])}</span><br/>"
+                        f"<span style='font-size:11px;color:{seg_color};'>● {seg}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            with col_w:
+                st.markdown("<div style='color:#ef4444;font-weight:700;font-size:12px;margin-bottom:6px;'>⚠️ Lowest Performers</div>", unsafe_allow_html=True)
+                for _, r in worst.iterrows():
+                    seg = r["health"]
+                    seg_color = {"Champion": "#22c55e", "Healthy": "#3b82f6",
+                                 "At Risk": "#f59e0b", "Critical": "#ef4444"}.get(seg, "#aaa")
+                    st.markdown(
+                        f"<div style='background:#1f0d0d;border-left:3px solid #ef4444;"
+                        f"border-radius:6px;padding:8px 12px;margin-bottom:5px;'>"
+                        f"<span style='font-weight:600;color:#e2e8f0;font-size:13px;'>{r['company_name']}</span>"
+                        f"<span style='float:right;color:#ef4444;font-weight:700;'>{_fmt_inr(r['total_spend'])}</span><br/>"
+                        f"<span style='font-size:11px;color:{seg_color};'>● {seg}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+
 def render(ai):
     page_header(
         title="Revenue Pipeline Tracker",
@@ -133,35 +307,41 @@ def render(ai):
     # Use cached, lightweight slice
     df = _build_kanban_df(pf)
 
-    # ── Sidebar filters ─────────────────────────────────────────────────────
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**🔍 Pipeline Filters**")
+    # Category performance data from df_recent_group_spend
+    group_spend = getattr(ai, "df_recent_group_spend", None)
+    cat_perf_df = _build_category_performance(group_spend)
 
-    all_states = sorted(df["state"].dropna().unique().tolist()) if "state" in df.columns else []
-    sel_states = st.sidebar.multiselect("Filter by State", all_states, default=[], key="kb_states")
+    # ── Main-page filter bar (replaces sidebar filters) ──────────────────
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+    sel_states, sel_cats, sel_credit, sort_by, min_rev, search_query, show_cat_insight = (
+        _render_filter_bar(df, cat_perf_df)
+    )
+
+    # ── Apply state filter ────────────────────────────────────────────────
     if sel_states:
         df = df[df["state"].isin(sel_states)]
 
-    credit_opts = ["All", "Low", "Medium", "High", "Critical"]
-    sel_credit  = st.sidebar.selectbox("Filter by Credit Risk", credit_opts, key="kb_credit")
+    # ── Apply category filter ─────────────────────────────────────────────
+    if sel_cats and not cat_perf_df.empty and "category" in cat_perf_df.columns:
+        # Get set of company names that have purchased in selected categories
+        cat_companies = set(
+            cat_perf_df[cat_perf_df["category"].isin(sel_cats)]["company_name"].unique()
+        )
+        df = df[df["company_name"].isin(cat_companies)]
+
+    # ── Apply credit risk filter ──────────────────────────────────────────
     if sel_credit != "All" and "credit_risk_band" in df.columns:
         df = df[df["credit_risk_band"] == sel_credit]
 
-    sort_by = st.sidebar.selectbox(
-        "Sort cards by",
-        ["Revenue (High→Low)", "Churn Risk (High→Low)", "At Risk (High→Low)", "Name (A→Z)"],
-        key="kb_sort",
-    )
-
-    min_rev = st.sidebar.number_input("Min 90d Revenue (₹)", value=0, step=10000, key="kb_minrev")
+    # ── Apply revenue floor ───────────────────────────────────────────────
     if min_rev > 0:
         df = df[df["recent_90_revenue"] >= min_rev]
 
-    search_query = st.text_input("🔍 Search partner by name", placeholder="Type a company name...", key="kb_search")
+    # ── Apply name search ─────────────────────────────────────────────────
     if search_query.strip():
         df = df[df["company_name"].str.contains(search_query.strip(), case=False, na=False)]
 
-    # ── Sort ────────────────────────────────────────────────────────────────
+    # ── Sort ──────────────────────────────────────────────────────────────
     if sort_by == "Revenue (High→Low)":
         df = df.sort_values("recent_90_revenue", ascending=False)
     elif sort_by == "Churn Risk (High→Low)":
@@ -173,7 +353,12 @@ def render(ai):
 
     st.markdown("---")
 
-    # ── Summary bar — 5 metrics ─────────────────────────────────────────────
+    # ── Category insight view (toggle) ────────────────────────────────────
+    if show_cat_insight:
+        _render_category_insight(cat_perf_df, df)
+        st.markdown("---")
+
+    # ── Summary bar — 5 metrics ───────────────────────────────────────────
     total_partners  = len(df)
     high_churn      = int((df["churn_probability"] >= 0.65).sum())
     critical_cnt    = int((df.get("health_segment", pd.Series(dtype=str)) == "Critical").sum())
@@ -190,9 +375,35 @@ def render(ai):
     m5.metric("Revenue at Risk ⓘ", _fmt_inr(total_at_risk),
               delta="⚠️ AI Risk + Critical", delta_color="inverse")
 
+    # Active filter info chips
+    active_filters = []
+    if sel_states:
+        active_filters.append(f"📍 {', '.join(sel_states)}")
+    if sel_cats:
+        active_filters.append(f"🏷️ {', '.join(sel_cats)}")
+    if sel_credit != "All":
+        active_filters.append(f"💳 {sel_credit} Credit")
+    if min_rev > 0:
+        active_filters.append(f"₹ ≥ {_fmt_inr(min_rev)}")
+    if search_query.strip():
+        active_filters.append(f"🔍 \"{search_query.strip()}\"")
+
+    if active_filters:
+        chips_html = "".join(
+            f"<span style='background:#1e2235;border:1px solid #374151;color:#93c5fd;"
+            f"border-radius:20px;padding:3px 10px;font-size:11px;margin-right:6px;'>{f}</span>"
+            for f in active_filters
+        )
+        st.markdown(
+            f"<div style='margin-top:6px;margin-bottom:2px;'>"
+            f"<span style='color:#64748b;font-size:11px;margin-right:8px;'>Active filters:</span>"
+            f"{chips_html}</div>",
+            unsafe_allow_html=True,
+        )
+
     st.markdown("---")
 
-    # ── Kanban Board ─────────────────────────────────────────────────────────
+    # ── Kanban Board ──────────────────────────────────────────────────────
     cols = st.columns(len(LANES))
 
     for idx, lane in enumerate(LANES):
@@ -275,9 +486,22 @@ def render(ai):
                 if cluster and cluster not in ("—", "nan", "Uncategorized"):
                     badge_html += f"<span style='background:{cluster_color}22;color:{cluster_color};padding:2px 6px;border-radius:4px;font-size:11px;border:1px solid {cluster_color}44;'>🏷 {cluster}</span>"
 
+                # ── Category top spend (from cat_perf_df) ─────────────────
+                top_cat_html = ""
+                if not cat_perf_df.empty and "category" in cat_perf_df.columns:
+                    partner_cats = cat_perf_df[cat_perf_df["company_name"] == name]
+                    if not partner_cats.empty:
+                        top_cat = partner_cats.loc[partner_cats["total_spend"].idxmax(), "category"]
+                        top_cat_spend = partner_cats["total_spend"].max()
+                        top_cat_html = (
+                            f"<span style='background:#1e1b4b;color:#a5b4fc;padding:2px 6px;"
+                            f"border-radius:4px;font-size:11px;margin-left:4px;'>"
+                            f"📦 {top_cat} ({_fmt_inr(top_cat_spend)})</span>"
+                        )
+
                 with st.expander(f"{name} — {rev}"):
-                    if badge_html:
-                        st.markdown(badge_html, unsafe_allow_html=True)
+                    if badge_html or top_cat_html:
+                        st.markdown(badge_html + top_cat_html, unsafe_allow_html=True)
                     st.markdown(
                         f"**Rev Trend:** {rev_trend_html} &nbsp;|&nbsp; **Last Order:** {last_order_str}  \n"
                         f"**Churn:** <span style='color:{churn_color};font-weight:600'>{churn_pct}</span>"
