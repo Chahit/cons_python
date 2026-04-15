@@ -109,19 +109,21 @@
   <p class="subtitle">
     How the system automatically groups every partner into business-meaningful segments
     using 7 layers of behavioural signals, multi-algorithm ensemble consensus, business-aware K selection,
-    and automated archetype labelling — fully updated for the v3.0 architecture.
+    and automated archetype labelling — fully updated for the v3.1 architecture.
   </p>
   <div class="cover-meta">
     <div class="cover-meta-item"><strong>Primary File</strong>clustering_mixin.py (~98KB, 2240 lines)</div>
     <div class="cover-meta-item"><strong>Governance</strong>cluster_governance_repository.py</div>
     <div class="cover-meta-item"><strong>Algorithms</strong>KMeans · GMM · Spectral · HDBSCAN · Consensus</div>
-    <div class="cover-meta-item"><strong>April 2026</strong>Version 3.0</div>
+    <div class="cover-meta-item"><strong>April 2026</strong>Version 3.1</div>
   </div>
 </div>
 
 <div class="container">
 
   <div class="intro-box">
+    <strong>What changed in v3.1?</strong> The partner deep-dive panel now surfaces partner names, states, and a full revenue breakdown (Monthly / Quarterly / Yearly / Lifetime) alongside a cluster similarity narrative explaining <em>why</em> these partners share a cluster. Two runtime bugs were also resolved: a <code>ValueError: truth value of a Series is ambiguous</code> crash (when <code>pf_cluster.loc[partner]</code> returned a DataFrame instead of a Series), and a geographic bar chart column-naming error introduced by the pandas ≥ 2.0 <code>value_counts().reset_index()</code> API change.
+    <br/><br/>
     <strong>What changed in v3.0?</strong> The clustering engine was overhauled from a 2-algorithm competition (HDBSCAN vs GMM) to a full <em>multi-algorithm ensemble consensus</em> pipeline. K selection is now business-rule-driven with composite scoring. VIP/Growth tiering uses a Pareto revenue split instead of fixed percentile. Labels are generated via Gemini LLM with heuristic fallback. A quality gate with auto-fallback to last-approved assignments prevents bad clusters from reaching production. Temporal stability tracking via Hungarian algorithm detects partner-level promotions and demotions across runs.
   </div>
 
@@ -142,6 +144,8 @@
       <div class="toc-item"><span class="toc-num">13</span>Business Validation Benchmarking</div>
       <div class="toc-item"><span class="toc-num">07</span>VIP vs Growth — Pareto Tiering</div>
       <div class="toc-item"><span class="toc-num">14</span>Partner Intelligence &amp; Playbooks</div>
+      <div class="toc-item"><span class="toc-num">15</span>Partner Deep-Dive UI (v3.1)</div>
+      <div class="toc-item"><span class="toc-num">16</span>v3.1 Bug Fixes</div>
     </div>
   </div>
 
@@ -586,6 +590,102 @@
     <p>Playbooks are segment-aware: Champions get wallet-defence tactics, At-Risk partners get retention interventions, VIP partners get executive cadence recommendations, and Outlier partners are benchmarked against state-level peers instead of cluster peers.</p>
   </div>
 
+  <!-- S15 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">15</div>
+      <h2>Partner Deep-Dive UI — v3.1</h2>
+      <span class="section-file">clustering.py → render_cluster_deep_dive()</span>
+    </div>
+    <p>When the user selects a Cluster Type and Cluster Label, a partner-level table and narrative panel appear showing who is in the cluster and <em>why</em>.</p>
+
+    <h3>Data Columns Displayed Per Partner</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Column</th><th>Source Field</th><th>How Computed</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Partner Name</strong></td><td><code>company_name</code></td><td>From partner_profiles join</td></tr>
+          <tr><td><strong>State</strong></td><td><code>state</code></td><td>From partner_profiles join</td></tr>
+          <tr><td><strong>Monthly Rev (est.)</strong></td><td><code>recent_90_revenue</code></td><td>÷ 3 (monthly estimate from 90d window)</td></tr>
+          <tr><td><strong>Quarterly Rev</strong></td><td><code>recent_90_revenue</code></td><td>Raw 90-day window value</td></tr>
+          <tr><td><strong>Yearly Rev (est.)</strong></td><td><code>recent_90_revenue</code></td><td>× 4 (annualised estimate)</td></tr>
+          <tr><td><strong>Lifetime Revenue</strong></td><td><code>lifetime_revenue</code></td><td>Direct from partner features</td></tr>
+          <tr><td><strong>Growth Rate</strong></td><td><code>growth_rate_90d</code></td><td>As % — positive = growing</td></tr>
+          <tr><td><strong>Recency (days)</strong></td><td><code>recency_days</code></td><td>Days since last invoice</td></tr>
+          <tr><td><strong>Health Segment</strong></td><td><code>health_segment</code></td><td>Champion / Emerging / Healthy / At Risk / Critical</td></tr>
+          <tr><td><strong>Churn %</strong></td><td><code>churn_probability</code></td><td>× 100 displayed as percentage</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Cluster Similarity Narrative</h3>
+    <p>A text block is auto-generated explaining what partners in this cluster have in common:</p>
+    <div class="formula"><span class="comment">Narrative built from centroid profile data:</span>
+  Dominant categories  → top 2 mix::rw:: features by weight
+  Scale tier           → VIP (top 60% cumulative rev) or Growth
+  Buying rhythm        → gap_cv &lt; 1.0 = "regular buyers", &gt; 2.0 = "erratic"
+  Geographic focus     → if &gt; 60% of cluster in same state, mentioned
+  Revenue band         → average Quarterly Rev across cluster members</div>
+
+    <h3>Geographic Spread Chart</h3>
+    <p>A bar chart shows partner count by state within the selected cluster. The chart uses a pandas-version-safe column rename strategy:</p>
+    <div class="formula"><span class="comment">pandas ≥ 2.0 returns: ['state', 'count']  after value_counts().reset_index()</span>
+<span class="comment">pandas &lt; 2.0 returns: ['index', 'state']  after value_counts().reset_index()</span>
+
+<span class="highlight">Fix applied in v3.1:</span> detect both layouts → rename to ['State', 'Partners']
+Pass x="State", y="Partners" to px.bar (consistent in both pandas versions)</div>
+  </div>
+
+  <!-- S16 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">16</div>
+      <h2>v3.1 Bug Fixes</h2>
+      <span class="section-file">clustering.py</span>
+    </div>
+
+    <h3>Bug Fix 1 — Series Ambiguity Crash</h3>
+    <div class="callout red">
+      <div class="callout-icon">🐛</div>
+      <div class="callout-body">
+        <strong>ValueError: truth value of a Series is ambiguous</strong>
+        <code>pf_cluster.loc[partner]</code> returns a <strong>single-row DataFrame</strong> (not a Series) when the index has any duplicate entries. Calling <code>.get(key, 0) or 0</code> on a DataFrame triggers the pandas bool check, which raises this error.
+      </div>
+    </div>
+    <div class="formula"><span class="comment">Root cause:</span>
+  pf_row = pf_cluster.loc[partner]   <span class="comment"># Could be Series OR DataFrame</span>
+  float(pf_row.get("revenue", 0) or 0)   <span class="comment"># Fails if pf_row is DataFrame</span>
+
+<span class="highlight">Fix applied:</span>
+  _raw = pf_cluster.loc[partner]
+  if isinstance(_raw, pd.DataFrame):
+      pf_row = _raw.iloc[0].to_dict()   <span class="comment"># Normalise to plain dict</span>
+  else:
+      pf_row = _raw.to_dict()
+
+  def _scalar(key, default=0):
+      v = pf_row.get(key, default)
+      if isinstance(v, (pd.Series, pd.DataFrame)):
+          v = v.iloc[0] if len(v) else default
+      return v if v is not None else default</div>
+
+    <h3>Bug Fix 2 — Geographic Bar Chart Column Error</h3>
+    <div class="formula"><span class="comment">Old code (broke on pandas ≥ 2.0):</span>
+  state_counts = (
+      filtered["state"].value_counts().reset_index()
+      .rename(columns={"index": "State", "state": "Partners"})
+  )
+  px.bar(..., x="state", y="Partners")   <span class="comment"># Wrong → KeyError on pandas ≥ 2.0</span>
+
+<span class="highlight">Fix applied:</span>
+  _vc = filtered["state"].value_counts().reset_index()
+  if "count" in _vc.columns:    <span class="comment"># pandas ≥ 2.0 layout</span>
+      state_counts = _vc.rename(columns={"state": "State", "count": "Partners"})
+  else:                          <span class="comment"># pandas &lt; 2.0 layout</span>
+      state_counts = _vc.rename(columns={"index": "State", "state": "Partners"})
+  px.bar(..., x="State", y="Partners")   <span class="comment"># Correct for both versions</span></div>
+  </div>
+
   <!-- Config Reference -->
   <div class="section">
     <div class="section-header">
@@ -633,9 +733,10 @@
 </div>
 
 <div class="footer">
-  <strong>Cluster Intelligence Engine — Technical Brief v3.0</strong> &nbsp;·&nbsp; Module 02 of 08 &nbsp;·&nbsp; April 2026<br/>
+  <strong>Cluster Intelligence Engine — Technical Brief v3.1</strong> &nbsp;·&nbsp; Module 02 of 08 &nbsp;·&nbsp; April 2026<br/>
   Files: clustering_mixin.py · cluster_governance_repository.py · clustering.py (UI)<br/>
-  Algorithms: KMeans · GMM · Spectral · HDBSCAN · Consensus Matrix · Agglomerative · Hungarian · RobustScaler · Silhouette · ARI · Cosine Similarity · Shannon Entropy
+  Algorithms: KMeans · GMM · Spectral · HDBSCAN · Consensus Matrix · Agglomerative · Hungarian · RobustScaler · Silhouette · ARI · Cosine Similarity · Shannon Entropy<br/>
+  DB Tables: cluster_model_runs · cluster_assignments · cluster_centroids_history · cluster_drift_alerts
 </div>
 
 </body>

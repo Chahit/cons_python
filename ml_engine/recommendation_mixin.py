@@ -221,7 +221,7 @@ class RecommendationMixin:
                 }
             )
 
-        if cluster_type == "VIP" and health_segment in {"Champion", "Healthy"}:
+        if cluster_type == "VIP" and health_segment in {"Champion", "Emerging", "Healthy"}:
             why = [
                 "VIP partner with stable/growing health profile.",
                 "Suitable for premium mix expansion and margin-focused growth.",
@@ -588,7 +588,7 @@ class RecommendationMixin:
             "Rules:\n"
             "- Use null when not specified.\n"
             "- Keep numeric filters between 0 and 1 where applicable.\n"
-            "- health_segments must be an array from: Champion, Healthy, At Risk, Critical.\n"
+            "- health_segments must be an array from: Champion, Emerging, Healthy, At Risk, Critical.\n"
             "- top_n should be integer.\n\n"
             f"Query: {str(query)}"
         )

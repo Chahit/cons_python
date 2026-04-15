@@ -277,6 +277,32 @@ def _render_portal():
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
     # ── Module grid ────────────────────────────────────────────────────────
+    # ── Keyword Search ────────────────────────────────────────────────────────
+    _sch1, _sch2 = st.columns([3, 2])
+    with _sch1:
+        _doc_search = st.text_input(
+            "",
+            placeholder="🔍 Search documentation by keyword, tag, or module name...",
+            key="docs_search",
+            label_visibility="collapsed",
+        )
+    with _sch2:
+        _tag_options = sorted(set(t for m in MODULES for t in m["tags"]))
+        _tag_filter  = st.multiselect("Filter by tag", _tag_options, key="docs_tag_filter", label_visibility="collapsed", placeholder="Filter by tag...")
+
+    # Apply search + tag filter
+    def _matches(m, q, tags):
+        if q:
+            _q = q.lower()
+            if not any(_q in str(v).lower() for v in [m["title"], m["desc"], " ".join(m["tags"])]):
+                return False
+        if tags:
+            if not any(t in m["tags"] for t in tags):
+                return False
+        return True
+
+    _filtered = [m for m in MODULES if _matches(m, _doc_search, _tag_filter)]
+
     st.markdown("""
     <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;
          color:#374151;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #1e2535;">
@@ -284,7 +310,11 @@ def _render_portal():
     </div>
     """, unsafe_allow_html=True)
 
-    non_featured = [m for m in MODULES if not m.get("featured")]
+    non_featured = [m for m in _filtered if not m.get("featured")]
+    if not non_featured:
+        _qterm = _doc_search or (', '.join(_tag_filter) if _tag_filter else '')
+        st.info(f"No documentation matched **'{_qterm}'**. Try a different keyword or clear the filter.")
+        return
     # Render in rows of 3
     for row_start in range(0, len(non_featured), 3):
         row = non_featured[row_start: row_start + 3]

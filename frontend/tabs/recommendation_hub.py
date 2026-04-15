@@ -75,7 +75,9 @@ def render(ai):
         with nq5:
             st.write("")
             st.write("")
-            nl_run = st.button("Run NL Query", use_container_width=True)
+            nl_run = st.button("Run NL Query", use_container_width=True, key="nl_run_btn")
+            if nl_run:
+                st.session_state["_nl_run_triggered"] = True
             
         if advanced_filters:
             af1, af2 = st.columns(2)
@@ -98,7 +100,9 @@ def render(ai):
         model_fallbacks = str(getattr(ai, "gemini_model_fallbacks", "") or "").strip()
         key = str(getattr(ai, "gemini_api_key", "")).strip()
         nl_query = st.session_state.get("nl_query_input", "")
-        nl_run = False  # handled in NL tab
+        # Critical fix: read nl_run from session_state (set by NL tab button).
+        # Setting nl_run = False here was overwriting the True value from the button click.
+        nl_run = st.session_state.pop("_nl_run_triggered", False)
 
 
     if nl_run and str(nl_query).strip():
@@ -163,16 +167,37 @@ def render(ai):
             else:
                 st.warning("No recommendations matched the requested filters.")
 
-    plan = ai.get_partner_recommendation_plan(
-        partner_name=selected_partner,
-        top_n=int(top_n),
-        use_genai=True,
-        api_key=key if key else None,
-        model=model_name,
-    )
+    # ── Recommendation Plan (cached per partner, triggered by button) ────────
+    _plan_cache_key = f"_reco_plan_{selected_partner}_{top_n}"
+    plan = st.session_state.get(_plan_cache_key, None)
 
-    if not plan or plan.get("status") != "ok":
-        st.error(plan.get("reason", "Recommendation plan unavailable.") if isinstance(plan, dict) else "Recommendation plan unavailable.")
+    _btn_col, _info_col = st.columns([1, 4])
+    with _btn_col:
+        _gen_plan = st.button(
+            "Generate Recommendation Plan",
+            key="reco_plan_btn",
+            help="Runs AI analysis to build a personalised action plan. Results are cached until you change the partner.",
+            use_container_width=True,
+        )
+    with _info_col:
+        if plan is None:
+            st.info("💡 Click **Generate Recommendation Plan** to run AI analysis for this partner.")
+        else:
+            st.success(f"✅ Showing cached plan for **{selected_partner}**. Re-click to refresh.")
+
+    if _gen_plan:
+        with st.spinner("Generating recommendation plan..."):
+            plan = ai.get_partner_recommendation_plan(
+                partner_name=selected_partner,
+                top_n=int(top_n),
+                use_genai=True,
+                api_key=key if key else None,
+                model=model_name,
+            )
+        st.session_state[_plan_cache_key] = plan
+        st.rerun()
+
+    if plan is None:
         return
 
     # --- Export Buttons ---

@@ -2038,6 +2038,15 @@ Respond ONLY with a JSON object mapping original label to new label. Example:
                     "Lock in commitment using partner-specific pricing slabs.",
                 ],
             },
+            "Emerging": {
+                "next_best_action": "Accelerate growth trajectory before momentum plateaus.",
+                "actions": [
+                    "Assign a growth-specialist rep to nurture this rising account.",
+                    "Introduce category expansion offer: 2-3 adjacent product lines.",
+                    "Set a 30-day volume milestone with a small incentive on hitting it.",
+                    "Run peer-gap analysis — show them what top-tier partners buy that they don't yet.",
+                ],
+            },
             "Healthy": {
                 "next_best_action": "Increase category penetration before momentum softens.",
                 "actions": [
@@ -2093,7 +2102,7 @@ Respond ONLY with a JSON object mapping original label to new label. Example:
             priority = "Critical"
         elif any(str(a.get("severity")) == "high" for a in alerts):
             priority = "High"
-        elif health_segment in {"At Risk", "Critical"} or "Risk" in health_status:
+        elif health_segment in {"At Risk", "Critical", "Emerging"} or "Risk" in health_status:
             priority = "High"
 
         rationale = (

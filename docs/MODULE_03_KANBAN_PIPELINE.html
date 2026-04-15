@@ -127,7 +127,7 @@
     <div class="cover-meta-item"><strong>Primary File</strong>kanban_pipeline.py</div>
     <div class="cover-meta-item"><strong>Data Sources</strong>df_partner_features + ML scores</div>
     <div class="cover-meta-item"><strong>Refresh</strong>5-minute cache (TTL=300s)</div>
-    <div class="cover-meta-item"><strong>April 2026</strong>Version 2.4</div>
+    <div class="cover-meta-item"><strong>April 2026</strong>Version 2.5</div>
   </div>
 </div>
 
@@ -139,14 +139,14 @@
   <div class="toc">
     <h2>Contents</h2>
     <div class="toc-grid">
-      <div class="toc-item"><span class="toc-num">01</span>The Four Swimlanes</div>
+      <div class="toc-item"><span class="toc-num">01</span>The Five Swimlanes</div>
       <div class="toc-item"><span class="toc-num">05</span>Revenue at Risk — Calculation &amp; Fallback</div>
       <div class="toc-item"><span class="toc-num">02</span>What's on Each Partner Card</div>
       <div class="toc-item"><span class="toc-num">06</span>INR Number Formatting</div>
       <div class="toc-item"><span class="toc-num">03</span>Churn Colour Coding</div>
       <div class="toc-item"><span class="toc-num">07</span>Filters &amp; Sort Options</div>
       <div class="toc-item"><span class="toc-num">04</span>Revenue Trend Arrows</div>
-      <div class="toc-item"><span class="toc-num">08</span>Performance &amp; Improvements</div>
+      <div class="toc-item"><span class="toc-num">08</span>Period-Aware Segmentation</div>
     </div>
   </div>
 
@@ -154,10 +154,10 @@
   <div class="section">
     <div class="section-header">
       <div class="section-num">01</div>
-      <h2>The Four Swimlanes — Lane Assignment Logic</h2>
+      <h2>The Five Swimlanes — Lane Assignment Logic</h2>
       <span class="section-file">kanban_pipeline.py → LANES config</span>
     </div>
-    <p>Every partner lands in exactly one of four lanes. The lane is determined entirely by the partner's <strong>health_segment</strong> value — which itself is computed by the ML engine's weighted health score formula (covered in the Partner 360 document). The Kanban does not re-compute this value; it reads it from the pre-computed partner features matrix.</p>
+    <p>Every partner lands in exactly one of five lanes. The lane is determined by the partner's <strong>health_segment</strong> value, which is computed by the ML engine's weighted health score formula. When the user switches the Time Period filter (Monthly / Quarterly / Yearly), the <code>_recompute_segments_for_period()</code> function re-classifies partners on the fly using scaled revenue thresholds and two Champion qualification paths.</p>
 
     <div class="kanban-demo">
       <div class="lane">
@@ -211,12 +211,13 @@
 
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Lane</th><th>Health Segment</th><th>Health Score Range</th><th>What it means operationally</th></tr></thead>
+        <thead><tr><th>Lane</th><th>Health Segment</th><th>Classification Criteria</th><th>What it means operationally</th></tr></thead>
         <tbody>
-          <tr><td><span class="pill pill-green">🏆 Champion</span></td><td>Champion</td><td>≥ 0.80 AND rev drop &lt; 10%</td><td>No action needed. Maintain relationship. Candidate for strategic expansion.</td></tr>
-          <tr><td><span class="pill pill-blue">✅ Healthy</span></td><td>Healthy</td><td>≥ 0.60</td><td>Monitor quarterly. Good cross-sell candidate. Not urgent.</td></tr>
-          <tr><td><span class="pill pill-amber">⚠️ At Risk</span></td><td>At Risk</td><td>≥ 0.40</td><td>Plan visit within 2 weeks. Investigate root cause of decline.</td></tr>
-          <tr><td><span class="pill pill-red">🔴 Critical</span></td><td>Critical</td><td>&lt; 0.40</td><td>Immediate call. Revenue may already be at zero. Escalate to area manager.</td></tr>
+          <tr><td><span class="pill pill-green">🏆 Champion</span></td><td>Champion</td><td>Score path: hs &ge; 0.72, drop &lt; 10%, churn &lt; 0.35, recent<br/><em>OR</em> Revenue-tier path: top-5% revenue, churn &lt; 0.45, drop &lt; 20%, hs &ge; 0.45, recent</td><td>No action needed. Maintain relationship. Candidate for strategic expansion.</td></tr>
+          <tr><td><span class="pill pill-indigo">🌱 Emerging</span></td><td>Emerging</td><td>sr &gt; 0, growth &ge; −0.05, churn &lt; 0.55, hs &lt; 0.72, recent</td><td>Growing or recovering partner with positive trajectory. Nurture and accelerate.</td></tr>
+          <tr><td><span class="pill pill-blue">✅ Healthy</span></td><td>Healthy</td><td>hs &ge; 0.50, drop &lt; period threshold, recent</td><td>Monitor quarterly. Good cross-sell candidate. Not urgent.</td></tr>
+          <tr><td><span class="pill pill-amber">⚠️ At Risk</span></td><td>At Risk</td><td>hs &ge; 0.30</td><td>Plan visit within 2 weeks. Investigate root cause of decline.</td></tr>
+          <tr><td><span class="pill pill-red">🔴 Critical</span></td><td>Critical</td><td>hs &lt; 0.30 or zero revenue period</td><td>Immediate call. Revenue may already be at zero. Escalate to area manager.</td></tr>
         </tbody>
       </table>
     </div>
@@ -464,6 +465,12 @@ otherwise            →  f"₹{value:.0f}"                      <span class="co
       <table>
         <thead><tr><th>Control</th><th>Type</th><th>What it does</th><th>Default</th></tr></thead>
         <tbody>
+          <tr>
+            <td><strong>Time Period</strong></td>
+            <td>Dropdown</td>
+            <td>Monthly / Quarterly / Yearly. Scales revenue figures and re-runs segment classification via <code>_recompute_segments_for_period()</code>. Quarterly = model default (no recalc).</td>
+            <td>Quarterly</td>
+          </tr>
           <tr>
             <td><strong>Filter by State</strong></td>
             <td>Multi-select</td>

@@ -162,26 +162,36 @@ ORDER BY max_age_days DESC;
 -- 1D. view_stock_liquidation_leads
 --     Joins dead stock items with partners who have historically
 --     bought them, ranking potential liquidation buyers.
+--     Includes: state (area), product group & category, purchase count.
 -- --------------------------------------------------------------
 CREATE MATERIALIZED VIEW IF NOT EXISTS view_stock_liquidation_leads AS
 SELECT
-    vas.product_name            AS dead_stock_item,
-    vas.total_stock_qty         AS qty_in_stock,
+    vas.product_name                        AS dead_stock_item,
+    vas.total_stock_qty                     AS qty_in_stock,
     vas.max_age_days,
-    mp.company_name             AS potential_buyer,
-    mp.id                       AS party_id,
-    MAX(t.date)                 AS last_purchase_date,
-    SUM(tp.qty)                 AS historical_qty_bought,
-    SUM(tp.net_amt)             AS historical_revenue
+    mp.company_name                         AS potential_buyer,
+    mp.mobile_no                            AS mobile_no,
+    mp.id                                   AS party_id,
+    COALESCE(ms.state_name, 'Unknown')      AS state_name,
+    COALESCE(mg.group_name, 'General')      AS product_group,
+    COALESCE(mpc.category_name, 'General')  AS product_category,
+    MAX(t.date)                             AS last_purchase_date,
+    SUM(tp.qty)                             AS historical_qty_bought,
+    COUNT(DISTINCT t.id)                    AS purchase_txn_count,
+    SUM(tp.net_amt)                         AS historical_revenue
 FROM view_ageing_stock vas
-JOIN master_products p   ON p.product_name = vas.product_name
-JOIN transactions_dsr_products tp ON tp.product_id = p.id
-JOIN transactions_dsr t  ON t.id = tp.dsr_id
-                        AND LOWER(CAST(t.is_approved AS TEXT)) = 'true'
-JOIN master_party mp     ON mp.id = t.party_id
+JOIN master_products p              ON p.product_name = vas.product_name
+LEFT JOIN master_group mg           ON p.group_id = mg.id
+LEFT JOIN master_product_category mpc ON mg.category_id_id = mpc.id
+JOIN transactions_dsr_products tp   ON tp.product_id = p.id
+JOIN transactions_dsr t             ON t.id = tp.dsr_id
+                                   AND LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+JOIN master_party mp                ON mp.id = t.party_id
+LEFT JOIN master_state ms           ON mp.state_id = ms.id
 GROUP BY
     vas.product_name, vas.total_stock_qty, vas.max_age_days,
-    mp.company_name, mp.id
+    mp.company_name, mp.mobile_no, mp.id,
+    ms.state_name, mg.group_name, mpc.category_name
 ORDER BY vas.max_age_days DESC, historical_revenue DESC;
 
 
@@ -206,6 +216,179 @@ WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
 GROUP BY p1.product_name, p2.product_name
 HAVING COUNT(DISTINCT t.id) >= 2     -- minimum support threshold
 ORDER BY times_bought_together DESC;
+
+
+-- --------------------------------------------------------------
+-- 1F. view_partner_ar_summary
+--     Real AR data per partner: outstanding, overdue, aging buckets.
+--     Sourced from actual billing tables (due_payment, etc.).
+-- --------------------------------------------------------------
+DROP MATERIALIZED VIEW IF EXISTS view_partner_credit_risk_score CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS view_partner_ar_summary CASCADE;
+
+CREATE MATERIALIZED VIEW view_partner_ar_summary AS
+SELECT
+    mp.company_name,
+    t.party_id,
+    COUNT(dp.id)                                        AS invoice_count,
+    ROUND(COALESCE(SUM(dp.net_amt), 0)::NUMERIC, 2)    AS total_billed,
+    ROUND(COALESCE(SUM(dpa.collected), 0)::NUMERIC, 2) AS total_collected,
+    ROUND(GREATEST(COALESCE(SUM(dp.net_amt), 0)
+                   - COALESCE(SUM(dpa.collected), 0), 0)::NUMERIC, 2)
+                                                        AS outstanding_amount,
+    ROUND(COALESCE(SUM(
+        CASE WHEN (dp.approve IS NULL OR dp.approve = FALSE)
+              AND dp.bill_date::date + COALESCE(dp.credit_days, 0) < CURRENT_DATE
+             THEN COALESCE(dp.net_amt, 0) ELSE 0 END
+    ), 0)::NUMERIC, 2)                                  AS overdue_amount,
+    COUNT(CASE
+        WHEN (dp.approve IS NULL OR dp.approve = FALSE)
+         AND dp.bill_date::date + COALESCE(dp.credit_days, 0) < CURRENT_DATE
+        THEN 1 END)                                     AS overdue_invoice_count,
+    ROUND(COALESCE(SUM(CASE
+        WHEN (dp.approve IS NULL OR dp.approve = FALSE)
+         AND (CURRENT_DATE - (dp.bill_date::date + COALESCE(dp.credit_days, 0)))
+             BETWEEN 1 AND 30
+        THEN COALESCE(dp.net_amt, 0) ELSE 0 END), 0)::NUMERIC, 2) AS overdue_0_30,
+    ROUND(COALESCE(SUM(CASE
+        WHEN (dp.approve IS NULL OR dp.approve = FALSE)
+         AND (CURRENT_DATE - (dp.bill_date::date + COALESCE(dp.credit_days, 0)))
+             BETWEEN 31 AND 60
+        THEN COALESCE(dp.net_amt, 0) ELSE 0 END), 0)::NUMERIC, 2) AS overdue_31_60,
+    ROUND(COALESCE(SUM(CASE
+        WHEN (dp.approve IS NULL OR dp.approve = FALSE)
+         AND (CURRENT_DATE - (dp.bill_date::date + COALESCE(dp.credit_days, 0)))
+             BETWEEN 61 AND 90
+        THEN COALESCE(dp.net_amt, 0) ELSE 0 END), 0)::NUMERIC, 2) AS overdue_61_90,
+    ROUND(COALESCE(SUM(CASE
+        WHEN (dp.approve IS NULL OR dp.approve = FALSE)
+         AND (CURRENT_DATE - (dp.bill_date::date + COALESCE(dp.credit_days, 0)))
+             BETWEEN 91 AND 120
+        THEN COALESCE(dp.net_amt, 0) ELSE 0 END), 0)::NUMERIC, 2) AS overdue_91_120,
+    ROUND(COALESCE(SUM(CASE
+        WHEN (dp.approve IS NULL OR dp.approve = FALSE)
+         AND (CURRENT_DATE - (dp.bill_date::date + COALESCE(dp.credit_days, 0))) > 120
+        THEN COALESCE(dp.net_amt, 0) ELSE 0 END), 0)::NUMERIC, 2) AS overdue_120_plus,
+    ROUND(COALESCE(AVG(
+        CASE WHEN dp.approve = TRUE AND dp.payment_date IS NOT NULL
+             THEN dp.payment_date::date - dp.bill_date::date END
+    ), 0)::NUMERIC, 1)                                  AS avg_payment_days,
+    ROUND(COALESCE(AVG(
+        CASE
+            WHEN dp.approve = TRUE AND dp.payment_date IS NOT NULL
+             AND dp.bill_date >= CURRENT_DATE - INTERVAL '90 days'
+            THEN dp.payment_date::date - dp.bill_date::date
+        END
+    ), 0)::NUMERIC, 1)                                  AS payment_days_recent,
+    ROUND(COALESCE(AVG(
+        CASE
+            WHEN dp.approve = TRUE AND dp.payment_date IS NOT NULL
+             AND dp.bill_date >= CURRENT_DATE - INTERVAL '180 days'
+             AND dp.bill_date <  CURRENT_DATE - INTERVAL '90 days'
+            THEN dp.payment_date::date - dp.bill_date::date
+        END
+    ), 0)::NUMERIC, 1)                                  AS payment_days_prev,
+    MAX(dp.bill_date)                                   AS last_invoice_date,
+    COALESCE(cl.credit_limit, 0)                        AS credit_limit,
+    COALESCE(cl.max_credit_days, 0)                     AS assigned_credit_days,
+    COALESCE(adv.total_advance, 0)                      AS advance_received,
+    NOW()                                               AS refreshed_at
+FROM due_payment dp
+JOIN transactions_dsr t  ON t.id  = dp.dsr_id
+JOIN master_party mp     ON mp.id = t.party_id
+LEFT JOIN (
+    SELECT due_payment_id, COALESCE(SUM(amount), 0) AS collected
+    FROM due_payment_amount WHERE is_active = TRUE
+    GROUP BY due_payment_id
+) dpa ON dpa.due_payment_id = dp.id
+LEFT JOIN (
+    SELECT party_id,
+           SUM(credit_limit) AS credit_limit,
+           MAX(credit_days)  AS max_credit_days
+    FROM master_party_credit_details GROUP BY party_id
+) cl ON cl.party_id = t.party_id
+LEFT JOIN (
+    SELECT party_id,
+           COALESCE(SUM(
+               CASE WHEN is_active = TRUE AND deleted_at IS NULL
+               THEN receive_amount ELSE 0 END
+           ), 0) AS total_advance
+    FROM due_advance_payment_dueadvancepayment GROUP BY party_id
+) adv ON adv.party_id = t.party_id
+WHERE dp.is_active = TRUE AND dp.deleted_at IS NULL
+GROUP BY mp.company_name, t.party_id, cl.credit_limit,
+         cl.max_credit_days, adv.total_advance;
+
+
+-- --------------------------------------------------------------
+-- 1G. view_partner_credit_risk_score
+--     Composite credit risk score (0-1) with aging severity.
+-- --------------------------------------------------------------
+CREATE MATERIALIZED VIEW view_partner_credit_risk_score AS
+WITH scored AS (
+    SELECT
+        ar.*,
+        ROUND((payment_days_recent - payment_days_prev)::NUMERIC, 1) AS payment_trend_days,
+        CASE
+            WHEN (payment_days_recent - payment_days_prev) > 5  THEN 'Deteriorating'
+            WHEN (payment_days_recent - payment_days_prev) < -5 THEN 'Improving'
+            ELSE 'Stable'
+        END AS payment_trend_dir,
+        GREATEST(outstanding_amount - advance_received, 0) AS net_outstanding,
+        CASE WHEN total_billed > 0
+             THEN LEAST(overdue_amount / total_billed, 1.0) ELSE 0 END AS overdue_ratio,
+        CASE WHEN credit_limit > 0
+             THEN LEAST(outstanding_amount / credit_limit, 1.0) ELSE 0 END AS credit_utilization_ratio,
+        CASE
+            WHEN assigned_credit_days > 0 AND payment_days_recent > assigned_credit_days
+                THEN LEAST((payment_days_recent - assigned_credit_days)::NUMERIC / assigned_credit_days, 1.0)
+            WHEN assigned_credit_days > 0 THEN 0.0
+            WHEN payment_days_recent > 60 THEN 0.8
+            WHEN payment_days_recent > 30 THEN 0.5
+            ELSE 0.1
+        END AS speed_score,
+        CASE WHEN overdue_amount > 0
+             THEN LEAST((0.10*overdue_0_30 + 0.20*overdue_31_60 + 0.30*overdue_61_90
+                         + 0.40*overdue_91_120 + 0.60*overdue_120_plus) / overdue_amount, 1.0)
+             ELSE 0 END AS aging_severity_score,
+        LEAST(overdue_invoice_count / 5.0, 1.0) AS count_score
+    FROM view_partner_ar_summary ar
+)
+SELECT
+    company_name, party_id, invoice_count, total_billed, total_collected,
+    outstanding_amount, overdue_amount, overdue_invoice_count, net_outstanding,
+    overdue_0_30, overdue_31_60, overdue_61_90, overdue_91_120, overdue_120_plus,
+    avg_payment_days, assigned_credit_days, payment_days_recent, payment_days_prev,
+    payment_trend_days, payment_trend_dir, credit_limit, advance_received,
+    ROUND(credit_utilization_ratio::NUMERIC, 4)  AS credit_utilization_ratio,
+    ROUND(overdue_ratio::NUMERIC, 4)             AS overdue_ratio,
+    ROUND((0.30*overdue_ratio + 0.25*credit_utilization_ratio
+           + 0.20*aging_severity_score + 0.15*speed_score
+           + 0.10*count_score)::NUMERIC, 4)      AS credit_risk_score,
+    CASE
+        WHEN (0.30*overdue_ratio+0.25*credit_utilization_ratio+0.20*aging_severity_score+0.15*speed_score+0.10*count_score)>=0.65 THEN 'Critical'
+        WHEN (0.30*overdue_ratio+0.25*credit_utilization_ratio+0.20*aging_severity_score+0.15*speed_score+0.10*count_score)>=0.45 THEN 'High'
+        WHEN (0.30*overdue_ratio+0.25*credit_utilization_ratio+0.20*aging_severity_score+0.15*speed_score+0.10*count_score)>=0.25 THEN 'Medium'
+        ELSE 'Low'
+    END AS credit_risk_band,
+    ROUND(((0.30*overdue_ratio+0.25*credit_utilization_ratio+0.20*aging_severity_score+0.15*speed_score+0.10*count_score)
+           * net_outstanding)::NUMERIC, 2) AS credit_adjusted_risk_value,
+    refreshed_at
+FROM scored;
+
+-- Credit risk indexes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ar_summary_party
+    ON view_partner_ar_summary (party_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_score_party
+    ON view_partner_credit_risk_score (party_id);
+CREATE INDEX IF NOT EXISTS idx_ar_party_id
+    ON view_partner_ar_summary (party_id);
+CREATE INDEX IF NOT EXISTS idx_credit_score_desc
+    ON view_partner_credit_risk_score (credit_risk_score DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_band
+    ON view_partner_credit_risk_score (credit_risk_band);
+CREATE INDEX IF NOT EXISTS idx_payment_trend
+    ON view_partner_credit_risk_score (payment_trend_dir);
 
 
 -- ==============================================================
@@ -255,6 +438,41 @@ CREATE TABLE IF NOT EXISTS cluster_assignments (
     strategic_tag   TEXT NOT NULL,
     PRIMARY KEY (run_id, company_name)
 );
+
+-- ── 2A-2. Cluster Centroid History ─────────────────────────────
+-- Stores centroid vectors after each run for drift detection.
+CREATE TABLE IF NOT EXISTS cluster_centroids_history (
+    id              BIGSERIAL PRIMARY KEY,
+    run_id          BIGINT REFERENCES cluster_model_runs(id) ON DELETE CASCADE,
+    tier            TEXT NOT NULL,          -- 'VIP' | 'Growth'
+    cluster_label   TEXT NOT NULL,
+    centroid_json   TEXT NOT NULL,          -- JSON array of float feature values
+    feature_names   TEXT NOT NULL,          -- JSON array of feature names (same order)
+    recorded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_centroids_label_recorded
+    ON cluster_centroids_history (cluster_label, recorded_at DESC);
+
+
+-- ── 2A-3. Cluster Drift Alerts ─────────────────────────────────
+-- Records centroid drift alerts raised after comparing runs.
+CREATE TABLE IF NOT EXISTS cluster_drift_alerts (
+    id                   BIGSERIAL PRIMARY KEY,
+    run_id               BIGINT REFERENCES cluster_model_runs(id) ON DELETE CASCADE,
+    cluster_label        TEXT NOT NULL,
+    drift_score          DOUBLE PRECISION NOT NULL,
+    drift_threshold      DOUBLE PRECISION NOT NULL DEFAULT 0.25,
+    top_drifted_features TEXT NOT NULL,     -- JSON array of feature names
+    severity             TEXT NOT NULL DEFAULT 'medium',  -- 'medium' | 'high'
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_alerts_run_id
+    ON cluster_drift_alerts (run_id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_drift_alerts_severity
+    ON cluster_drift_alerts (severity, created_at DESC);
 
 
 -- --------------------------------------------------------------
@@ -629,20 +847,26 @@ ORDER BY count DESC;
 --  Recommended: schedule as a nightly cron job at 02:00 IST.
 -- ==============================================================
 
--- Step 1 — refresh base views first (dependencies)
+-- Step 1 — refresh base views first (no dependencies)
 REFRESH MATERIALIZED VIEW view_ml_input;
 REFRESH MATERIALIZED VIEW fact_sales_intelligence;
 
 -- Step 2 — refresh views that depend on base views
 REFRESH MATERIALIZED VIEW view_ageing_stock;
+-- view_stock_liquidation_leads has no unique key → use regular REFRESH
 REFRESH MATERIALIZED VIEW view_stock_liquidation_leads;
-REFRESH MATERIALIZED VIEW view_product_associations;
+REFRESH MATERIALIZED VIEW CONCURRENTLY view_product_associations;
 
--- Step 3 — update statistics for query planner
+-- Step 3 — credit risk views (depend on billing tables, not the above views)
+REFRESH MATERIALIZED VIEW CONCURRENTLY view_partner_ar_summary;
+REFRESH MATERIALIZED VIEW CONCURRENTLY view_partner_credit_risk_score;
+
+-- Step 4 — update statistics for query planner
 ANALYZE transactions_dsr;
 ANALYZE transactions_dsr_products;
 ANALYZE master_products;
 ANALYZE master_party;
+ANALYZE due_payment;
 
 
 -- ==============================================================

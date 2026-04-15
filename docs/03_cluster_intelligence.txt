@@ -1,5 +1,5 @@
 ================================================================================
-MODULE: CLUSTER INTELLIGENCE — v3.0
+MODULE: CLUSTER INTELLIGENCE — v3.1
 FILE:   frontend/tabs/clustering.py
 ENGINE: ml_engine/clustering_mixin.py
 GOVERNANCE: ml_engine/services/cluster_governance_repository.py
@@ -20,6 +20,25 @@ Business use cases:
   - Auto-generate segment playbooks with next-best-actions
 
 
+WHAT CHANGED IN v3.1 (April 2026)
+-----------------------------------
+  1. PARTNER DEEP-DIVE enriched with:
+       - Partner name + state displayed alongside cluster data points
+       - Revenue breakdown: Monthly (est.), Quarterly, Yearly, Lifetime
+       - Cluster similarity narrative: explains WHY partners are grouped
+         together (shared category mix, scale tier, buying rhythm)
+       - Health segment, churn probability, recency shown per partner
+  2. BUG FIX — Series ambiguity crash resolved:
+       When pf_cluster.loc[partner] returned a single-row DataFrame instead
+       of a Series (duplicate index edge case), the old .get() calls triggered
+       "ValueError: truth value of a Series is ambiguous".
+       Fix: normalise .loc result to plain dict via _scalar() helper before
+       any float() / int() conversion.
+  3. BUG FIX — Geographic bar chart column rename fixed:
+       pandas ≥2.0 value_counts().reset_index() returns columns ['state','count']
+       instead of ['index','state']. Now detects both layouts and renames
+       correctly, then passes x="State" (capital S) to px.bar.
+
 WHAT CHANGED IN v3.0
 ---------------------
   1. ENSEMBLE CONSENSUS replaced 2-algorithm competition (HDBSCAN vs GMM)
@@ -37,15 +56,21 @@ WHAT CHANGED IN v3.0
   8. REMOVED PCA→UMAP pipeline (features go directly to ensemble after scaler)
 
 
-WHAT IT SHOWS (UI)
-------------------
+WHAT IT SHOWS (UI) — v3.1
+--------------------------
   1. Cluster Summary Table    - Count and avg revenue per cluster
   2. 3D Partner DNA Map       - PCA-reduced interactive scatter plot
   3. Business Archetype Labels- Auto-generated descriptive names
   4. Strategic Tags            - Per-cluster action labels
   5. Quality Metrics           - Silhouette, Calinski-Harabasz, ARI stability
   6. Business Validation       - Cluster-guided vs baseline targeting comparison
-  7. Export (PDF / Excel)
+  7. Partner Deep-Dive (NEW):
+       - Partner name + State column displayed alongside data points
+       - Revenue table: Monthly (est.) / Quarterly / Yearly / Lifetime
+       - Cluster similarity narrative explaining behavioural commonalities
+       - Health segment, churn %, recency (days since last order)
+       - Geographic spread bar chart (state distribution within cluster)
+  8. Export (PDF / Excel)
 
 
 ALGORITHMS & FORMULAS USED
@@ -322,6 +347,38 @@ L. PARTNER INTELLIGENCE & PLAYBOOKS
       - Includes strategic tag context and affinity pitch suggestion
 
 
+M. PARTNER DEEP-DIVE (v3.1 UI)
+---------------------------------
+  When the user selects a Cluster Type + Cluster Label, the data points
+  table now shows the following columns for each partner in that cluster:
+
+    Partner Name          - company_name from partner_profiles
+    State                 - geographic state of the partner
+    Monthly Rev (est.)    - recent_90_revenue / 3
+    Quarterly Rev         - recent_90_revenue (raw 90d window)
+    Yearly Rev (est.)     - recent_90_revenue × 4
+    Lifetime Revenue      - lifetime_revenue column
+    Growth Rate           - growth_rate_90d (%)
+    Recency (days)        - days since last order
+    Health Segment        - Champion / Emerging / Healthy / At Risk / Critical
+    Churn %               - churn_probability as percentage
+
+  Similarity Narrative:
+    A text block explains WHY these partners are grouped together:
+    - Dominant category mix (top 2 categories by mix::rw:: weight)
+    - Scale tier (VIP vs Growth, high/medium/low spend)
+    - Buying rhythm (regular vs erratic, based on gap_cv)
+    - Geographic concentration (if > 60% of cluster in same state)
+    - Revenue band (average Quarterly Rev of cluster)
+
+  Geographic Spread Chart:
+    Bar chart of partner count by state within the cluster.
+    Uses pandas-version-safe column renaming:
+      pandas ≥ 2.0: value_counts().reset_index() → columns ['state','count']
+      pandas < 2.0: value_counts().reset_index() → columns ['index','state']
+    Both handled and renamed to ['State', 'Partners'] before charting.
+
+
 DATA FLOW
 ---------
   PostgreSQL → _load_temporal_group_spend (90d/180d/365d pivots)
@@ -335,7 +392,7 @@ DATA FLOW
              → _persist_cluster_run + _track_temporal_transitions
              → run_cluster_business_validation (benchmark vs baselines)
              → matrix DataFrame stored in ai.matrix
-             → clustering.py renders with PCA scatter + st.dataframe
+             → clustering.py renders with PCA scatter + partner deep-dive table
 
 
 CONFIGURATION REFERENCE
@@ -352,5 +409,7 @@ CONFIGURATION REFERENCE
   GEMINI_MODEL                     gemini-2.5-flash  LLM model
 
 DATABASE TABLES (cluster_governance_repository.py)
-  cluster_model_runs       - One row per clustering execution (metrics, gate)
-  cluster_assignments      - Partner-level cluster assignments per approved run
+  cluster_model_runs         - One row per clustering execution (metrics, gate)
+  cluster_assignments        - Partner-level cluster assignments per approved run
+  cluster_centroids_history  - Historical centroid snapshots per run (added v3.1)
+  cluster_drift_alerts       - Feature drift alerts per run (added v3.1)

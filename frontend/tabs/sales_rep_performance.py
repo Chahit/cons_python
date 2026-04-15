@@ -54,6 +54,13 @@ def render(engine):
         rep_row = df[df["sales_rep_name"] == selected_rep].iloc[0]
         rep_uid = int(rep_row["user_id"])
 
+        # ── Back button ────────────────────────────────────────────────────────
+        _back_col, _ = st.columns([1, 4])
+        with _back_col:
+            if st.button("← Back to Leaderboard", key="srep_back_btn", use_container_width=True):
+                st.session_state["sales_rep_selector"] = "🌐 All Reps (Leaderboard)"
+                st.rerun()
+
         st.subheader(f"👤 {selected_rep} — Performance Dashboard")
 
         # ── Individual KPI cards ─────────────────────────────────────────────
@@ -125,8 +132,8 @@ def render(engine):
                 st.dataframe(
                     delta_df[["Month", "Revenue (Rs)", "change (Rs)", "change (%)"]],
                     column_config={
-                        "Revenue (Rs)": st.column_config.NumberColumn(format="Rs %d"),
-                        "change (Rs)": st.column_config.NumberColumn(format="Rs %d"),
+                        "Revenue (Rs)": st.column_config.NumberColumn(format="₹%d"),
+                        "change (Rs)": st.column_config.NumberColumn(format="₹%d"),
                         "change (%)": st.column_config.NumberColumn(format="%.1f%%"),
                     },
                     hide_index=True, use_container_width=True
@@ -173,8 +180,8 @@ def render(engine):
     st.dataframe(
         display_df,
         column_config={
-            "Revenue (Rs)": st.column_config.NumberColumn(format="Rs %d"),
-            "Expenses (Rs)": st.column_config.NumberColumn(format="Rs %d"),
+            "Revenue (Rs)": st.column_config.NumberColumn(format="₹%d"),
+            "Expenses (Rs)": st.column_config.NumberColumn(format="₹%d"),
             "ROI (x)": st.column_config.NumberColumn(format="%dx"),
             "Orders": st.column_config.NumberColumn(format="%d"),
         },
@@ -259,9 +266,9 @@ def render(engine):
     st.dataframe(
         eff_df,
         column_config={
-            "Rev per Order":   st.column_config.NumberColumn("Avg Revenue/Order (Rs)", format="Rs %d"),
-            "Rev per Partner": st.column_config.NumberColumn("Avg Revenue/Partner (Rs)", format="Rs %d"),
-            "Cost per Order":  st.column_config.NumberColumn("Avg Cost/Order (Rs)", format="Rs %d"),
+            "Rev per Order":   st.column_config.NumberColumn("Avg Revenue/Order (Rs)", format="₹%d"),
+            "Rev per Partner": st.column_config.NumberColumn("Avg Revenue/Partner (Rs)", format="₹%d"),
+            "Cost per Order":  st.column_config.NumberColumn("Avg Cost/Order (Rs)", format="₹%d"),
         },
         hide_index=True, use_container_width=True
     )

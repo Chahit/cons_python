@@ -74,9 +74,10 @@ def _init_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS competitor_watch (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_query    TEXT NOT NULL UNIQUE,
+            product_query    TEXT NOT NULL,
             product_category TEXT NOT NULL,
-            added_at         TEXT DEFAULT (datetime('now'))
+            added_at         TEXT DEFAULT (datetime('now')),
+            UNIQUE(product_query, product_category)
         )
     """)
     conn.commit()
@@ -256,9 +257,14 @@ def _gpt(system: str, user: str, model: str = "gpt-4o", max_tokens: int = 1000) 
 # ═════════════════════════════════════════════════════════════════════════════
 # SerpAPI price fetch
 # ═════════════════════════════════════════════════════════════════════════════
-def _fetch_prices(query: str, serpapi_key: str) -> list:
+def _fetch_prices(query: str, serpapi_key: str) -> tuple:
+    """Returns (items: list, error: str | None)."""
     try:
         from serpapi import GoogleSearch
+    except ImportError:
+        return [], "❌ `google-search-results` package is not installed on this server. Run: `pip install google-search-results`"
+
+    try:
         params = {
             "engine":  "google_shopping",
             "q":        query,
@@ -268,6 +274,11 @@ def _fetch_prices(query: str, serpapi_key: str) -> list:
             "num":      10,
         }
         results = GoogleSearch(params).get_dict()
+
+        # SerpAPI returns an 'error' key when the key is invalid / quota exceeded
+        if "error" in results:
+            return [], f"❌ SerpAPI error: {results['error']}"
+
         items = []
         for r in results.get("shopping_results", [])[:15]:
             price_str = str(r.get("price", "0")).replace("₹", "").replace(",", "").strip()
@@ -284,9 +295,11 @@ def _fetch_prices(query: str, serpapi_key: str) -> list:
                 "link":   r.get("link", ""),
                 "rating": r.get("rating", ""),
             })
-        return items
-    except Exception:
-        return []
+        if not items:
+            return [], f"⚠️ SerpAPI returned 0 shopping results for '{query}'. Try a broader query."
+        return items, None
+    except Exception as exc:
+        return [], f"❌ Exception during SerpAPI call: {type(exc).__name__}: {exc}"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -707,6 +720,22 @@ def render(ai):
                 "Free tier: 100 searches/month at [serpapi.com](https://serpapi.com)."
             )
 
+        # ── Debug panel (always visible so server issues are diagnosable) ──────
+        with st.expander("🔧 SerpAPI Debug Info", expanded=not has_serpapi):
+            import dotenv as _dotenv_mod
+            _dotenv_loaded = "✅ python-dotenv installed"
+            _key_val = os.environ.get("SERPAPI_KEY", "")
+            _key_display = f"✅ Key loaded — `{_key_val[:6]}...{_key_val[-4:]}` ({len(_key_val)} chars)" if _key_val else "❌ Key is EMPTY — not in environment"
+            _env_path_check = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+            _env_exists = "✅ .env file found" if os.path.exists(_env_path_check) else f"❌ .env NOT found at `{_env_path_check}`"
+            st.markdown(f"""
+| Check | Status |
+|---|---|
+| python-dotenv | {_dotenv_loaded} |
+| SERPAPI_KEY in env | {_key_display} |
+| .env file on disk | {_env_exists} |
+| Working directory | `{os.getcwd()}` |
+""")
         if search_btn and search_query.strip():
             query = search_query.strip()
             cat   = selected_cat if selected_cat != "— Select —" else "General"
@@ -726,10 +755,12 @@ def render(ai):
                     f"🔍 Searching Google Shopping for '{query}'… "
                     f"This usually takes 3–5 seconds."
                 ):
-                    results = _fetch_prices(query, serpapi_key)
+                    results, fetch_error = _fetch_prices(query, serpapi_key)
                 _elapsed = round(time.time() - _t0, 1)
 
-                if not results:
+                if fetch_error:
+                    st.error(fetch_error)
+                elif not results:
                     st.error(
                         "No results returned. Check your SerpAPI key or try a different query."
                     )

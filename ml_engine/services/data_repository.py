@@ -43,6 +43,18 @@ class DataRepository:
         # Normalize: DB view uses historical_qty_bought, frontend expects buyer_past_purchase_qty
         if "historical_qty_bought" in df.columns and "buyer_past_purchase_qty" not in df.columns:
             df = df.rename(columns={"historical_qty_bought": "buyer_past_purchase_qty"})
+        # Ensure purchase_txn_count exists (for purchase pattern analysis)
+        if "purchase_txn_count" not in df.columns:
+            df["purchase_txn_count"] = 1
+        # Ensure state_name exists (for Area column)
+        if "state_name" not in df.columns:
+            df["state_name"] = "Unknown"
+        # Ensure product_category exists (for category filter)
+        if "product_category" not in df.columns:
+            df["product_category"] = "General"
+        # Ensure product_group exists
+        if "product_group" not in df.columns:
+            df["product_group"] = "General"
         return df
 
     def fetch_table_data(self, table_name):

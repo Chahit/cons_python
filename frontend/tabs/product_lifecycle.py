@@ -7,6 +7,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from styles import apply_global_styles, section_header, page_caption, page_header, skeleton_loader
 
 
+# ── Period window map ─────────────────────────────────────────────────────────
+_PERIOD_LABELS = {
+    "Monthly":   "Last 1 Month",
+    "Quarterly": "Last 3 Months",
+    "Yearly":    "Last 12 Months",
+    "All Time":  "All Time (18 months)",
+}
+
+
 def render(ai):
     apply_global_styles()
     page_header(
@@ -25,6 +34,62 @@ def render(ai):
     if summary.get("status") != "ok":
         st.warning("No product lifecycle data available. Ensure transaction data is loaded.")
         return
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # GLOBAL FILTERS ROW  (period | category | product)
+    # ──────────────────────────────────────────────────────────────────────────
+    st.markdown(
+        """
+        <div style="
+            background:rgba(236,72,153,0.07);
+            border:1px solid rgba(236,72,153,0.25);
+            border-radius:10px;
+            padding:14px 18px 8px 18px;
+            margin-bottom:18px;
+        ">
+        <p style="color:#ec4899;font-weight:700;font-size:0.95rem;margin-bottom:10px;">
+            🎛️ Global Filters — applied to Velocity Scorecard &amp; Trend Drilldown
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    gf1, gf2, gf3 = st.columns([1, 1, 2])
+    with gf1:
+        period_filter = st.selectbox(
+            "Time Period",
+            list(_PERIOD_LABELS.keys()),
+            index=3,   # default: All Time
+            key="global_period",
+            help="Restricts the revenue window used for all velocity calculations",
+        )
+    with gf2:
+        categories = ["All"] + (ai.get_product_categories() or [])
+        selected_category = st.selectbox(
+            "Product Category",
+            categories,
+            key="global_category",
+            help="Filter by product category (mapped from master_product_category)",
+        )
+    with gf3:
+        product_options = ["All"] + (
+            ai.get_products_for_category(selected_category if selected_category != "All" else None) or []
+        )
+        selected_product = st.selectbox(
+            "Specific Product",
+            product_options,
+            key="global_product",
+            help="Drill into a single SKU from master_products",
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Normalize period for API
+    api_period = None if period_filter == "All Time" else period_filter
+    api_cat    = None if selected_category == "All" else selected_category
+    api_prod   = None if selected_product == "All" else selected_product
+    # individual-SKU mode when a specific product is chosen
+    use_individual = (api_prod is not None) or (api_cat is not None)
 
     # ------------------------------------------------------------------
     # Summary metrics
@@ -48,20 +113,21 @@ def render(ai):
     # Lifecycle stage distribution
     # ------------------------------------------------------------------
     st.markdown("---")
-    ch1, ch2 = st.columns([1, 2])
+    velocity_df = ai.get_velocity_data()   # unfiltered for overview charts
 
-    velocity_df = ai.get_velocity_data()
+    color_map = {
+        "Growing": "#27ae60",
+        "Mature": "#2980b9",
+        "Plateauing": "#f39c12",
+        "Declining": "#e74c3c",
+        "End-of-Life": "#7f8c8d",
+    }
+
     if not velocity_df.empty:
+        ch1, ch2 = st.columns([1, 2])
         with ch1:
             stage_counts = velocity_df["lifecycle_stage"].value_counts().reset_index()
             stage_counts.columns = ["Stage", "Count"]
-            color_map = {
-                "Growing": "#27ae60",
-                "Mature": "#2980b9",
-                "Plateauing": "#f39c12",
-                "Declining": "#e74c3c",
-                "End-of-Life": "#7f8c8d",
-            }
             fig_pie = px.pie(
                 stage_counts, names="Stage", values="Count",
                 title="Lifecycle Stage Distribution",
@@ -73,15 +139,11 @@ def render(ai):
 
         with ch2:
             st.markdown("<p style='text-align:center; font-weight:600; margin-bottom:0;'>Revenue vs Growth Quadrant</p>", unsafe_allow_html=True)
-            
             quad_df = velocity_df.copy()
-            # Ensure safe numerical values for plotting
             quad_df["avg_monthly_revenue"] = quad_df["avg_monthly_revenue"].fillna(0)
             quad_df["growth_3m_pct"] = quad_df["growth_3m_pct"].fillna(0)
-            
-            med_rev = quad_df["avg_monthly_revenue"].median()
+            med_rev    = quad_df["avg_monthly_revenue"].median()
             med_growth = quad_df["growth_3m_pct"].median()
-            
             fig_quad = px.scatter(
                 quad_df,
                 x="avg_monthly_revenue",
@@ -92,82 +154,107 @@ def render(ai):
                 hover_data=["velocity_score"],
                 labels={
                     "avg_monthly_revenue": "Avg Monthly Revenue (Rs)",
-                    "growth_3m_pct": "3M Growth (%)"
-                }
+                    "growth_3m_pct": "3M Growth (%)",
+                },
             )
-            # Add quadrant boundaries
-            fig_quad.add_hline(y=med_growth, line_dash="dash", line_color="gray", annotation_text="Median Growth", annotation_position="top right")
-            fig_quad.add_vline(x=med_rev, line_dash="dash", line_color="gray", annotation_text="Median Revenue", annotation_position="top left")
-            
+            fig_quad.add_hline(y=med_growth, line_dash="dash", line_color="gray",
+                               annotation_text="Median Growth", annotation_position="top right")
+            fig_quad.add_vline(x=med_rev, line_dash="dash", line_color="gray",
+                               annotation_text="Median Revenue", annotation_position="top left")
             fig_quad.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0))
             st.plotly_chart(fig_quad, use_container_width=True)
 
     # ------------------------------------------------------------------
-    # Growth Velocity Table
+    # Growth Velocity Table  (filtered by period + category + product)
     # ------------------------------------------------------------------
     section_header("Growth Velocity Scorecard")
-    f1, f2 = st.columns([1, 3])
-    with f1:
-        stages = ["All"] + sorted(velocity_df["lifecycle_stage"].unique().tolist()) if not velocity_df.empty else ["All"]
-        stage_filter = st.selectbox("Filter by Stage", stages, key="vel_stage")
-    with f2:
-        prod_search = st.text_input("Search Product", "", key="vel_search")
 
-    filtered = ai.get_velocity_data(stage_filter=stage_filter if stage_filter != "All" else None)
+    scf1, scf2 = st.columns([1, 3])
+    with scf1:
+        base_stages = (
+            sorted(velocity_df["lifecycle_stage"].unique().tolist())
+            if not velocity_df.empty
+            else []
+        )
+        stage_filter = st.selectbox("Filter by Stage", ["All"] + base_stages, key="vel_stage")
+    with scf2:
+        prod_search = st.text_input("Search Product / Group Name", "", key="vel_search")
+
+    # Fetch filtered velocity
+    filtered = ai.get_velocity_data(
+        stage_filter=stage_filter if stage_filter != "All" else None,
+        period=api_period,
+        category=api_cat,
+        product=api_prod,
+    )
     if prod_search and not filtered.empty:
         filtered = filtered[filtered["product_name"].str.contains(prod_search, case=False, na=False)]
+
+    # Period badge info
+    if api_period:
+        st.caption(f"ℹ️ Showing data for: **{_PERIOD_LABELS.get(period_filter, period_filter)}**"
+                   + (f" | Category: **{api_cat}**" if api_cat else "")
+                   + (f" | Product: **{api_prod}**" if api_prod else ""))
 
     if filtered.empty:
         st.info("No products match the selected filters.")
     else:
-        # Load monthly trend data for the sparkline
-        df_monthly = ai.df_product_monthly
-        if df_monthly is not None and not df_monthly.empty:
-            sparklines = df_monthly.sort_values("sale_month").groupby("product_name")["monthly_revenue"].apply(list).reset_index(name="revenue_trend")
+        # Attach sparklines from the relevant monthly source
+        if use_individual:
+            df_monthly_src = getattr(ai, "df_individual_product_monthly", None)
+        else:
+            df_monthly_src = getattr(ai, "df_product_monthly", None)
+
+        if df_monthly_src is not None and not df_monthly_src.empty:
+            # Apply period window to sparklines too
+            if api_period:
+                cutoff = _sparkline_cutoff(df_monthly_src, api_period)
+                df_monthly_src_spark = df_monthly_src[df_monthly_src["sale_month"] >= cutoff] if cutoff is not None else df_monthly_src
+            else:
+                df_monthly_src_spark = df_monthly_src
+            sparklines = (
+                df_monthly_src_spark
+                .sort_values("sale_month")
+                .groupby("product_name")["monthly_revenue"]
+                .apply(list)
+                .reset_index(name="revenue_trend")
+            )
             filtered = filtered.merge(sparklines, on="product_name", how="left")
 
         display_cols = [c for c in [
-            "product_name", "revenue_trend", "velocity_score", "growth_3m_pct",
+            "product_name", "product_category", "product_group",
+            "revenue_trend", "velocity_score", "growth_3m_pct",
             "slope_pct", "avg_monthly_revenue", "current_revenue", "peak_distance_pct",
             "months_since_peak", "buyer_trend", "revenue_cv",
         ] if c in filtered.columns]
 
-        # Group by Lifecycle Stage
-        color_map = {
-            "Growing": "#27ae60",
-            "Mature": "#2980b9",
-            "Plateauing": "#f39c12",
-            "Declining": "#e74c3c",
-            "End-of-Life": "#7f8c8d",
-        }
-        
         stages_order = ["Growing", "Mature", "Plateauing", "Declining", "End-of-Life"]
         present_stages = [s for s in stages_order if s in filtered["lifecycle_stage"].values]
 
         for stage in present_stages:
             stage_df = filtered[filtered["lifecycle_stage"] == stage]
             color = color_map.get(stage, "#888")
-            
             st.markdown(
                 f"<h4 style='color:{color}; margin-top:20px; margin-bottom:8px; border-bottom:1px solid #333; padding-bottom:4px;'>"
-                f"{stage} <span style='color:#666; font-size:14px; font-weight:normal;'>({len(stage_df)} products)</span></h4>", 
-                unsafe_allow_html=True
+                f"{stage} <span style='color:#666; font-size:14px; font-weight:normal;'>({len(stage_df)} products)</span></h4>",
+                unsafe_allow_html=True,
             )
-            
             st.dataframe(
                 stage_df[display_cols],
                 column_config={
-                    "product_name": "Product",
-                    "revenue_trend": st.column_config.LineChartColumn("Trend (18m)", y_min=0),
-                    "velocity_score": st.column_config.NumberColumn("Velocity", format="%.3f"),
-                    "growth_3m_pct": st.column_config.NumberColumn("3M Growth %", format="%+.1f%%"),
-                    "slope_pct": st.column_config.NumberColumn("Trend Slope %", format="%+.1f%%"),
+                    "product_name":        "Product / Group",
+                    "product_category":    "Category",
+                    "product_group":       "Group",
+                    "revenue_trend":       st.column_config.LineChartColumn("Trend", y_min=0),
+                    "velocity_score":      st.column_config.NumberColumn("Velocity", format="%.3f"),
+                    "growth_3m_pct":       st.column_config.NumberColumn("3M Growth %", format="%+.1f%%"),
+                    "slope_pct":           st.column_config.NumberColumn("Trend Slope %", format="%+.1f%%"),
                     "avg_monthly_revenue": st.column_config.NumberColumn("Avg Monthly Rev", format="Rs %.0f"),
-                    "current_revenue": st.column_config.NumberColumn("Current Rev", format="Rs %.0f"),
-                    "peak_distance_pct": st.column_config.NumberColumn("From Peak %", format="%.1f%%"),
-                    "months_since_peak": "Months Since Peak",
-                    "buyer_trend": st.column_config.NumberColumn("Buyer Trend", format="%+.2f"),
-                    "revenue_cv": st.column_config.NumberColumn("Volatility (CV)", format="%.2f"),
+                    "current_revenue":     st.column_config.NumberColumn("Current Rev", format="Rs %.0f"),
+                    "peak_distance_pct":   st.column_config.NumberColumn("From Peak %", format="%.1f%%"),
+                    "months_since_peak":   "Months Since Peak",
+                    "buyer_trend":         st.column_config.NumberColumn("Buyer Trend", format="%+.2f"),
+                    "revenue_cv":          st.column_config.NumberColumn("Volatility (CV)", format="%.2f"),
                 },
                 use_container_width=True,
                 hide_index=True,
@@ -177,13 +264,32 @@ def render(ai):
     # Individual Product Trend Drilldown
     # ------------------------------------------------------------------
     section_header("Product Trend Drilldown")
-    if not velocity_df.empty:
-        product_options = sorted(velocity_df["product_name"].unique().tolist())
-        selected_product = st.selectbox("Select Product", product_options, key="trend_product")
 
-        trend_data = ai.get_product_trend(selected_product)
+    # Build the product selection pool from the velocity data being shown
+    drilldown_pool_df = velocity_df if not use_individual else filtered
+    if not drilldown_pool_df.empty:
+        product_options_drill = sorted(drilldown_pool_df["product_name"].unique().tolist())
+        # Pre-select the global product filter if set
+        default_idx = 0
+        if api_prod and api_prod in product_options_drill:
+            default_idx = product_options_drill.index(api_prod)
+        selected_product_drill = st.selectbox(
+            "Select Product / Group",
+            product_options_drill,
+            index=default_idx,
+            key="trend_product",
+        )
+
+        trend_data = ai.get_product_trend(
+            selected_product_drill,
+            period=api_period,
+            use_individual=use_individual,
+        )
+
         if not trend_data.empty:
-            prod_info = velocity_df[velocity_df["product_name"] == selected_product]
+            # Pick info from the right velocity df
+            src_df = drilldown_pool_df
+            prod_info = src_df[src_df["product_name"] == selected_product_drill]
             if not prod_info.empty:
                 p = prod_info.iloc[0]
                 i1, i2, i3, i4 = st.columns(4)
@@ -200,9 +306,10 @@ def render(ai):
             with tr1:
                 fig_rev = px.line(
                     trend_data, x="sale_month", y="monthly_revenue",
-                    title=f"Monthly Revenue — {selected_product}",
+                    title=f"{'Monthly' if api_period == 'Monthly' else 'Quarterly' if api_period == 'Quarterly' else 'Yearly' if api_period == 'Yearly' else '18-Month'} Revenue — {selected_product_drill}",
                     labels={"monthly_revenue": "Revenue (Rs)", "sale_month": "Month"},
                     markers=True,
+                    color_discrete_sequence=["#ec4899"],
                 )
                 fig_rev.update_layout(height=350)
                 st.plotly_chart(fig_rev, use_container_width=True)
@@ -210,14 +317,14 @@ def render(ai):
             with tr2:
                 fig_buyers = px.bar(
                     trend_data, x="sale_month", y="monthly_buyer_count",
-                    title=f"Monthly Buyer Count — {selected_product}",
+                    title=f"Monthly Buyer Count — {selected_product_drill}",
                     labels={"monthly_buyer_count": "Buyers", "sale_month": "Month"},
                     color_discrete_sequence=["#3498db"],
                 )
                 fig_buyers.update_layout(height=350)
                 st.plotly_chart(fig_buyers, use_container_width=True)
         else:
-            st.info("No monthly trend data available for this product.")
+            st.info("No trend data available for this product in the selected period.")
 
     # ------------------------------------------------------------------
     # Cannibalization Detection
@@ -238,30 +345,30 @@ def render(ai):
         st.dataframe(
             cannibal_df[display_cols],
             column_config={
-                "cannibal_product": "Replacing Product ↑",
+                "cannibal_product":       "Replacing Product ↑",
                 "cannibal_growth_3m_pct": st.column_config.NumberColumn("Its Growth %", format="%+.1f%%"),
-                "victim_product": "Being Replaced ↓",
-                "victim_growth_3m_pct": st.column_config.NumberColumn("Its Decline %", format="%+.1f%%"),
+                "victim_product":         "Being Replaced ↓",
+                "victim_growth_3m_pct":   st.column_config.NumberColumn("Its Decline %", format="%+.1f%%"),
                 "association_confidence": st.column_config.NumberColumn("Confidence", format="%.2f"),
-                "association_lift": st.column_config.NumberColumn("Lift", format="%.2f"),
-                "cannibalization_score": st.column_config.NumberColumn("Score", format="%.3f"),
-                "estimated_revenue_shift": st.column_config.NumberColumn("Est. Rev Shift/3M", format="Rs %.0f"),
+                "association_lift":       st.column_config.NumberColumn("Lift", format="%.2f"),
+                "cannibalization_score":  st.column_config.NumberColumn("Score", format="%.3f"),
+                "estimated_revenue_shift":st.column_config.NumberColumn("Est. Rev Shift/3M", format="Rs %.0f"),
             },
             use_container_width=True,
             hide_index=True,
         )
 
         if len(cannibal_df) >= 2:
+            all_prods = list(set(cannibal_df["cannibal_product"].tolist() + cannibal_df["victim_product"].tolist()))
             fig_sankey = go.Figure(go.Sankey(
                 arrangement="snap",
                 node=dict(
-                    label=list(set(cannibal_df["cannibal_product"].tolist() + cannibal_df["victim_product"].tolist())),
-                    color=["#27ae60" if p in cannibal_df["cannibal_product"].values else "#e74c3c"
-                           for p in set(cannibal_df["cannibal_product"].tolist() + cannibal_df["victim_product"].tolist())],
+                    label=all_prods,
+                    color=["#27ae60" if p in cannibal_df["cannibal_product"].values else "#e74c3c" for p in all_prods],
                 ),
                 link=dict(
-                    source=[list(set(cannibal_df["cannibal_product"].tolist() + cannibal_df["victim_product"].tolist())).index(r["cannibal_product"]) for _, r in cannibal_df.iterrows()],
-                    target=[list(set(cannibal_df["cannibal_product"].tolist() + cannibal_df["victim_product"].tolist())).index(r["victim_product"]) for _, r in cannibal_df.iterrows()],
+                    source=[all_prods.index(r["cannibal_product"]) for _, r in cannibal_df.iterrows()],
+                    target=[all_prods.index(r["victim_product"]) for _, r in cannibal_df.iterrows()],
                     value=cannibal_df["estimated_revenue_shift"].tolist(),
                 ),
             ))
@@ -293,24 +400,23 @@ def render(ai):
         st.dataframe(
             eol_display[display_cols],
             column_config={
-                "product_name": "Product",
-                "urgency_icon": "Urgency",
-                "lifecycle_stage": "Stage",
-                "eol_risk_score": st.column_config.NumberColumn("Risk Score", format="%.3f"),
+                "product_name":       "Product",
+                "urgency_icon":       "Urgency",
+                "lifecycle_stage":    "Stage",
+                "eol_risk_score":     st.column_config.NumberColumn("Risk Score", format="%.3f"),
                 "est_months_to_zero": st.column_config.NumberColumn("Est. Months to Zero", format="%.1f"),
-                "current_revenue": st.column_config.NumberColumn("Current Rev", format="Rs %.0f"),
-                "growth_3m_pct": st.column_config.NumberColumn("3M Growth %", format="%+.1f%%"),
-                "peak_distance_pct": st.column_config.NumberColumn("From Peak %", format="%.1f%%"),
-                "buyer_trend": st.column_config.NumberColumn("Buyer Trend", format="%+.2f"),
-                "total_stock": st.column_config.NumberColumn("Stock Qty", format="%.0f"),
-                "max_age_days": st.column_config.NumberColumn("Max Age (Days)", format="%.0f"),
-                "suggested_action": "Suggested Action",
+                "current_revenue":    st.column_config.NumberColumn("Current Rev", format="Rs %.0f"),
+                "growth_3m_pct":      st.column_config.NumberColumn("3M Growth %", format="%+.1f%%"),
+                "peak_distance_pct":  st.column_config.NumberColumn("From Peak %", format="%.1f%%"),
+                "buyer_trend":        st.column_config.NumberColumn("Buyer Trend", format="%+.2f"),
+                "total_stock":        st.column_config.NumberColumn("Stock Qty", format="%.0f"),
+                "max_age_days":       st.column_config.NumberColumn("Max Age (Days)", format="%.0f"),
+                "suggested_action":   "Suggested Action",
             },
             use_container_width=True,
             hide_index=True,
         )
 
-        # EOL Risk Distribution
         if len(eol_df) > 3:
             fig_eol = px.scatter(
                 eol_df, x="est_months_to_zero", y="eol_risk_score",
@@ -364,3 +470,18 @@ def render(ai):
         else:
             st.success("No Critical/High urgency products requiring immediate clearance action.")
 
+
+# ── Helper: sparkline period cutoff ──────────────────────────────────────────
+def _sparkline_cutoff(df: pd.DataFrame, period: str):
+    if "sale_month" not in df.columns:
+        return None
+    max_month = pd.to_datetime(df["sale_month"]).max()
+    if pd.isna(max_month):
+        return None
+    if period == "Monthly":
+        return max_month - pd.DateOffset(months=1)
+    if period == "Quarterly":
+        return max_month - pd.DateOffset(months=3)
+    if period == "Yearly":
+        return max_month - pd.DateOffset(months=12)
+    return None

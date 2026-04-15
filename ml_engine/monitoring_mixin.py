@@ -293,7 +293,12 @@ class MonitoringMixin:
         }
 
     def get_dead_stock(self):
-        if self.df_dead_stock is None:
+        # Force reload if the cached data is missing the new enrichment columns
+        _required_new = {"state_name", "product_category", "purchase_txn_count"}
+        if self.df_dead_stock is None or (
+            not self.df_dead_stock.empty
+            and not _required_new.issubset(self.df_dead_stock.columns)
+        ):
             self.df_dead_stock = self.repo.fetch_view_stock_liquidation_leads()
         return self.df_dead_stock.copy()
 

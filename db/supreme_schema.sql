@@ -301,26 +301,35 @@ ORDER BY max_age_days DESC;
 
 -- ── 2D. view_stock_liquidation_leads ──────────────────────────
 -- Joins dead stock with partners who have historically bought them.
+-- Includes state, product group/category, and purchase frequency.
 DROP MATERIALIZED VIEW IF EXISTS view_stock_liquidation_leads CASCADE;
 CREATE MATERIALIZED VIEW view_stock_liquidation_leads AS
 SELECT
-    vas.product_name            AS dead_stock_item,
-    vas.total_stock_qty         AS qty_in_stock,
+    vas.product_name                    AS dead_stock_item,
+    vas.total_stock_qty                 AS qty_in_stock,
     vas.max_age_days,
-    mp.company_name             AS potential_buyer,
-    mp.mobile_no                AS mobile_no,
-    mp.id                       AS party_id,
-    MAX(t.date)                 AS last_purchase_date,
-    SUM(tp.qty)                 AS historical_qty_bought,
-    SUM(tp.net_amt)             AS historical_revenue
+    mp.company_name                     AS potential_buyer,
+    mp.mobile_no                        AS mobile_no,
+    mp.id                               AS party_id,
+    COALESCE(ms.state_name, 'Unknown')  AS state_name,
+    COALESCE(mg.group_name, 'General')  AS product_group,
+    COALESCE(mpc.category_name, 'General') AS product_category,
+    MAX(t.date)                         AS last_purchase_date,
+    SUM(tp.qty)                         AS historical_qty_bought,
+    COUNT(DISTINCT t.id)                AS purchase_txn_count,
+    SUM(tp.net_amt)                     AS historical_revenue
 FROM view_ageing_stock vas
 JOIN master_products p             ON p.product_name = vas.product_name
+LEFT JOIN master_group mg          ON p.group_id = mg.id
+LEFT JOIN master_product_category mpc ON mg.category_id_id = mpc.id
 JOIN transactions_dsr_products tp  ON tp.product_id  = p.id
 JOIN transactions_dsr t            ON t.id = tp.dsr_id
                                   AND LOWER(CAST(t.is_approved AS TEXT)) = 'true'
 JOIN master_party mp               ON mp.id = t.party_id
+LEFT JOIN master_state ms          ON mp.state_id = ms.id
 GROUP BY vas.product_name, vas.total_stock_qty, vas.max_age_days,
-         mp.company_name, mp.mobile_no, mp.id
+         mp.company_name, mp.mobile_no, mp.id,
+         ms.state_name, mg.group_name, mpc.category_name
 ORDER BY vas.max_age_days DESC, historical_revenue DESC;
 
 

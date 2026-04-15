@@ -281,19 +281,28 @@ class BaseLoaderMixin:
         features = features.merge(states, on="company_name", how="left")
         features["state"] = features["state"].fillna("Unknown")
         features["health_segment"] = np.where(
-            features["health_status"].astype(str).str.contains("Healthy", case=False, na=False),
-            "Healthy",
+            features["health_status"].astype(str).str.contains("Champion", case=False, na=False),
+            "Champion",
             np.where(
-                features["health_status"].astype(str).str.contains("Stable", case=False, na=False),
-                "Healthy",
-                "At Risk",
+                features["health_status"].astype(str).str.contains("Emerging|Rising", case=False, na=False),
+                "Emerging",
+                np.where(
+                    features["health_status"].astype(str).str.contains("Healthy|Stable", case=False, na=False),
+                    "Healthy",
+                    np.where(
+                        features["health_status"].astype(str).str.contains("Risk", case=False, na=False),
+                        "At Risk",
+                        "Critical",
+                    ),
+                ),
             ),
         )
         features["health_score"] = np.where(
-            features["health_segment"] == "Healthy",
-            0.65,
-            0.45,
-        )
+            features["health_segment"] == "Champion", 0.82,
+            np.where(features["health_segment"] == "Emerging", 0.62,
+            np.where(features["health_segment"] == "Healthy",  0.58,
+            np.where(features["health_segment"] == "At Risk",  0.38,
+            0.18))))
         features["estimated_monthly_loss"] = 0.0
         features["recency_days"] = 0
         features["degrowth_threshold_pct"] = 20.0
@@ -456,59 +465,221 @@ class BaseLoaderMixin:
         return (series - lo) / (hi - lo)
 
     def _add_health_scores(self, features):
-        revenue_strength = self._normalize(np.log1p(features["recent_90_revenue"]))
-        growth_trend = self._normalize(features["growth_rate_90d"].clip(-1.0, 1.5))
-        recency_activity = 1.0 - self._normalize(features["recency_days"])
-        stability = 1.0 - self._normalize(np.log1p(features["revenue_volatility"]))
+        """
+        Enterprise Health Scoring Engine v3  (Precision Tier Update)
+        ================================================================
+        Five segments: Champion | Emerging | Healthy | At Risk | Critical
 
-        features["health_score"] = (
-            0.35 * revenue_strength
-            + 0.30 * growth_trend
-            + 0.20 * recency_activity
-            + 0.15 * stability
-        ).clip(0.0, 1.0)
+        Key improvements over v2:
+        ─────────────────────────
+        1. Revenue-adaptive composite weights:
+           Top-20% revenue partners (stable, mature accounts) receive a higher
+           revenue weight (40%) and a lower growth weight (15%) so that a flat-
+           but-massive partner is not unfairly penalised for not posting fast QoQ
+           growth. Smaller partners retain the original 30/25 split.
 
-        # Guard: if all states are 'Unknown' (missing column in host DB),
-        # skip state-aware groupby and use flat 20% threshold.
-        if "state" in features.columns and features["state"].nunique() > 1:
+        2. Lifetime Revenue Champion Shield:
+           Partners in the top-10% by LIFETIME revenue who are still actively
+           buying (recent_90_revenue > 0), with churn < 0.50 and revenue drop
+           < 30%, are unconditionally classified as Champion. This captures elite
+           stable accounts like Tanishk (₹67Cr) who may show near-zero QoQ growth
+           because they are at saturation — not because they are at risk.
+
+        3. State-adaptive degrowth threshold (unchanged from v2).
+        4. Emerging detection on smaller base (unchanged from v2).
+        5. Hard Critical override for churned partners (unchanged from v2).
+        """
+        f = features  # alias for brevity
+        _zero = pd.Series(0.0, index=f.index)
+        _ones = pd.Series(1.0, index=f.index)
+
+        # ── Dimension 1: Revenue Magnitude (log-percentile rank) ───────────
+        rev_rank = np.log1p(f["recent_90_revenue"]).rank(pct=True)
+
+        # ── Dimension 2: Growth Momentum (signed QoQ trajectory) ───────────
+        growth_clipped = f["growth_rate_90d"].clip(-1.0, 2.0)
+        growth_rank = growth_clipped.rank(pct=True)
+
+        # ── Dimension 3: Churn Safety (ML probability, first-class signal) ─
+        churn_p = pd.to_numeric(
+            f["churn_probability"] if "churn_probability" in f.columns else _zero,
+            errors="coerce",
+        ).fillna(0.0).clip(0.0, 1.0)
+        churn_safety = 1.0 - churn_p
+
+        # ── Dimension 4: Engagement Quality ────────────────────────────────
+        eng_vel = pd.to_numeric(
+            f["engagement_velocity"] if "engagement_velocity" in f.columns else _ones,
+            errors="coerce",
+        ).fillna(1.0).clip(0.0, 5.0)
+        aov_t = pd.to_numeric(
+            f["aov_trend"] if "aov_trend" in f.columns else _zero,
+            errors="coerce",
+        ).fillna(0.0).clip(-1.0, 1.0)
+        engagement_raw = eng_vel * (1.0 + aov_t.clip(-0.5, 0.5))
+        engagement_rank = engagement_raw.rank(pct=True)
+
+        # ── Dimension 5: Revenue Stability ─────────────────────────────────
+        rev_vol = pd.to_numeric(
+            f["revenue_volatility"] if "revenue_volatility" in f.columns else _zero,
+            errors="coerce",
+        ).fillna(0.0)
+        stability_rank = 1.0 - np.log1p(rev_vol).rank(pct=True)
+
+        # ── Revenue-tier flag: top-20% by recent revenue ────────────────────
+        # Mature, high-volume partners should be evaluated more on MAGNITUDE
+        # and STABILITY than on raw QoQ growth, which is naturally compressed
+        # at scale (a ₹67Cr partner can't grow 50% YoY indefinitely).
+        rev_p80 = float(f["recent_90_revenue"].quantile(0.80)) if len(f) > 0 else 0.0
+        top20_mask = f["recent_90_revenue"] >= max(rev_p80, 1.0)
+
+        # ── Composite health score — revenue-tier-adaptive weights ──────────
+        #
+        # Standard partners (bottom 80% by rev):
+        #   Revenue magnitude  30% | Growth momentum 25% |
+        #   Churn safety       25% | Engagement      12% | Stability 8%
+        #
+        # Top-20% revenue partners:
+        #   Revenue magnitude  40% | Growth momentum 15% |
+        #   Churn safety       25% | Engagement      12% | Stability 8%
+        #   (Growth weight cut to 15% — stability matters more at scale)
+        #
+        score_base = (
+            0.30 * rev_rank
+            + 0.25 * growth_rank
+            + 0.25 * churn_safety
+            + 0.12 * engagement_rank
+            + 0.08 * stability_rank
+        )
+        score_top20 = (
+            0.40 * rev_rank
+            + 0.15 * growth_rank
+            + 0.25 * churn_safety
+            + 0.12 * engagement_rank
+            + 0.08 * stability_rank
+        )
+        f["health_score"] = np.where(top20_mask, score_top20, score_base).clip(0.0, 1.0)
+
+        # ── State-adaptive degrowth threshold (v2 logic, unchanged) ────────
+        if "state" in f.columns and f["state"].nunique() > 1:
             state_threshold = (
-                features.assign(pos_drop=features["revenue_drop_pct"].where(features["revenue_drop_pct"] > 0))
+                f.assign(pos_drop=f["revenue_drop_pct"].where(f["revenue_drop_pct"] > 0))
                 .groupby("state")["pos_drop"]
                 .transform(lambda s: float(s.quantile(0.70)) if s.notna().any() else 20.0)
                 .clip(lower=10.0, upper=40.0)
             )
-            features["degrowth_threshold_pct"] = state_threshold.fillna(20.0)
+            f["degrowth_threshold_pct"] = state_threshold.fillna(20.0)
         else:
-            features["degrowth_threshold_pct"] = 20.0
-        features["degrowth_flag"] = (
-            features["revenue_drop_pct"] >= features["degrowth_threshold_pct"]
-        )
-        features["estimated_monthly_loss"] = (
-            (features["prev_90_revenue"] - features["recent_90_revenue"]).clip(lower=0) / 3.0
+            f["degrowth_threshold_pct"] = 20.0
+
+        f["degrowth_flag"] = f["revenue_drop_pct"] >= f["degrowth_threshold_pct"]
+        f["estimated_monthly_loss"] = (
+            (f["prev_90_revenue"] - f["recent_90_revenue"]).clip(lower=0) / 3.0
         )
 
+        # ── Lifetime Revenue Champion Shield ────────────────────────────────
+        # Strategy: partners in the top-10% by LIFETIME revenue who are still
+        # actively purchasing, not massively churning, and not in freefall are
+        # definitively Champion accounts regardless of their composite score.
+        # This prevents stable, mature accounts at revenue saturation from
+        # being mis-classified as At Risk due to near-zero QoQ growth.
+        _lifetime_rev = pd.to_numeric(
+            f["lifetime_revenue"] if "lifetime_revenue" in f.columns else _zero,
+            errors="coerce",
+        ).fillna(0.0)
+        ltv_p90 = float(_lifetime_rev.quantile(0.90)) if len(_lifetime_rev) > 0 else 0.0
+        _lrev_rank = _lifetime_rev.rank(pct=True)      # also used in labels below
+
+        # ── Emerging signal: acceleration on a smaller base (unchanged) ─────
+        rev_p65 = f["recent_90_revenue"].quantile(0.65)
+        cat_div = pd.to_numeric(
+            f["category_diversity_change"] if "category_diversity_change" in f.columns else _zero,
+            errors="coerce",
+        ).fillna(0.0)
+        _recent_txns_s = pd.to_numeric(
+            f["recent_txns"] if "recent_txns" in f.columns else _zero,
+            errors="coerce",
+        ).fillna(0.0)
+        f["_emerging_flag"] = (
+            (f["recent_90_revenue"] > 0)
+            & (f["growth_rate_90d"] >= -0.05)
+            & (
+                (f["growth_rate_90d"] >= 0.05)
+                | (eng_vel >= 1.1)
+                | (_recent_txns_s >= 2)
+            )
+            & (cat_div >= -1)
+            & (churn_p < 0.55)
+            & (f["recent_90_revenue"] <= rev_p65)
+        )
+
+        # ── Five-segment classification (evaluation order is critical) ──────
         segments = []
-        statuses = []
-        for row in features.itertuples():
+        statuses  = []
+        for row in f.itertuples():
+            cp      = float(churn_p.get(row.Index, 0) or 0)
+            ltv     = float(_lifetime_rev.get(row.Index, 0) or 0)
+            lrev_r  = float(_lrev_rank.get(row.Index, 0) or 0)
+            is_top10_ltv = ltv >= ltv_p90 and ltv_p90 > 0
+
+            # ① Hard override: revenue stopped after buying previously
             if row.recent_90_revenue <= 0 and row.prev_90_revenue > 0:
                 segments.append("Critical")
-                statuses.append("Churned (Risk)")
-            elif row.health_score >= 0.8 and row.revenue_drop_pct < 10:
+                statuses.append("Churned (Revenue Stopped)")
+
+            # ② Lifetime Revenue Champion Shield:
+            #    Top-10% lifetime value + still active + not severely churning
+            #    + no revenue freefall → unconditionally Champion.
+            #    These accounts define the business; they cannot be At Risk
+            #    solely because their YoY growth rate plateaued at scale.
+            elif (
+                is_top10_ltv
+                and row.recent_90_revenue > 0
+                and cp < 0.50
+                and row.revenue_drop_pct < 30.0
+            ):
                 segments.append("Champion")
-                statuses.append("Healthy (Growing)")
-            elif row.health_score >= 0.6 and row.revenue_drop_pct < row.degrowth_threshold_pct:
+                statuses.append("Champion (Elite Account — Top-10% LTV)")
+
+            # ③ Champion: score path — high composite + growing + low churn
+            elif row.health_score >= 0.72 and row.revenue_drop_pct < 10 and cp < 0.35:
+                segments.append("Champion")
+                statuses.append("Champion (High Performer)")
+
+            # ④ Champion: revenue-tier path — top-20% recent rev + not truly churning
+            elif (
+                row.recent_90_revenue >= max(rev_p80, 1.0)
+                and cp < 0.45
+                and row.revenue_drop_pct < 25.0
+                and row.health_score >= 0.40
+            ):
+                segments.append("Champion")
+                statuses.append("Champion (Volume Leader)")
+
+            # ⑤ Emerging: acceleration signals on a smaller base
+            elif f.at[row.Index, "_emerging_flag"]:
+                segments.append("Emerging")
+                statuses.append("Emerging (Rising Star)")
+
+            # ⑥ Healthy: solid mid-tier, no significant decline
+            elif row.health_score >= 0.50 and row.revenue_drop_pct < row.degrowth_threshold_pct:
                 segments.append("Healthy")
-                statuses.append("Stable")
-            elif row.health_score >= 0.4:
+                statuses.append("Healthy (Stable)")
+
+            # ⑦ At Risk: score deteriorating but not yet critical
+            elif row.health_score >= 0.30:
                 segments.append("At Risk")
                 statuses.append("At Risk (Degrowth)")
+
+            # ⑧ Critical: weak score + churn signals
             else:
                 segments.append("Critical")
                 statuses.append("Critical (Immediate Action)")
 
-        features["health_segment"] = segments
-        features["health_status"] = statuses
-        return features
+        f["health_segment"] = segments
+        f["health_status"]  = statuses
+        f.drop(columns=["_emerging_flag"], inplace=True)
+        return f
 
     def _load_monthly_revenue_history(self):
         query = """

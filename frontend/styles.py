@@ -9,8 +9,291 @@ import streamlit as st
 # ── Global stylesheet ────────────────────────────────────────────────────────
 GLOBAL_CSS = """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* ── Typography ─────────────────────────────────────────────────────────── */
+html, body, [class*="css"], .stMarkdown, .stText, .stCaption,
+[data-testid="stSidebar"], [data-testid="stMainBlockContainer"] {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+}
+
 /* ── Page & sidebar ─────────────────────────────── */
 [data-testid="stSidebar"] { min-width: 290px; }
+
+/* ══════════════════════════════════════════════════
+   MICRO-ANIMATIONS
+   ══════════════════════════════════════════════════ */
+
+/* ── Page fade-in on load ────────────────────────── */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.block-container,
+[data-testid="stMainBlockContainer"],
+section.main .block-container {
+  animation: fadeInUp 0.38s cubic-bezier(0.22,1,0.36,1) both;
+}
+
+/* ── Metric card hover glow + lift ───────────────── */
+[data-testid="stMetric"] {
+  border-radius: 10px !important;
+  padding: 14px 16px !important;
+  background: #0f1117 !important;
+  border: 1px solid #1e2433 !important;
+  transition: box-shadow 0.22s ease, transform 0.22s ease, border-color 0.22s ease !important;
+}
+[data-testid="stMetric"]:hover {
+  box-shadow: 0 0 0 1px rgba(99,102,241,0.35), 0 6px 24px rgba(99,102,241,0.15) !important;
+  border-color: rgba(99,102,241,0.4) !important;
+  transform: translateY(-2px) !important;
+}
+[data-testid="stMetricLabel"] > div {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.07em !important;
+  color: #64748b !important;
+}
+[data-testid="stMetricValue"] > div {
+  font-size: 26px !important;
+  font-weight: 700 !important;
+  color: #f0f4ff !important;
+}
+
+/* ── Badge pulse ─────────────────────────────────── */
+@keyframes badgePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.45); }
+  60%       { box-shadow: 0 0 0 5px rgba(239,68,68,0); }
+}
+@keyframes badgePulseAmber {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0.4); }
+  60%       { box-shadow: 0 0 0 5px rgba(245,158,11,0); }
+}
+.badge-red   { animation: badgePulse 2.2s ease-in-out infinite; }
+.badge-amber { animation: badgePulseAmber 2.8s ease-in-out infinite; }
+
+/* ── Animated gradient on page-hero accent bar ───── */
+@keyframes gradientShift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.page-hero::before {
+  background: linear-gradient(90deg,#2563eb,#7c3aed,#06b6d4,#2563eb) !important;
+  background-size: 300% 100% !important;
+  animation: gradientShift 5s ease infinite !important;
+}
+
+/* ── Page hero hover ─────────────────────────────── */
+.page-hero {
+  transition: box-shadow 0.25s ease, border-color 0.25s ease !important;
+}
+.page-hero:hover {
+  box-shadow: 0 4px 32px rgba(37,99,235,0.12) !important;
+  border-color: rgba(37,99,235,0.25) !important;
+}
+
+/* ── Section card hover ──────────────────────────── */
+.ui-section {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+.ui-section:hover {
+  border-color: #2a2a3a !important;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.3) !important;
+}
+
+/* ── Tab styling ─────────────────────────────────── */
+[data-testid="stTabs"] [data-baseweb="tab-list"] {
+  gap: 4px !important;
+  border-bottom: 1px solid #1e2433 !important;
+  padding-bottom: 0 !important;
+}
+[data-testid="stTabs"] [data-baseweb="tab"] {
+  border-radius: 6px 6px 0 0 !important;
+  padding: 8px 18px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: #64748b !important;
+  transition: color 0.18s ease, background 0.18s ease !important;
+  background: transparent !important;
+  border: none !important;
+}
+[data-testid="stTabs"] [data-baseweb="tab"]:hover {
+  color: #e2e8f0 !important;
+  background: rgba(99,102,241,0.08) !important;
+}
+[data-testid="stTabs"] [aria-selected="true"] {
+  color: #818cf8 !important;
+  background: rgba(99,102,241,0.12) !important;
+  border-bottom: 2px solid #6366f1 !important;
+}
+[data-testid="stTabs"] [data-baseweb="tab-highlight"] {
+  display: none !important;
+}
+
+/* ── Expander hover ──────────────────────────────── */
+[data-testid="stExpander"] {
+  border: 1px solid #1e2433 !important;
+  border-radius: 8px !important;
+  transition: border-color 0.2s ease !important;
+}
+[data-testid="stExpander"]:hover {
+  border-color: #2a3450 !important;
+}
+
+/* ── Button micro-interactions ───────────────────── */
+[data-testid="stButton"] > button {
+  transition: all 0.18s ease !important;
+}
+[data-testid="stButton"] > button:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 14px rgba(37,99,235,0.22) !important;
+}
+[data-testid="stButton"] > button:active {
+  transform: translateY(0) scale(0.98) !important;
+}
+[data-testid="stDownloadButton"] > button {
+  transition: all 0.18s ease !important;
+}
+[data-testid="stDownloadButton"] > button:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(16,185,129,0.2) !important;
+}
+
+/* ── Dataframe animation ─────────────────────────── */
+[data-testid="stDataFrame"] {
+  animation: fadeInUp 0.4s ease-out both !important;
+  border: 1px solid #1e2433 !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+}
+
+/* ══════════════════════════════════════════════════
+   GLOBAL SEARCH BAR
+   ══════════════════════════════════════════════════ */
+#_gsearch_trigger {
+  position: fixed;
+  top: 10px;
+  right: 90px;
+  z-index: 2147483641;
+  background: rgba(18,20,28,0.92);
+  border: 1px solid #2a3450;
+  border-radius: 8px;
+  padding: 5px 13px;
+  font-size: 12px;
+  color: #64748b;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  backdrop-filter: blur(10px);
+  transition: all 0.18s ease;
+  user-select: none;
+}
+#_gsearch_trigger:hover {
+  border-color: #6366f1;
+  color: #a5b4fc;
+  background: rgba(99,102,241,0.1);
+}
+#_gsearch_overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 2147483638;
+  display: none;
+  backdrop-filter: blur(2px);
+}
+#_gsearch_overlay.open { display: block; }
+#_gsearch_modal {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-10px);
+  width: 600px;
+  max-width: 90vw;
+  background: #12141c;
+  border: 1px solid #2a3450;
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.8);
+  z-index: 2147483639;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1), opacity 0.18s ease;
+  opacity: 0;
+}
+#_gsearch_modal.open {
+  display: flex;
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+#_gsearch_header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #1e2433;
+}
+#_gsearch_icon { font-size: 16px; color: #6366f1; flex-shrink: 0; }
+#_gsearch_input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  color: #e2e8f0;
+  font-family: inherit;
+}
+#_gsearch_input::placeholder { color: #475569; }
+#_gsearch_kbd {
+  font-size: 11px;
+  color: #475569;
+  background: #1e2433;
+  border: 1px solid #2a3450;
+  border-radius: 4px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+#_gsearch_results {
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+#_gsearch_empty {
+  padding: 20px 16px;
+  text-align: center;
+  color: #475569;
+  font-size: 13px;
+  display: none;
+}
+.gsr-group-label {
+  padding: 6px 16px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #374151;
+}
+.gsr-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #e2e8f0;
+  transition: background 0.12s ease;
+}
+.gsr-item:hover { background: rgba(99,102,241,0.12); }
+.gsr-item-icon { font-size: 15px; flex-shrink: 0; width: 22px; text-align: center; }
+.gsr-item-label { flex: 1; font-weight: 500; }
+.gsr-item-meta { font-size: 11px; color: #64748b; }
+.gsr-item-state { font-size: 10px; background: #1e2433; color: #94a3b8; padding: 1px 6px; border-radius: 4px; }
+
+/* ══════════════════════════════════════════════════
+   ORIGINAL STYLES (preserved)
+   ══════════════════════════════════════════════════ */
 
 /* ── Section card ───────────────────────────────── */
 .ui-section {
@@ -287,10 +570,3 @@ def churn_color(prob: float) -> str:
     return "red"
 
 
-def price_diff_color(diff_pct: float) -> str:
-    """Used for competitor price diff: positive = we're more expensive (bad)."""
-    if diff_pct <= -5:
-        return "green"   # we're cheaper
-    if diff_pct >= 5:
-        return "red"     # we're more expensive / undercut
-    return "grey"

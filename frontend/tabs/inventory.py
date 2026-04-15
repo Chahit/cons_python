@@ -35,7 +35,7 @@ def render(ai):
     if all(c in stats_df.columns for c in age_cols):
         age_sums = stats_df[age_cols].sum()
         age_df = pd.DataFrame({
-            "Bucket": ["0-30 Days", "31-60 Days", "61-90 Days", "90+ Days"],
+            "Bucket":          ["0-30 Days", "31-60 Days", "61-90 Days", "90+ Days"],
             "Stock Value (Rs)": [
                 age_sums["age_0_30"],
                 age_sums["age_31_60"],
@@ -43,24 +43,91 @@ def render(ai):
                 age_sums["age_90_plus"],
             ],
         })
+        bucket_colors = {
+            "0-30 Days":  "#10b981",
+            "31-60 Days": "#f59e0b",
+            "61-90 Days": "#f97316",
+            "90+ Days":   "#ef4444",
+        }
         fig = px.bar(
             age_df, x="Bucket", y="Stock Value (Rs)",
             color="Bucket",
-            color_discrete_map={
-                "0-30 Days": "#10b981",
-                "31-60 Days": "#f59e0b",
-                "61-90 Days": "#f97316",
-                "90+ Days": "#ef4444",
-            },
+            color_discrete_map=bucket_colors,
+            text="Stock Value (Rs)",
             title="Total Capital Locked by Age Bucket",
+        )
+        fig.update_traces(
+            texttemplate="Rs %{text:,.0f}",
+            textposition="outside",
         )
         fig.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            showlegend=False,
-            height=300,
+            showlegend=True,
+            legend_title_text="Time Period",
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+            ),
+            height=360,
+            xaxis=dict(
+                title="Age Bucket (Days Since Last Sale)",
+                tickfont=dict(size=13),
+            ),
+            yaxis=dict(title="Capital Locked (Rs)"),
+            uniformtext_minsize=10,
+            uniformtext_mode="hide",
         )
+        # Add a legend annotation explaining each bucket colour
+        for i, (bucket, color) in enumerate(bucket_colors.items()):
+            fig.add_annotation(
+                x=i, y=0, xref="x", yref="y",
+                text=f"<span style='color:{color}'>▇</span> {bucket}",
+                showarrow=False, yshift=-28,
+                font=dict(size=11),
+                xanchor="center",
+            )
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        # Fallback: derive age buckets from max_age_days in stats_df
+        if "max_age_days" in stats_df.columns and "total_stock_qty" in stats_df.columns:
+            s = stats_df.copy()
+            s["max_age_days"] = pd.to_numeric(s["max_age_days"], errors="coerce").fillna(0)
+            s["total_stock_qty"] = pd.to_numeric(s["total_stock_qty"], errors="coerce").fillna(0)
+            b0  = s[s["max_age_days"] <= 30]["total_stock_qty"].sum()
+            b31 = s[(s["max_age_days"] > 30) & (s["max_age_days"] <= 60)]["total_stock_qty"].sum()
+            b61 = s[(s["max_age_days"] > 60) & (s["max_age_days"] <= 90)]["total_stock_qty"].sum()
+            b90 = s[s["max_age_days"] > 90]["total_stock_qty"].sum()
+            age_df2 = pd.DataFrame({
+                "Bucket":      ["0-30 Days", "31-60 Days", "61-90 Days", "90+ Days"],
+                "Stock Units": [b0, b31, b61, b90],
+            })
+            bucket_colors2 = {
+                "0-30 Days":  "#10b981",
+                "31-60 Days": "#f59e0b",
+                "61-90 Days": "#f97316",
+                "90+ Days":   "#ef4444",
+            }
+            fig2 = px.bar(
+                age_df2, x="Bucket", y="Stock Units",
+                color="Bucket",
+                color_discrete_map=bucket_colors2,
+                text="Stock Units",
+                title="Stock Units by Age Bucket",
+            )
+            fig2.update_traces(texttemplate="%{text:,.0f} units", textposition="outside")
+            fig2.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                showlegend=True,
+                legend_title_text="Time Period",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                height=340,
+            )
+            st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown("---")
 
@@ -69,8 +136,75 @@ def render(ai):
         banner("✅ No critical dead stock found — nothing older than 60 days with more than 10 units.", "green")
         return
 
-    items = sorted(valid_items)
-    selected_item = st.selectbox("📦 Select Dead Stock Item to clear", items)
+    # ── Priority filter ──────────────────────────────────────────────────────
+    all_priorities = ["All", "Critical", "High", "Medium", "Low"]
+
+    # Build priority map from stats
+    priority_map: dict = {}
+    for item in valid_items:
+        details = ai.get_stock_details(item)
+        if details:
+            priority_map[item] = details.get("priority", "Low")
+        else:
+            priority_map[item] = "Low"
+
+    col_pf1, col_pf2 = st.columns([1, 3])
+    with col_pf1:
+        priority_filter = st.selectbox(
+            "🔴 Filter by Priority",
+            all_priorities,
+            index=0,
+        )
+
+    if priority_filter != "All":
+        filtered_items = sorted([it for it, pr in priority_map.items() if pr == priority_filter])
+    else:
+        filtered_items = sorted(valid_items)
+
+    if not filtered_items:
+        banner(f"No dead stock items found with priority: **{priority_filter}**", "orange")
+        return
+
+    # ── Category → Product Hierarchy Filter ─────────────────────────────────
+    # Build category → product mapping from df_dead
+    cat_product_map: dict = {}   # category → list of products
+    product_cat_map: dict = {}   # product  → category
+    if not df_dead.empty and "product_category" in df_dead.columns and "dead_stock_item" in df_dead.columns:
+        for _, row in df_dead[["dead_stock_item", "product_category"]].drop_duplicates().iterrows():
+            prod = row["dead_stock_item"]
+            cat  = str(row.get("product_category", "General") or "General")
+            product_cat_map[prod] = cat
+            cat_product_map.setdefault(cat, set()).add(prod)
+        # Convert sets to sorted lists
+        cat_product_map = {k: sorted(v) for k, v in cat_product_map.items()}
+
+    # Intersect with the priority-filtered list
+    all_cats = sorted(cat_product_map.keys()) if cat_product_map else []
+
+    with col_pf2:
+        if all_cats:
+            selected_category = st.selectbox(
+                "📂 Filter by Product Category",
+                ["All Categories"] + all_cats,
+                index=0,
+                key="inv_cat_filter",
+            )
+        else:
+            selected_category = "All Categories"
+            st.info("Category data not available — all items shown.")
+
+    # Determine which products to show in dropdown
+    if selected_category != "All Categories" and selected_category in cat_product_map:
+        # Only items in selected category that also passed priority filter
+        candidate_items = sorted(set(filtered_items) & set(cat_product_map[selected_category]))
+    else:
+        candidate_items = filtered_items
+
+    if not candidate_items:
+        banner(f"No items found for category **{selected_category}** with priority **{priority_filter}**.", "orange")
+        return
+
+    selected_item = st.selectbox("📦 Select Dead Stock Item to clear", candidate_items)
 
     # ── Stock KPIs ───────────────────────────────────────────────────────────
     stock_details = ai.get_stock_details(selected_item)
@@ -97,29 +231,34 @@ def render(ai):
         return
 
     # ── Build leads table ────────────────────────────────────────────────────
-    # df_dead already has real mobile_no from the DB view
     leads = df_dead[df_dead["dead_stock_item"] == selected_item].copy()
 
     # Ensure required columns with defaults
     for col, default in [
-        ("Audience Type", "Past Buyer"),
-        ("mobile_no", "—"),
+        ("Audience Type",          "Past Buyer"),
+        ("mobile_no",              "—"),
         ("buyer_past_purchase_qty", 0),
-        ("last_purchase_date", "Unknown"),
+        ("purchase_txn_count",     1),
+        ("last_purchase_date",     "Unknown"),
+        ("state_name",             "Unknown"),
     ]:
         if col not in leads.columns:
             leads[col] = default
         elif col == "Audience Type":
-            # Always stamp existing rows as Past Buyer
             leads[col] = "Past Buyer"
 
     # ── Pull contact numbers for lookalike partners from df_dead itself ──────
-    # Build a company → mobile lookup from ALL leads (past buyers across all items)
     contact_lookup: dict = {}
     if not df_dead.empty and "mobile_no" in df_dead.columns and "potential_buyer" in df_dead.columns:
         _cl = df_dead[["potential_buyer", "mobile_no"]].dropna(subset=["potential_buyer"])
         _cl = _cl[_cl["mobile_no"].notna() & (_cl["mobile_no"] != "")]
         contact_lookup = dict(zip(_cl["potential_buyer"], _cl["mobile_no"]))
+
+    # State lookup for lookalike partners
+    state_lookup: dict = {}
+    if not df_dead.empty and "state_name" in df_dead.columns and "potential_buyer" in df_dead.columns:
+        _sl = df_dead[["potential_buyer", "state_name"]].dropna(subset=["potential_buyer"])
+        state_lookup = dict(zip(_sl["potential_buyer"], _sl["state_name"]))
 
     # ── Find lookalike audiences from cluster data ───────────────────────────
     pf = getattr(ai, "df_partner_features", None)
@@ -129,21 +268,17 @@ def render(ai):
             pf_reset = pf_reset.rename(columns={"index": "company_name"})
 
         if "cluster_label" in pf_reset.columns:
-            # Merge cluster labels onto past buyers
             leads = leads.merge(
                 pf_reset[["company_name", "cluster_label"]],
                 left_on="potential_buyer",
                 right_on="company_name",
                 how="left",
             )
-            # Re-stamp Audience Type (merge may create duplicate / NaN)
             leads["Audience Type"] = "Past Buyer"
 
-            # Identify which clusters the buyers belong to
             buyer_clusters = leads["cluster_label"].dropna().unique()
 
             if len(buyer_clusters) > 0:
-                # Find partners from same clusters that have NOT bought this item yet
                 already_buying = set(leads["potential_buyer"].dropna().str.lower())
                 lookalike_pool = pf_reset[
                     pf_reset["cluster_label"].isin(buyer_clusters)
@@ -151,41 +286,40 @@ def render(ai):
                 ].copy()
 
                 if not lookalike_pool.empty:
-                    # Sort by revenue if available, take top 10
                     if "recent_90_revenue" in lookalike_pool.columns:
                         lookalike_pool = lookalike_pool.sort_values(
                             "recent_90_revenue", ascending=False
                         )
                     lookalike_pool = lookalike_pool.head(10)
 
-                    # Build per-row audience type using each partner's own cluster label
                     lookalike_rows = []
                     for _, row in lookalike_pool.iterrows():
-                        company      = row["company_name"]
-                        cluster_lbl  = str(row.get("cluster_label", "Unknown"))
-                        # Shorten cluster label to keep it readable (max 25 chars)
+                        company     = row["company_name"]
+                        cluster_lbl = str(row.get("cluster_label", "Unknown"))
                         if len(cluster_lbl) > 25:
                             cluster_lbl = cluster_lbl[:22] + "..."
-                        # Try to find real contact number from the global contact lookup
                         mobile = contact_lookup.get(company, "—")
+                        state  = state_lookup.get(company, "Unknown")
                         lookalike_rows.append({
-                            "potential_buyer":       company,
-                            "mobile_no":             mobile,
+                            "potential_buyer":        company,
+                            "mobile_no":              mobile,
                             "buyer_past_purchase_qty": 0,
-                            "last_purchase_date":    "Never",
-                            "Audience Type":         f"Lookalike ({cluster_lbl})",
-                            "cluster_label":         row.get("cluster_label", "Unknown"),
+                            "purchase_txn_count":     0,
+                            "last_purchase_date":     "Never",
+                            "state_name":             state,
+                            "Audience Type":          f"Lookalike ({cluster_lbl})",
+                            "cluster_label":          row.get("cluster_label", "Unknown"),
                         })
 
                     if lookalike_rows:
                         lookalike_df = pd.DataFrame(lookalike_rows)
                         leads = pd.concat([leads, lookalike_df], ignore_index=True)
 
-    # Final safety-net — "Audience Type" must always exist
+    # Final safety — stamp Audience Type
     if "Audience Type" not in leads.columns:
         leads["Audience Type"] = "Past Buyer"
 
-    # Clean up mobile_no display: replace empty/null with dash
+    # Clean up mobile_no display
     if "mobile_no" in leads.columns:
         leads["mobile_no"] = (
             leads["mobile_no"]
@@ -195,6 +329,43 @@ def render(ai):
             .replace({"": "—", "nan": "—", "None": "—"})
         )
 
+    # Clean up state_name
+    if "state_name" in leads.columns:
+        leads["state_name"] = (
+            leads["state_name"]
+            .fillna("Unknown")
+            .astype(str)
+            .str.strip()
+            .replace({"": "Unknown", "nan": "Unknown", "None": "Unknown"})
+        )
+
+    # Ensure numeric columns
+    leads["buyer_past_purchase_qty"] = pd.to_numeric(leads["buyer_past_purchase_qty"], errors="coerce").fillna(0).astype(int)
+    leads["purchase_txn_count"]      = pd.to_numeric(leads["purchase_txn_count"],      errors="coerce").fillna(1).astype(int)
+
+    # Compute avg_qty_per_txn for purchase pattern column
+    leads["avg_qty_per_txn"] = (
+        leads["buyer_past_purchase_qty"] / leads["purchase_txn_count"].replace(0, 1)
+    ).round(0).astype(int)
+
+    # ── Purchase Pattern label ────────────────────────────────────────────────
+    # "Bulk Buyer" → bought in few large orders   (avg_qty ≥ 100 or ≤ 2 txns for decent qty)
+    # "Frequent"   → bought many smaller orders
+    # "One-time"   → only 1 transaction
+    def _purchase_pattern(row):
+        qty  = int(row["buyer_past_purchase_qty"])
+        txns = int(row["purchase_txn_count"])
+        avg  = int(row["avg_qty_per_txn"])
+        if txns == 0 or qty == 0:
+            return "No History"
+        if txns == 1:
+            return f"One-time ({qty} units)"
+        if avg >= 100 or (txns <= 2 and qty >= 50):
+            return f"Bulk Buyer ({txns} orders, avg {avg}/order)"
+        return f"Frequent ({txns} orders, avg {avg}/order)"
+
+    leads["purchase_pattern"] = leads.apply(_purchase_pattern, axis=1)
+
     leads = leads.sort_values("buyer_past_purchase_qty", ascending=False)
 
     # ── Header + Export ──────────────────────────────────────────────────────
@@ -202,10 +373,11 @@ def render(ai):
     with col_hdr:
         section_header(f"Target Buyers — {selected_item} ({len(leads)} leads)")
     with col_dl:
-        _export_cols = [c for c in
-            ["potential_buyer", "mobile_no", "Audience Type",
-             "buyer_past_purchase_qty", "last_purchase_date"]
-            if c in leads.columns]
+        _export_cols = [c for c in [
+            "potential_buyer", "mobile_no", "state_name", "Audience Type",
+            "buyer_past_purchase_qty", "purchase_txn_count", "purchase_pattern",
+            "last_purchase_date",
+        ] if c in leads.columns]
         csv = leads[_export_cols].to_csv(index=False)
         st.download_button(
             "⬇️ Export Campaign List",
@@ -216,24 +388,48 @@ def render(ai):
         )
 
     # ── Display table ────────────────────────────────────────────────────────
-    _display_cols = [c for c in
-        ["potential_buyer", "mobile_no", "Audience Type",
-         "buyer_past_purchase_qty", "last_purchase_date"]
-        if c in leads.columns]
+    _display_cols = [c for c in [
+        "potential_buyer", "mobile_no", "state_name", "Audience Type",
+        "buyer_past_purchase_qty", "purchase_pattern", "last_purchase_date",
+    ] if c in leads.columns]
 
     st.dataframe(
         leads[_display_cols],
         column_config={
-            "potential_buyer": "Partner Name",
-            "mobile_no": "Contact Number",
-            "Audience Type": "Audience Strategy",
+            "potential_buyer":        "Partner Name",
+            "mobile_no":              "Contact Number",
+            "state_name":             "Area (State)",
+            "Audience Type":          "Audience Strategy",
             "buyer_past_purchase_qty": st.column_config.NumberColumn(
-                "Past Qty Bought", format="%d"
+                "Total Qty Bought", format="%d"
             ),
-            "last_purchase_date": "Last Purchase",
+            "purchase_pattern":       "Purchase Pattern",
+            "last_purchase_date":     "Last Purchase",
         },
         use_container_width=True,
         hide_index=True,
+    )
+
+    # ── Purchase Pattern legend ───────────────────────────────────────────────
+    st.markdown(
+        """
+        <div style="
+            background: rgba(245,158,11,0.08);
+            border-left: 3px solid #f59e0b;
+            border-radius: 6px;
+            padding: 10px 16px;
+            margin-top: 8px;
+            font-size: 0.85rem;
+            line-height: 1.7;
+        ">
+        <b>📦 Purchase Pattern Guide:</b><br/>
+        &bull; <b>Bulk Buyer</b> — bought large quantities in few orders. Target with bulk-discount offers.<br/>
+        &bull; <b>Frequent</b> — buys regularly in smaller lots. Target with replenishment campaigns.<br/>
+        &bull; <b>One-time</b> — bought once. Target with reactivation scripts.<br/>
+        &bull; <b>No History</b> — Lookalike partner, has never bought this item.
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     # ── Summary callout ───────────────────────────────────────────────────────
