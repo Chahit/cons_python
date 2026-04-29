@@ -33,6 +33,7 @@ from tabs import (
     partner_360,
     product_lifecycle,
     recommendation_hub,
+    sales_analyzer,
     sales_rep_performance,
 )
 
@@ -80,6 +81,7 @@ except Exception as e:
 _NAV_ITEMS = [
     ("🤝", "Partner 360 View",         "Deep-dive on any partner"),
     ("📊", "Revenue Pipeline Tracker", "Deal stages & pipeline health"),
+    ("📈", "Sales Analyzer",           "State → City → Partner purchase drill-down"),
     ("🛒", "Product Bundles (MBA)",    "Market basket analysis"),
     ("📦", "Inventory Liquidation",    "Ageing stock & clearance"),
     ("🔬", "Cluster Intelligence",     "Customer segmentation"),
@@ -909,6 +911,8 @@ if nav == "Partner 360 View":
     partner_360.render(ai)
 elif nav == "Revenue Pipeline Tracker":
     kanban_pipeline.render(ai)
+elif nav == "Sales Analyzer":
+    sales_analyzer.render(ai)
 elif nav == "Product Bundles (MBA)":
     market_basket.render(ai)
 elif nav == "Inventory Liquidation":

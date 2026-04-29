@@ -3,17 +3,134 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 import sys, os
+from datetime import date, timedelta
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from styles import apply_global_styles, section_header, page_caption, page_header, skeleton_loader
 
 
-# ── Period window map ─────────────────────────────────────────────────────────
-_PERIOD_LABELS = {
-    "Monthly":   "Last 1 Month",
-    "Quarterly": "Last 3 Months",
-    "Yearly":    "Last 12 Months",
-    "All Time":  "All Time (18 months)",
-}
+# ── Duration preset chips ─────────────────────────────────────────────────────
+_LC_PRESETS = [
+    {"label": "15 Days",  "days": 15},
+    {"label": "1 Month",  "days": 30},
+    {"label": "2 Months", "days": 60},
+    {"label": "3 Months", "days": 90},
+    {"label": "6 Months", "days": 180},
+    {"label": "1 Year",   "days": 365},
+]
+
+
+def _render_lifecycle_date_picker() -> tuple:
+    """
+    Calendar date-range picker for Product Lifecycle.
+    Returns (start_date, end_date, date_label, span_days).
+    """
+    st.markdown("""
+    <style>
+    div[data-testid="column"] .stButton>button {
+        border-radius: 20px !important; font-size: 12px !important;
+        padding: 4px 14px !important; border: 1px solid #374151 !important;
+        background: #1e2235 !important; color: #a78bfa !important;
+        transition: all 0.18s ease !important;
+    }
+    div[data-testid="column"] .stButton>button:hover {
+        background: #ec4899 !important; border-color: #ec4899 !important;
+        color: #fff !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    today = date.today()
+    if "lc_date_start" not in st.session_state:
+        st.session_state["lc_date_start"] = today - timedelta(days=365)
+    if "lc_date_end" not in st.session_state:
+        st.session_state["lc_date_end"] = today
+
+    # Header
+    st.markdown("""
+    <div style='background:linear-gradient(135deg,rgba(236,72,153,0.06),rgba(236,72,153,0.02));
+         border:1px solid rgba(236,72,153,0.25);border-radius:14px;
+         padding:14px 20px;margin-bottom:14px;'>
+      <div style='font-size:11px;font-weight:700;text-transform:uppercase;
+           letter-spacing:0.12em;color:#ec4899;margin-bottom:8px;'>
+        📅 Date Range — Lifecycle Analysis Window
+      </div>
+      <div style='font-size:12px;color:#64748b;'>
+        Select any date window — Growing / Declining stages recompute dynamically for that period
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Duration chips
+    st.markdown("<div style='font-size:11px;color:#64748b;margin-bottom:5px;font-weight:600;'>⚡ Quick Select</div>",
+                unsafe_allow_html=True)
+    preset_cols = st.columns(len(_LC_PRESETS))
+    for i, p in enumerate(_LC_PRESETS):
+        with preset_cols[i]:
+            if st.button(p["label"], key=f"lc_preset_{i}"):
+                st.session_state["lc_date_end"]   = today
+                st.session_state["lc_date_start"] = today - timedelta(days=p["days"])
+
+    # Month chips (last 6 months)
+    st.markdown("<div style='font-size:11px;color:#64748b;margin-top:8px;margin-bottom:4px;'>📆 Specific Month</div>",
+                unsafe_allow_html=True)
+    month_chips = []
+    _ref = today.replace(day=1)
+    for i in range(6):
+        m_start = _ref
+        m_end   = (_ref.replace(month=_ref.month % 12 + 1, day=1) - timedelta(days=1)
+                   if _ref.month < 12 else _ref.replace(month=12, day=31))
+        month_chips.append({"label": _ref.strftime("%b %Y"),
+                            "start": m_start, "end": min(m_end, today)})
+        _ref = (_ref - timedelta(days=1)).replace(day=1)
+    month_cols = st.columns(6)
+    for i, mc in enumerate(month_chips):
+        with month_cols[i]:
+            if st.button(mc["label"], key=f"lc_month_{i}"):
+                st.session_state["lc_date_start"] = mc["start"]
+                st.session_state["lc_date_end"]   = mc["end"]
+
+    # Manual pickers
+    st.markdown("<div style='font-size:11px;color:#64748b;margin-top:10px;margin-bottom:4px;'>🗓️ Custom Range</div>",
+                unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1.5, 1.5, 1])
+    with c1:
+        new_start = st.date_input("Start Date", value=st.session_state["lc_date_start"],
+                                  max_value=today, key="lc_cal_start")
+    with c2:
+        new_end = st.date_input("End Date", value=st.session_state["lc_date_end"],
+                                min_value=new_start, max_value=today, key="lc_cal_end")
+    with c3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if st.button("✅ Apply", key="lc_apply_range", use_container_width=True):
+            st.session_state["lc_date_start"] = new_start
+            st.session_state["lc_date_end"]   = new_end
+
+    sel_start  = st.session_state["lc_date_start"]
+    sel_end    = st.session_state["lc_date_end"]
+    if sel_end < sel_start:
+        sel_end = sel_start
+    span_days  = max((sel_end - sel_start).days, 1)
+    date_label = f"{sel_start.strftime('%d %b %Y')} → {sel_end.strftime('%d %b %Y')}  ({span_days}d)"
+
+    # Active badge
+    st.markdown(
+        f"""
+        <div style='background:rgba(15,26,43,0.9);border:1px solid #1e3a5f;border-radius:8px;
+             padding:8px 16px;margin-top:8px;display:flex;align-items:center;gap:10px;'>
+          <span style='font-size:15px;'>📅</span>
+          <span style='color:#f9a8d4;font-size:13px;font-weight:600;'>Analysis Window</span>
+          <span style='color:#475569;'>–</span>
+          <span style='color:#64748b;font-size:12px;'>
+            <b style='color:#7eb8f0;'>{sel_start.strftime('%d %b %Y')}</b>
+            &nbsp;→&nbsp;
+            <b style='color:#7eb8f0;'>{sel_end.strftime('%d %b %Y')}</b>
+          </span>
+          <span style='margin-left:auto;font-size:11px;color:#4b5563;'>{span_days} day window</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    return sel_start, sel_end, date_label, span_days
 
 
 def render(ai):
@@ -35,9 +152,12 @@ def render(ai):
         st.warning("No product lifecycle data available. Ensure transaction data is loaded.")
         return
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # GLOBAL FILTERS ROW  (period | category | product)
-    # ──────────────────────────────────────────────────────────────────────────
+    # ── Calendar date-range picker ────────────────────────────────────────────
+    sel_start, sel_end, date_label, span_days = _render_lifecycle_date_picker()
+    ts_start = pd.Timestamp(sel_start)
+    ts_end   = pd.Timestamp(sel_end)
+
+    # ── Category / Product filters ────────────────────────────────────────────
     st.markdown(
         """
         <div style="
@@ -53,43 +173,40 @@ def render(ai):
         """,
         unsafe_allow_html=True,
     )
-
-    gf1, gf2, gf3 = st.columns([1, 1, 2])
-    with gf1:
-        period_filter = st.selectbox(
-            "Time Period",
-            list(_PERIOD_LABELS.keys()),
-            index=3,   # default: All Time
-            key="global_period",
-            help="Restricts the revenue window used for all velocity calculations",
-        )
+    gf2, gf3 = st.columns([1, 2])
     with gf2:
         categories = ["All"] + (ai.get_product_categories() or [])
         selected_category = st.selectbox(
-            "Product Category",
-            categories,
-            key="global_category",
-            help="Filter by product category (mapped from master_product_category)",
+            "Product Category", categories, key="global_category",
+            help="Filter by product category",
         )
     with gf3:
         product_options = ["All"] + (
             ai.get_products_for_category(selected_category if selected_category != "All" else None) or []
         )
         selected_product = st.selectbox(
-            "Specific Product",
-            product_options,
-            key="global_product",
+            "Specific Product", product_options, key="global_product",
             help="Drill into a single SKU from master_products",
         )
-
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Normalize period for API
-    api_period = None if period_filter == "All Time" else period_filter
-    api_cat    = None if selected_category == "All" else selected_category
-    api_prod   = None if selected_product == "All" else selected_product
-    # individual-SKU mode when a specific product is chosen
+    api_cat  = None if selected_category == "All" else selected_category
+    api_prod = None if selected_product == "All" else selected_product
     use_individual = (api_prod is not None) or (api_cat is not None)
+
+    # ── Slice in-memory monthly data to the selected date window ──────────────
+    def _slice_monthly(df):
+        """Return only rows within [sel_start, sel_end]."""
+        if df is None or df.empty or "sale_month" not in df.columns:
+            return df
+        months = pd.to_datetime(df["sale_month"])
+        return df[(months >= ts_start) & (months <= ts_end)].copy()
+
+    df_pm_sliced  = _slice_monthly(getattr(ai, "df_product_monthly", None))
+    df_ind_sliced = _slice_monthly(getattr(ai, "df_individual_product_monthly", None))
+
+    # api_period no longer used — date range is now exact
+    api_period = None
 
     # ------------------------------------------------------------------
     # Summary metrics
@@ -180,38 +297,34 @@ def render(ai):
     with scf2:
         prod_search = st.text_input("Search Product / Group Name", "", key="vel_search")
 
-    # Fetch filtered velocity
-    filtered = ai.get_velocity_data(
-        stage_filter=stage_filter if stage_filter != "All" else None,
-        period=api_period,
-        category=api_cat,
-        product=api_prod,
-    )
+    # Recompute velocity on the date-sliced monthly data
+    if use_individual and df_ind_sliced is not None and not df_ind_sliced.empty:
+        ind_src = df_ind_sliced.copy()
+        if api_cat:
+            ind_src = ind_src[ind_src["product_category"] == api_cat]
+        if api_prod:
+            ind_src = ind_src[ind_src["product_name"] == api_prod]
+        filtered = ai._compute_velocity_for_df(ind_src) if not ind_src.empty else pd.DataFrame()
+    elif df_pm_sliced is not None and not df_pm_sliced.empty:
+        filtered = ai._compute_velocity_for_df(df_pm_sliced)
+    else:
+        filtered = pd.DataFrame()
+
+    if stage_filter != "All" and not filtered.empty:
+        filtered = filtered[filtered["lifecycle_stage"] == stage_filter]
     if prod_search and not filtered.empty:
         filtered = filtered[filtered["product_name"].str.contains(prod_search, case=False, na=False)]
 
-    # Period badge info
-    if api_period:
-        st.caption(f"ℹ️ Showing data for: **{_PERIOD_LABELS.get(period_filter, period_filter)}**"
-                   + (f" | Category: **{api_cat}**" if api_cat else "")
-                   + (f" | Product: **{api_prod}**" if api_prod else ""))
+    st.caption(f"ℹ️ Showing data for: **{date_label}**"
+               + (f" | Category: **{api_cat}**" if api_cat else "")
+               + (f" | Product: **{api_prod}**" if api_prod else ""))
 
     if filtered.empty:
         st.info("No products match the selected filters.")
     else:
-        # Attach sparklines from the relevant monthly source
-        if use_individual:
-            df_monthly_src = getattr(ai, "df_individual_product_monthly", None)
-        else:
-            df_monthly_src = getattr(ai, "df_product_monthly", None)
-
-        if df_monthly_src is not None and not df_monthly_src.empty:
-            # Apply period window to sparklines too
-            if api_period:
-                cutoff = _sparkline_cutoff(df_monthly_src, api_period)
-                df_monthly_src_spark = df_monthly_src[df_monthly_src["sale_month"] >= cutoff] if cutoff is not None else df_monthly_src
-            else:
-                df_monthly_src_spark = df_monthly_src
+        # Attach sparklines from the date-sliced source
+        df_monthly_src_spark = df_ind_sliced if use_individual else df_pm_sliced
+        if df_monthly_src_spark is not None and not df_monthly_src_spark.empty:
             sparklines = (
                 df_monthly_src_spark
                 .sort_values("sale_month")
@@ -280,14 +393,14 @@ def render(ai):
             key="trend_product",
         )
 
-        trend_data = ai.get_product_trend(
-            selected_product_drill,
-            period=api_period,
-            use_individual=use_individual,
-        )
+        # Use the date-sliced monthly data for drilldown chart
+        src_monthly = df_ind_sliced if use_individual else df_pm_sliced
+        if src_monthly is not None and not src_monthly.empty:
+            trend_data = src_monthly[src_monthly["product_name"] == selected_product_drill].sort_values("sale_month").copy()
+        else:
+            trend_data = pd.DataFrame()
 
         if not trend_data.empty:
-            # Pick info from the right velocity df
             src_df = drilldown_pool_df
             prod_info = src_df[src_df["product_name"] == selected_product_drill]
             if not prod_info.empty:
@@ -306,7 +419,7 @@ def render(ai):
             with tr1:
                 fig_rev = px.line(
                     trend_data, x="sale_month", y="monthly_revenue",
-                    title=f"{'Monthly' if api_period == 'Monthly' else 'Quarterly' if api_period == 'Quarterly' else 'Yearly' if api_period == 'Yearly' else '18-Month'} Revenue — {selected_product_drill}",
+                    title=f"Revenue — {selected_product_drill}  ({date_label})",
                     labels={"monthly_revenue": "Revenue (Rs)", "sale_month": "Month"},
                     markers=True,
                     color_discrete_sequence=["#ec4899"],
