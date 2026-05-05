@@ -84,7 +84,97 @@ class DataRepository:
                 self.engine,
             )
 
+    def fetch_available_snapshot_dates(self):
+        """
+        Returns all distinct snapshot dates available in apps.master.stockageing.
+        Each date represents a weekly Monday upload.
+        Returns a list of date objects sorted newest-first.
+        """
+        try:
+            df = pd.read_sql(
+                """
+                SELECT DISTINCT to_date
+                FROM "apps.master.stockageing"
+                WHERE (disable = false OR disable IS NULL)
+                ORDER BY to_date DESC
+                """,
+                self.engine,
+            )
+            if df.empty or "to_date" not in df.columns:
+                return []
+            return pd.to_datetime(df["to_date"]).dt.date.tolist()
+        except Exception as e:
+            print(f"[snapshot_dates] {e}")
+            return []
 
+    def fetch_ageing_stock_snapshot(self, snapshot_date):
+        """
+        Returns the dead-stock picture AS OF a specific snapshot_date (a past Monday).
+
+        Key differences from fetch_view_ageing_stock:
+          - Queries only rows where to_date = snapshot_date (that week's upload)
+          - Calculates max_age_days as (snapshot_date - last_sold_date), NOT CURRENT_DATE
+          - Only considers sales that occurred on or before snapshot_date
+        This gives a true time-travel view of what was dead stock on that Monday.
+        """
+        try:
+            return pd.read_sql(
+                """
+                WITH snapshot_per_branch AS (
+                    SELECT DISTINCT ON (s.product_id, s.area_id)
+                        p.id          AS product_id,
+                        p.product_name,
+                        (s.days_0_to_15_qty + s.days_16_to_30_qty +
+                         s.days_31_to_60_qty + s.days_61_to_90_qty +
+                         s.days_above_90_qty) AS branch_stock_qty,
+                        s.to_date     AS stock_snapshot_date
+                    FROM "apps.master.stockageing" s
+                    JOIN master_products p ON s.product_id = p.id
+                    WHERE (s.disable = false OR s.disable IS NULL)
+                      AND s.to_date = %(snap)s
+                    ORDER BY s.product_id, s.area_id, s.to_date DESC
+                ),
+                aggregated AS (
+                    SELECT
+                        product_id,
+                        product_name,
+                        SUM(branch_stock_qty)    AS total_stock_qty,
+                        MAX(stock_snapshot_date) AS stock_snapshot_date
+                    FROM snapshot_per_branch
+                    GROUP BY product_id, product_name
+                ),
+                last_sold AS (
+                    SELECT tp.product_id, MAX(t.date) AS last_sold_date
+                    FROM transactions_dsr_products tp
+                    JOIN transactions_dsr t ON tp.dsr_id = t.id
+                    WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+                      AND t.date <= %(snap)s
+                    GROUP BY tp.product_id
+                )
+                SELECT
+                    a.product_name,
+                    a.total_stock_qty,
+                    CASE
+                        WHEN s.last_sold_date IS NULL
+                            THEN GREATEST((%(snap)s::date - a.stock_snapshot_date), 0)
+                        ELSE
+                            GREATEST((%(snap)s::date - s.last_sold_date), 0)
+                    END AS max_age_days
+                FROM aggregated a
+                LEFT JOIN last_sold s ON a.product_id = s.product_id
+                WHERE a.total_stock_qty > 10
+                  AND (
+                        s.last_sold_date IS NULL
+                        OR (%(snap)s::date - s.last_sold_date) > 60
+                  )
+                ORDER BY max_age_days DESC
+                """,
+                self.engine,
+                params={"snap": str(snapshot_date)},
+            )
+        except Exception as e:
+            print(f"[fetch_ageing_stock_snapshot] {e}")
+            return pd.DataFrame(columns=["product_name", "total_stock_qty", "max_age_days"])
 
     def fetch_view_product_associations(self, limit=2000):
         df = pd.read_sql(

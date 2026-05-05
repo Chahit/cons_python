@@ -131,39 +131,11 @@ def render(ai):
 
     st.markdown("---")
 
-    # ── Date Range Filter ────────────────────────────────────────────────────
-    import datetime
-    today = datetime.date.today()
-    dr_col1, dr_col2 = st.columns([2, 1])
-    with dr_col1:
-        date_range = st.date_input(
-            "📅 Filter by Stock Ageing Period (select the window when stock stopped moving)",
-            value=(today - datetime.timedelta(days=365), today - datetime.timedelta(days=60)),
-            max_value=today,
-            key="inv_date_range",
-        )
-    with dr_col2:
-        st.markdown("")
-        st.caption(
-            "Stock is shown whose last sale falls within the selected window. "
-            "E.g. pick Jan–Mar 2025 to see stock that stopped moving in that period."
-        )
-
-    # Apply date range to stats_df via max_age_days
-    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-        from_date, to_date = date_range
-        min_age = max((today - to_date).days, 0)    # stock older than this
-        max_age = max((today - from_date).days, 0)  # stock newer than this
-        if max_age >= min_age:
-            stats_df = stats_df[
-                (pd.to_numeric(stats_df["max_age_days"], errors="coerce").fillna(0) >= min_age) &
-                (pd.to_numeric(stats_df["max_age_days"], errors="coerce").fillna(0) <= max_age)
-            ]
-
     valid_items = stats_df["product_name"].unique()
     if len(valid_items) == 0:
-        banner("✅ No dead stock found for the selected date range — try widening the window.", "orange")
+        banner("✅ No dead stock currently in inventory — warehouse is clean!", "green")
         return
+
 
     # ── Priority filter ──────────────────────────────────────────────────────
     all_priorities = ["All", "Critical", "High", "Medium", "Low"]
@@ -259,14 +231,20 @@ def render(ai):
     # ── Build leads table ────────────────────────────────────────────────────
     leads = df_dead[df_dead["dead_stock_item"] == selected_item].copy()
 
-    # Ensure required columns with defaults
+    # ── Ensure required columns with defaults ──────────────────────────────
+    # The DB view uses `historical_qty_bought` — alias it to the name the UI expects
+    if "buyer_past_purchase_qty" not in leads.columns:
+        if "historical_qty_bought" in leads.columns:
+            leads["buyer_past_purchase_qty"] = leads["historical_qty_bought"]
+        else:
+            leads["buyer_past_purchase_qty"] = 0
+
     for col, default in [
-        ("Audience Type",          "Past Buyer"),
-        ("mobile_no",              "—"),
-        ("buyer_past_purchase_qty", 0),
-        ("purchase_txn_count",     1),
-        ("last_purchase_date",     "Unknown"),
-        ("state_name",             "Unknown"),
+        ("Audience Type",      "Past Buyer"),
+        ("mobile_no",          "—"),
+        ("purchase_txn_count", 1),
+        ("last_purchase_date", "Unknown"),
+        ("state_name",         "Unknown"),
     ]:
         if col not in leads.columns:
             leads[col] = default
@@ -300,6 +278,8 @@ def render(ai):
                 right_on="company_name",
                 how="left",
             )
+            # Drop any duplicate columns created by the merge (e.g. company_name_x / company_name_y)
+            leads = leads.loc[:, ~leads.columns.duplicated()]
             leads["Audience Type"] = "Past Buyer"
 
             buyer_clusters = leads["cluster_label"].dropna().unique()
@@ -331,7 +311,7 @@ def render(ai):
                             "mobile_no":              mobile,
                             "buyer_past_purchase_qty": 0,
                             "purchase_txn_count":     0,
-                            "last_purchase_date":     "Never",
+                            "last_purchase_date":     pd.NaT,
                             "state_name":             state,
                             "Audience Type":          f"Lookalike ({cluster_lbl})",
                             "cluster_label":          row.get("cluster_label", "Unknown"),
@@ -390,7 +370,9 @@ def render(ai):
             return f"Bulk Buyer ({txns} orders, avg {avg}/order)"
         return f"Frequent ({txns} orders, avg {avg}/order)"
 
-    leads["purchase_pattern"] = leads.apply(_purchase_pattern, axis=1)
+    # Guard: remove any duplicate columns before apply (prevents DataFrame return)
+    leads = leads.loc[:, ~leads.columns.duplicated()]
+    leads["purchase_pattern"] = leads.apply(_purchase_pattern, axis=1, result_type="reduce")
 
     leads = leads.sort_values("buyer_past_purchase_qty", ascending=False)
 
