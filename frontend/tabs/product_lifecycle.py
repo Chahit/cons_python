@@ -8,15 +8,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from styles import apply_global_styles, section_header, page_caption, page_header, skeleton_loader
 
 
-# ── Duration preset chips ─────────────────────────────────────────────────────
-_LC_PRESETS = [
-    {"label": "15 Days",  "days": 15},
-    {"label": "1 Month",  "days": 30},
-    {"label": "2 Months", "days": 60},
-    {"label": "3 Months", "days": 90},
-    {"label": "6 Months", "days": 180},
-    {"label": "1 Year",   "days": 365},
-]
+
 
 
 def _render_lifecycle_date_picker() -> tuple:
@@ -45,53 +37,6 @@ def _render_lifecycle_date_picker() -> tuple:
     if "lc_date_end" not in st.session_state:
         st.session_state["lc_date_end"] = today
 
-    # Header
-    st.markdown("""
-    <div style='background:linear-gradient(135deg,rgba(236,72,153,0.06),rgba(236,72,153,0.02));
-         border:1px solid rgba(236,72,153,0.25);border-radius:14px;
-         padding:14px 20px;margin-bottom:14px;'>
-      <div style='font-size:11px;font-weight:700;text-transform:uppercase;
-           letter-spacing:0.12em;color:#ec4899;margin-bottom:8px;'>
-        📅 Date Range — Lifecycle Analysis Window
-      </div>
-      <div style='font-size:12px;color:#64748b;'>
-        Select any date window — Growing / Declining stages recompute dynamically for that period
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Duration chips
-    st.markdown("<div style='font-size:11px;color:#64748b;margin-bottom:5px;font-weight:600;'>⚡ Quick Select</div>",
-                unsafe_allow_html=True)
-    preset_cols = st.columns(len(_LC_PRESETS))
-    for i, p in enumerate(_LC_PRESETS):
-        with preset_cols[i]:
-            if st.button(p["label"], key=f"lc_preset_{i}"):
-                st.session_state["lc_date_end"]   = today
-                st.session_state["lc_date_start"] = today - timedelta(days=p["days"])
-
-    # Month chips (last 6 months)
-    st.markdown("<div style='font-size:11px;color:#64748b;margin-top:8px;margin-bottom:4px;'>📆 Specific Month</div>",
-                unsafe_allow_html=True)
-    month_chips = []
-    _ref = today.replace(day=1)
-    for i in range(6):
-        m_start = _ref
-        m_end   = (_ref.replace(month=_ref.month % 12 + 1, day=1) - timedelta(days=1)
-                   if _ref.month < 12 else _ref.replace(month=12, day=31))
-        month_chips.append({"label": _ref.strftime("%b %Y"),
-                            "start": m_start, "end": min(m_end, today)})
-        _ref = (_ref - timedelta(days=1)).replace(day=1)
-    month_cols = st.columns(6)
-    for i, mc in enumerate(month_chips):
-        with month_cols[i]:
-            if st.button(mc["label"], key=f"lc_month_{i}"):
-                st.session_state["lc_date_start"] = mc["start"]
-                st.session_state["lc_date_end"]   = mc["end"]
-
-    # Manual pickers
-    st.markdown("<div style='font-size:11px;color:#64748b;margin-top:10px;margin-bottom:4px;'>🗓️ Custom Range</div>",
-                unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1.5, 1.5, 1])
     with c1:
         new_start = st.date_input("Start Date", value=st.session_state["lc_date_start"],
@@ -111,25 +56,6 @@ def _render_lifecycle_date_picker() -> tuple:
         sel_end = sel_start
     span_days  = max((sel_end - sel_start).days, 1)
     date_label = f"{sel_start.strftime('%d %b %Y')} → {sel_end.strftime('%d %b %Y')}  ({span_days}d)"
-
-    # Active badge
-    st.markdown(
-        f"""
-        <div style='background:rgba(15,26,43,0.9);border:1px solid #1e3a5f;border-radius:8px;
-             padding:8px 16px;margin-top:8px;display:flex;align-items:center;gap:10px;'>
-          <span style='font-size:15px;'>📅</span>
-          <span style='color:#f9a8d4;font-size:13px;font-weight:600;'>Analysis Window</span>
-          <span style='color:#475569;'>–</span>
-          <span style='color:#64748b;font-size:12px;'>
-            <b style='color:#7eb8f0;'>{sel_start.strftime('%d %b %Y')}</b>
-            &nbsp;→&nbsp;
-            <b style='color:#7eb8f0;'>{sel_end.strftime('%d %b %Y')}</b>
-          </span>
-          <span style='margin-left:auto;font-size:11px;color:#4b5563;'>{span_days} day window</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
     return sel_start, sel_end, date_label, span_days
 
 
@@ -158,21 +84,6 @@ def render(ai):
     ts_end   = pd.Timestamp(sel_end)
 
     # ── Category / Product filters ────────────────────────────────────────────
-    st.markdown(
-        """
-        <div style="
-            background:rgba(236,72,153,0.07);
-            border:1px solid rgba(236,72,153,0.25);
-            border-radius:10px;
-            padding:14px 18px 8px 18px;
-            margin-bottom:18px;
-        ">
-        <p style="color:#ec4899;font-weight:700;font-size:0.95rem;margin-bottom:10px;">
-            🎛️ Global Filters — applied to Velocity Scorecard &amp; Trend Drilldown
-        </p>
-        """,
-        unsafe_allow_html=True,
-    )
     gf2, gf3 = st.columns([1, 2])
     with gf2:
         categories = ["All"] + (ai.get_product_categories() or [])
@@ -188,7 +99,6 @@ def render(ai):
             "Specific Product", product_options, key="global_product",
             help="Drill into a single SKU from master_products",
         )
-    st.markdown("</div>", unsafe_allow_html=True)
 
     api_cat  = None if selected_category == "All" else selected_category
     api_prod = None if selected_product == "All" else selected_product
@@ -530,58 +440,7 @@ def render(ai):
             hide_index=True,
         )
 
-        if len(eol_df) > 3:
-            fig_eol = px.scatter(
-                eol_df, x="est_months_to_zero", y="eol_risk_score",
-                size="current_revenue", color="urgency",
-                color_discrete_map={
-                    "Critical": "#e74c3c", "High": "#e67e22",
-                    "Medium": "#f1c40f", "Low": "#27ae60",
-                },
-                hover_name="product_name",
-                title="EOL Risk vs. Estimated Time to Zero Revenue",
-                labels={
-                    "est_months_to_zero": "Estimated Months to Zero Revenue",
-                    "eol_risk_score": "EOL Risk Score",
-                },
-            )
-            fig_eol.update_layout(height=400)
-            st.plotly_chart(fig_eol, use_container_width=True)
 
-        # ──────────────────────────────────────────────────────
-        # Clearance Action Generator
-        # ──────────────────────────────────────────────────────
-        st.markdown("---")
-        st.subheader("🏷️ Clearance Action Generator")
-        st.caption("Instantly generate a discount bundle or liquidation deal for flagged products.")
-
-        critical_products = eol_df[eol_df["urgency"].isin(["Critical", "High"])]["product_name"].tolist() if "urgency" in eol_df.columns else []
-        if critical_products:
-            chosen_eol = st.selectbox("Select Product to Act On", critical_products, key="eol_action_product")
-            eol_row = eol_df[eol_df["product_name"] == chosen_eol].iloc[0]
-            curr_rev = float(eol_row.get("current_revenue", 0) or 0)
-            months_left = float(eol_row.get("est_months_to_zero", 0) or 0)
-
-            act1, act2, act3 = st.columns(3)
-            with act1:
-                discount_pct = st.slider("Discount %", 5, 50, 20, 5, key="eol_discount")
-                clearance_price = curr_rev * (1 - discount_pct / 100)
-                st.metric("Estimated Clearance Revenue/Mo", f"₹{clearance_price:,.0f}")
-            with act2:
-                bundle_with = st.text_input("Bundle with Product (optional)", "", key="eol_bundle")
-            with act3:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("Generate Offer Script", key="eol_gen_script"):
-                    bundle_line = f" We're bundling it with **{bundle_with}** for added value." if bundle_with else ""
-                    script = (
-                        f"**Flash Deal — Limited Stock Alert!**\n\n"
-                        f"Dear Partner, we have a special **{discount_pct}% discount** on **{chosen_eol}** "
-                        f"(only ~{months_left:.0f} months of active inventory left)!{bundle_line}\n\n"
-                        f"Act fast — this offer expires when stock runs out. Contact your sales rep today!"
-                    )
-                    st.info(script)
-        else:
-            st.success("No Critical/High urgency products requiring immediate clearance action.")
 
 
 # ── Helper: sparkline period cutoff ──────────────────────────────────────────

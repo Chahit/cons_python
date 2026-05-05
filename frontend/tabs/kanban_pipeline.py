@@ -28,12 +28,49 @@ _PERIOD_CONFIG = {
 }
 
 # ── Kanban swimlane configuration ──────────────────────────────────────────
+# Industry-standard partner tiers (Salesforce/Gartner alignment)
+# Each lane now includes a playbook: the recommended sales action for that tier.
 LANES = [
-    {"key": "champion",  "label": "🏆 Champion",  "segments": {"Champion"},  "color": "#22c55e"},
-    {"key": "emerging",  "label": "🚀 Emerging",  "segments": {"Emerging"},  "color": "#06b6d4"},
-    {"key": "healthy",   "label": "✅ Healthy",   "segments": {"Healthy"},   "color": "#3b82f6"},
-    {"key": "at_risk",   "label": "⚠️ At Risk",   "segments": {"At Risk"},   "color": "#f59e0b"},
-    {"key": "critical",  "label": "🔴 Critical",  "segments": {"Critical"},  "color": "#ef4444"},
+    {
+        "key": "champion",
+        "label": "🏆 Champion",
+        "segments": {"Champion"},
+        "color": "#22c55e",
+        "playbook": "Schedule QBR · Offer loyalty pricing · Co-marketing opportunities",
+        "tier": "Gold",
+    },
+    {
+        "key": "emerging",
+        "label": "🚀 Emerging",
+        "segments": {"Emerging"},
+        "color": "#06b6d4",
+        "playbook": "Onboard new categories · Assign growth rep · Bundle incentives",
+        "tier": "Silver",
+    },
+    {
+        "key": "healthy",
+        "label": "✅ Healthy",
+        "segments": {"Healthy"},
+        "color": "#3b82f6",
+        "playbook": "Maintain cadence · Upsell adjacent categories · Regular check-ins",
+        "tier": "Bronze",
+    },
+    {
+        "key": "at_risk",
+        "label": "⚠️ At Risk",
+        "segments": {"At Risk"},
+        "color": "#f59e0b",
+        "playbook": "Retention call within 7 days · Diagnose root cause · Win-back offer",
+        "tier": "Watch",
+    },
+    {
+        "key": "critical",
+        "label": "🔴 Critical",
+        "segments": {"Critical"},
+        "color": "#ef4444",
+        "playbook": "Immediate escalation · Executive outreach · Last-resort pricing",
+        "tier": "Alert",
+    },
 ]
 
 def _fmt_inr(val):
@@ -81,8 +118,10 @@ def _primary_risk_signal(row):
 
 # ── Cache the heavy data slice so repeated renders are fast ────────────────
 @st.cache_data(ttl=300, show_spinner=False)
-def _build_kanban_df(_pf_df):
-    """Extract and pre-process only the columns needed by the Kanban board."""
+def _build_kanban_df(_pf_df, _df_hash: str = ""):
+    """Extract and pre-process only the columns needed by the Kanban board.
+    _df_hash is a scalar derived from the index so @st.cache_data keys correctly.
+    """
     needed = [
         "company_name", "state", "health_segment", "health_status",
         "health_score", "growth_rate_90d",
@@ -207,97 +246,85 @@ def _recompute_segments_for_period(
     th = _PERIOD_THRESHOLDS.get(period, _PERIOD_THRESHOLDS["Quarterly"])
     df = df.copy()
 
-    scaled_rev = df["recent_90_revenue"] * rev_mult
-    churn_p    = pd.to_numeric(df.get("churn_probability",  pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
-    drop_pct   = pd.to_numeric(df.get("revenue_drop_pct",  pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
-    prev_rev   = pd.to_numeric(df.get("prev_90_revenue",   pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0) * rev_mult
-    score      = pd.to_numeric(df.get("health_score",      pd.Series(0.5, index=df.index)), errors="coerce").fillna(0.5)
-    growth     = pd.to_numeric(df.get("growth_rate_90d",   pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
-    recency    = pd.to_numeric(df.get("recency_days",      pd.Series(0,   index=df.index)), errors="coerce").fillna(0)
-    lifetime   = pd.to_numeric(df.get("lifetime_revenue",  pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    scaled_rev  = df["recent_90_revenue"] * rev_mult
+    churn_p     = pd.to_numeric(df.get("churn_probability",  pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    drop_pct    = pd.to_numeric(df.get("revenue_drop_pct",  pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    prev_rev    = pd.to_numeric(df.get("prev_90_revenue",   pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0) * rev_mult
+    score       = pd.to_numeric(df.get("health_score",      pd.Series(0.5, index=df.index)), errors="coerce").fillna(0.5)
+    growth      = pd.to_numeric(df.get("growth_rate_90d",   pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    recency     = pd.to_numeric(df.get("recency_days",      pd.Series(0,   index=df.index)), errors="coerce").fillna(0)
+    lifetime    = pd.to_numeric(df.get("lifetime_revenue",  pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    recent_txns = pd.to_numeric(df.get("recent_txns",       pd.Series(0,   index=df.index)), errors="coerce").fillna(0)
 
-    # Revenue-tier cutoff (period-specific percentile of scaled revenue)
-    rev_tier_pct = th["rev_tier_pct"]
-    rev_tier_q   = float(scaled_rev.quantile(rev_tier_pct)) if len(scaled_rev) > 0 else 0.0
+    rev_tier_pct     = th["rev_tier_pct"]
+    rev_tier_q       = float(scaled_rev.quantile(rev_tier_pct)) if len(scaled_rev) > 0 else 0.0
+    ltv_p90          = float(lifetime.quantile(0.90)) if len(lifetime) > 0 else 0.0
+    abs_floor_scaled = th["abs_floor_yr"] * rev_mult / 4.0
+    recency_ok       = recency <= 120
 
-    # Lifetime value p90 for the shield
-    ltv_p90 = float(lifetime.quantile(0.90)) if len(lifetime) > 0 else 0.0
+    segments        = []
+    gone_quiet_list = []
 
-    # Absolute revenue floor (annual equivalent → scaled to period window)
-    abs_floor_scaled = th["abs_floor_yr"] * rev_mult / 4.0   # /4 → quarterly base
-
-    recency_ok  = recency <= 120
-    dg_thresh   = th["dg_thresh"]
-
-    segments = []
     for i in df.index:
-        sr   = float(scaled_rev.get(i, 0)  or 0)
-        pr   = float(prev_rev.get(i, 0)    or 0)
-        cp   = float(churn_p.get(i, 0)     or 0)
-        dp   = float(drop_pct.get(i, 0)    or 0)
-        hs   = float(score.get(i, 0.5)     or 0.5)
-        gr   = float(growth.get(i, 0)      or 0)
+        sr   = float(scaled_rev.get(i, 0)   or 0)
+        pr   = float(prev_rev.get(i, 0)     or 0)
+        cp   = float(churn_p.get(i, 0)      or 0)
+        dp   = float(drop_pct.get(i, 0)     or 0)
+        hs   = float(score.get(i, 0.5)      or 0.5)
+        gr   = float(growth.get(i, 0)       or 0)
         rok  = bool(recency_ok.get(i, True))
-        ltv  = float(lifetime.get(i, 0)    or 0)
+        ltv  = float(lifetime.get(i, 0)     or 0)
+        txns = float(recent_txns.get(i, 0)  or 0)
 
-        is_top10_ltv  = ltv >= ltv_p90 and ltv_p90 > 0
-        is_abs_floor  = sr  >= abs_floor_scaled and abs_floor_scaled > 0
+        is_top10_ltv = ltv >= ltv_p90 and ltv_p90 > 0
+        is_abs_floor = sr  >= abs_floor_scaled and abs_floor_scaled > 0
 
-        # ❶ Hard: revenue stopped after prior activity
+        # Industry Silver tier: growth velocity gate.
+        # Requires positive QoQ (>=5%) AND >= 2 purchases to prevent
+        # single-order false positives. Stable + highly engaged also qualifies.
+        growth_velocity_ok = (
+            sr > 0 and cp < 0.55 and hs < th["score_champ"] and rok
+            and (
+                (gr >= 0.05 and txns >= 2)
+                or (gr >= -0.05 and txns >= 3 and cp < 0.30)
+            )
+        )
+
+        # Gone Quiet: had prior revenue but zero in current window
+        # (boundary edge case — not confirmed churn yet, shown as UI badge)
+        gone_quiet = sr <= 0 and pr > 0
+        gone_quiet_list.append(gone_quiet)
+
+        # ❛ Revenue stopped after prior activity -> confirmed churn
         if sr <= 0 and pr > 0:
             segments.append("Critical")
-
-        # ❷ Lifetime Revenue Shield — still buying, not in freefall
+        # ❜ Lifetime Revenue Shield
         elif is_top10_ltv and sr > 0 and cp < 0.50 and dp < 30.0:
             segments.append("Champion")
-
-        # ❸ Score path: strong composite + not churning + recent
+        # ❝ Score path
         elif hs >= th["score_champ"] and dp < th["drop_champ"] and cp < th["churn_champ"] and rok:
             segments.append("Champion")
-
-        # ❹ Revenue-tier Champion (top % recent revenue earners)
-        elif (
-            sr >= rev_tier_q and sr > 0
-            and cp < th["rev_tier_churn"]
-            and dp < th["rev_tier_drop"]
-            and hs >= th["rev_tier_score"]
-            and rok
-        ):
+        # ❞ Revenue-tier Champion
+        elif sr >= rev_tier_q and sr > 0 and cp < th["rev_tier_churn"] and dp < th["rev_tier_drop"] and hs >= th["rev_tier_score"] and rok:
             segments.append("Champion")
-
-        # ❺ Absolute revenue floor — give softer Champion cap
-        elif (
-            is_abs_floor and sr > 0
-            and cp < th["abs_churn_cap"]
-            and dp < th["abs_drop_cap"]
-            and rok
-        ):
+        # ❟ Absolute revenue floor
+        elif is_abs_floor and sr > 0 and cp < th["abs_churn_cap"] and dp < th["abs_drop_cap"] and rok:
             segments.append("Champion")
-
-        # ❻ Emerging: growth signal + smaller base + low churn
-        elif (
-            sr > 0
-            and gr >= -0.05
-            and (gr >= 0.05 or cp < 0.30)
-            and cp < 0.55
-            and hs < th["score_champ"]
-            and rok
-        ):
+        # ❠ Emerging: growth velocity gate (industry Silver tier)
+        elif growth_velocity_ok:
             segments.append("Emerging")
-
-        # ❼ Healthy: solid mid-tier, no severe drop, recent
+        # ❡ Healthy
         elif hs >= th["score_healthy"] and dp < th["drop_healthy"] and rok:
             segments.append("Healthy")
-
-        # ❽ At Risk: middling or degrowth
+        # ❢ At Risk
         elif hs >= 0.30:
             segments.append("At Risk")
-
-        # ❾ Critical
+        # ❣ Critical
         else:
             segments.append("Critical")
 
     df["health_segment"] = segments
+    df["_gone_quiet"]    = gone_quiet_list
     return df
 
 
@@ -332,6 +359,222 @@ def _fetch_custom_period_revenue(_engine, start_dt: date, end_dt: date) -> pd.Da
         return df
     except Exception:
         return pd.DataFrame()
+
+
+
+# ── Temporal segment migration helpers ────────────────────────────────────
+
+def _derive_change_reason(row) -> str:
+    """
+    Return a human-readable, deterministic explanation for why a partner
+    changed health segment between two periods.
+    Priority: revenue stop > recency gap > revenue drop > churn spike > growth > score.
+    """
+    sr       = float(row.get("period_rev_curr", 0) or 0)
+    pr       = float(row.get("period_rev_prev", 0) or 0)
+    recency  = float(row.get("recency_days",    9999) or 9999)
+    drop     = float(row.get("revenue_drop_pct",   0) or 0)
+    churn    = float(row.get("churn_probability",   0) or 0)
+    gr       = float(row.get("growth_rate_90d",     0) or 0)
+    hs_curr  = float(row.get("health_score",       0.5) or 0.5)
+    seg_prev = str(row.get("segment_prev", ""))
+    seg_curr = str(row.get("segment_curr", ""))
+
+    _tier = ["Critical", "At Risk", "Healthy", "Emerging", "Champion"]
+    try:
+        improved = _tier.index(seg_curr) > _tier.index(seg_prev)
+    except ValueError:
+        improved = False
+
+    if sr <= 0 and pr > 0:
+        return "Revenue dropped to Rs 0 — no purchases in current period (churned)"
+    if recency > 120:
+        return f"No purchase in {int(recency)}d — account went quiet"
+    if drop > 40:
+        return f"Revenue fell {drop:.0f}% vs prior period"
+    if churn > 0.70:
+        return f"Churn risk spiked to {churn:.0%} (AI flag — high urgency)"
+    if improved and gr >= 0.20:
+        return f"Revenue grew {gr*100:.0f}% QoQ — rising star signal"
+    if improved and gr >= 0.05:
+        return f"Consistent growth ({gr*100:.0f}% QoQ) lifted score"
+    if drop > 20:
+        return f"Revenue fell {drop:.0f}% — degrowth threshold crossed"
+    if churn > 0.45:
+        return f"Churn probability rose to {churn:.0%}"
+    if improved:
+        return f"Health score improved to {hs_curr:.2f} — tier boundary crossed"
+    return f"Health score declined to {hs_curr:.2f} — tier boundary crossed"
+
+
+def _compute_prior_window_segments(
+    base_df: pd.DataFrame,
+    engine,
+    sel_start: date,
+    span_days: int,
+    rev_mult: float,
+) -> pd.DataFrame:
+    """
+    Fetch revenue for the prior equivalent window (same span, just before sel_start)
+    and recompute health segments. Returns a DataFrame with columns:
+        company_name, segment_prior, period_rev_prior
+    """
+    prior_end   = sel_start - timedelta(days=1)
+    prior_start = sel_start - timedelta(days=span_days)
+
+    # Use session_state cache to avoid repeat DB hits
+    _key = f"rev_{prior_start}_{prior_end}"
+    if _key in st.session_state:
+        prior_rev_df = st.session_state[_key]
+    else:
+        prior_rev_df = _fetch_custom_period_revenue(engine, prior_start, prior_end)
+        st.session_state[_key] = prior_rev_df
+
+    df_prior = base_df.copy()
+    if not prior_rev_df.empty and "company_name" in prior_rev_df.columns:
+        df_prior = df_prior.merge(
+            prior_rev_df[["company_name", "period_revenue"]],
+            on="company_name", how="left",
+        )
+        df_prior["period_revenue"] = pd.to_numeric(df_prior["period_revenue"], errors="coerce").fillna(0.0)
+        df_prior["recent_90_revenue"] = df_prior["period_revenue"]
+        df_prior = df_prior.drop(columns=["period_revenue"], errors="ignore")
+    else:
+        df_prior["recent_90_revenue"] = df_prior["recent_90_revenue"] * (span_days / 90.0)
+
+    df_prior = _recompute_segments_for_period(df_prior, rev_mult, period="Quarterly")
+    return df_prior[["company_name", "health_segment", "recent_90_revenue"]].rename(
+        columns={"health_segment": "segment_prior", "recent_90_revenue": "period_rev_prior"}
+    )
+
+
+def _render_segment_migration(
+    df_curr: pd.DataFrame,
+    base_df: pd.DataFrame,
+    engine,
+    sel_start: date,
+    sel_end: date,
+    span_days: int,
+    rev_mult: float,
+):
+    """
+    Render the Before → After segment migration panel:
+    1. Transition matrix (heat-map table)
+    2. Expandable movers list with human-readable change reasons
+    """
+    SEG_ORDER  = ["Champion", "Emerging", "Healthy", "At Risk", "Critical"]
+    SEG_COLORS = {
+        "Champion": "#22c55e", "Emerging": "#06b6d4", "Healthy": "#3b82f6",
+        "At Risk":  "#f59e0b", "Critical": "#ef4444",
+    }
+
+    prior_start = sel_start - timedelta(days=span_days)
+    prior_end   = sel_start - timedelta(days=1)
+
+    st.markdown(
+        f"""
+        <div style='background:#0f1117;border:1px solid #1e3a5f;border-radius:12px;
+             padding:14px 20px;margin-bottom:12px;'>
+          <div style='font-size:13px;font-weight:800;color:#93c5fd;margin-bottom:4px;'>
+            ⏳ Segment Migration Analysis
+          </div>
+          <div style='font-size:12px;color:#64748b;'>
+            Prior window: <b style='color:#7eb8f0;'>{prior_start.strftime('%d %b %Y')}
+            &rarr; {prior_end.strftime('%d %b %Y')}</b>
+            &nbsp;→&nbsp;
+            Current: <b style='color:#7eb8f0;'>{sel_start.strftime('%d %b %Y')}
+            &rarr; {sel_end.strftime('%d %b %Y')}</b>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.spinner("Computing prior-period segments..."):
+        df_prior = _compute_prior_window_segments(base_df, engine, sel_start, span_days, rev_mult)
+
+    # Merge current + prior
+    curr_slim = df_curr[["company_name", "health_segment", "recent_90_revenue",
+                          "churn_probability", "revenue_drop_pct",
+                          "growth_rate_90d", "health_score", "recency_days"]].copy()
+    curr_slim = curr_slim.rename(columns={"health_segment": "segment_curr",
+                                          "recent_90_revenue": "period_rev_curr"})
+    merged = curr_slim.merge(df_prior, on="company_name", how="inner")
+    if merged.empty:
+        st.info("No common partners between the two windows.")
+        return
+
+    changers = merged[merged["segment_curr"] != merged["segment_prev"]].copy() if "segment_prev" in merged.columns else merged[merged["segment_curr"] != merged["segment_prior"]].copy()
+    # Normalise column name
+    if "segment_prior" in merged.columns and "segment_prev" not in merged.columns:
+        merged = merged.rename(columns={"segment_prior": "segment_prev"})
+        changers = changers.rename(columns={"segment_prior": "segment_prev"}) if "segment_prior" in changers.columns else changers
+
+    # ── Transition matrix ─────────────────────────────────────────────────
+    st.markdown("<div style='font-size:12px;font-weight:700;color:#6366f1;margin-bottom:6px;'>Transition Matrix (rows = Prior, cols = Current)</div>", unsafe_allow_html=True)
+    matrix_data = {}
+    for seg_p in SEG_ORDER:
+        row_d = {}
+        for seg_c in SEG_ORDER:
+            mask = (merged.get("segment_prev", merged.get("segment_prior", pd.Series(dtype=str))) == seg_p) & (merged["segment_curr"] == seg_c)
+            row_d[seg_c] = int(mask.sum())
+        matrix_data[seg_p] = row_d
+    matrix_df = pd.DataFrame(matrix_data).T.reindex(index=SEG_ORDER, columns=SEG_ORDER).fillna(0).astype(int)
+
+    # Style the matrix as HTML
+    header_cells = "".join(
+        f"<th style='padding:6px 10px;font-size:11px;color:{SEG_COLORS.get(s,'#aaa')};text-align:center;'>{s}</th>"
+        for s in SEG_ORDER
+    )
+    rows_html = ""
+    for seg_p in SEG_ORDER:
+        cells = ""
+        for seg_c in SEG_ORDER:
+            val = int(matrix_df.loc[seg_p, seg_c]) if seg_p in matrix_df.index else 0
+            bg  = "#1a2a1a" if seg_p == seg_c and val > 0 else ("#2a1a1a" if val > 0 else "#0d0f1a")
+            col = "#22c55e" if seg_p == seg_c and val > 0 else ("#fca5a5" if val > 0 else "#374151")
+            cells += f"<td style='padding:6px 10px;text-align:center;background:{bg};color:{col};font-weight:{'700' if val > 0 else '400'};font-size:12px;border:1px solid #1e2235;'>{val}</td>"
+        c = SEG_COLORS.get(seg_p, "#aaa")
+        rows_html += f"<tr><td style='padding:6px 10px;font-size:11px;color:{c};font-weight:700;border:1px solid #1e2235;'>{seg_p}</td>{cells}</tr>"
+
+    st.markdown(
+        f"<table style='border-collapse:collapse;width:100%;margin-bottom:14px;'>"
+        f"<thead><tr><th style='padding:6px 10px;font-size:11px;color:#64748b;'>Prior \ Current</th>{header_cells}</tr></thead>"
+        f"<tbody>{rows_html}</tbody></table>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Movers list ───────────────────────────────────────────────────────
+    seg_prev_col = "segment_prev" if "segment_prev" in merged.columns else "segment_prior"
+    changers_clean = merged[merged["segment_curr"] != merged[seg_prev_col]].copy()
+    n_movers = len(changers_clean)
+    if n_movers == 0:
+        st.success("No segment changes between the two periods. Pipeline is stable.")
+        return
+
+    with st.expander(f"🔀 {n_movers} Partner{'s' if n_movers > 1 else ''} Changed Segment — Click to Review", expanded=False):
+        for _, row in changers_clean.iterrows():
+            sp = str(row.get(seg_prev_col, "?"))
+            sc = str(row.get("segment_curr", "?"))
+            sp_c = SEG_COLORS.get(sp, "#aaa")
+            sc_c = SEG_COLORS.get(sc, "#aaa")
+            reason = _derive_change_reason(row)
+            improved_flag = SEG_ORDER.index(sc) > SEG_ORDER.index(sp) if sp in SEG_ORDER and sc in SEG_ORDER else False
+            arr_color = "#22c55e" if improved_flag else "#ef4444"
+            arr = "↑" if improved_flag else "↓"
+            st.markdown(
+                f"<div style='background:#12141c;border:1px solid #1e2235;border-radius:8px;"
+                f"padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;gap:12px;'>"
+                f"<div style='flex:2;font-size:13px;font-weight:600;color:#e2e8f0;'>{row.get('company_name','')}</div>"
+                f"<div style='flex:1;font-size:12px;'>"
+                f"<span style='color:{sp_c};font-weight:700;'>{sp}</span>"
+                f"&nbsp;<span style='color:{arr_color};font-weight:700;'>{arr}</span>&nbsp;"
+                f"<span style='color:{sc_c};font-weight:700;'>{sc}</span>"
+                f"</div>"
+                f"<div style='flex:3;font-size:11px;color:#94a3b8;'>{reason}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
 
 def _render_date_picker() -> tuple:
@@ -411,54 +654,14 @@ def _render_date_picker() -> tuple:
     )
     using_custom = st.session_state.get("kb_custom_active", False)
 
-    # Active date range badge
-    st.markdown(
-        f"""
-        <div style='background:#0f1a2b;border:1px solid #1e3a5f;border-radius:8px;
-             padding:8px 16px;margin-top:8px;display:flex;align-items:center;gap:10px;'>
-          <span style='font-size:16px;'>📅</span>
-          <span style='color:#93c5fd;font-size:13px;font-weight:600;'>Custom Date View</span>
-          <span style='color:#475569;font-size:12px;'>–</span>
-          <span style='color:#64748b;font-size:12px;'>
-            Data window: <b style='color:#7eb8f0;'>{sel_start.strftime('%d %b %Y')}</b>
-            &nbsp;→&nbsp;
-            <b style='color:#7eb8f0;'>{sel_end.strftime('%d %b %Y')}</b>
-          </span>
-          <span style='margin-left:auto;font-size:11px;color:#4b5563;'>
-            {span_days} day window
-          </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
     return sel_start, sel_end, date_label, span_days
 
 
+
 def _render_filter_bar(df, cat_perf_df):
     """Render the inline main-page filter bar above the kanban board."""
-    st.markdown("""
-    <style>
-    .filter-bar {
-        background: #12141c;
-        border: 1px solid #1e2235;
-        border-radius: 12px;
-        padding: 16px 20px;
-        margin-bottom: 18px;
-    }
-    .filter-bar-title {
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        color: #4b5563;
-        margin-bottom: 12px;
-    }
-    </style>
-    <div class="filter-bar">
-      <div class="filter-bar-title">🔍 Pipeline Filters</div>
-    </div>
-    """, unsafe_allow_html=True)
+
 
     # ── Row 1: State/Area + Category + Sort ───────────────────────────────
     c1, c2, c3 = st.columns([2, 2, 1.5])
@@ -877,18 +1080,46 @@ def _export_excel(df: pd.DataFrame, rev_mult: float, period_label: str) -> bytes
 # ── PDF Export ────────────────────────────────────────────────────────────
 
 
-def _kb_pdf_safe(text: str) -> str:
-    """Sanitize text for FPDF Helvetica (latin-1 only)."""
+def _kb_pdf_safe(text: str, maxlen: int = 0) -> str:
+    """
+    Sanitize text for FPDF2 (Helvetica core font = latin-1 only).
+    - Replaces common Unicode arrows/symbols with ASCII equivalents.
+    - Strips ALL remaining non-latin-1 characters (including emojis,
+      Devanagari, RTL marks etc.) so FPDF never throws UnicodeEncodeError.
+    - Optionally truncates to maxlen chars (0 = no limit).
+    """
+    if not isinstance(text, str):
+        text = str(text) if text is not None else ""
     repl = {
         '\u2192': '->', '\u2190': '<-', '\u2191': '^', '\u2193': 'v',
         '\u20b9': 'Rs', '\u2022': '-', '\u2013': '-', '\u2014': '-',
         '\u2019': "'", '\u2018': "'", '\u201c': '"', '\u201d': '"',
         '\u2026': '...', '\u00b7': '-', '\u00d7': 'x',
-        '\u001a': '-',   # control char used as arrow in this file
+        '\u001a': '-', '\u2248': '~', '\u2260': '!=',
+        # Common emoji replacements (lane labels)
+        '\U0001f3c6': '[Champ]',  # 🏆
+        '\U0001f680': '[Rise]',   # 🚀
+        '\u2705': '[OK]',         # ✅
+        '\u26a0': '[Warn]',       # ⚠
+        '\ufe0f': '',             # variation selector
+        '\U0001f534': '[Crit]',   # 🔴
+        '\U0001f4e6': '[Pkg]',    # 📦
+        '\U0001f4cd': '[Pin]',    # 📍
+        '\U0001f3f7': '[Tag]',    # 🏷
+        '\u2b50': '[Star]',       # ⭐
+        '\U0001f4c5': '[Cal]',    # 📅
+        '\U0001f4c8': '[Chart]',  # 📈
+        '\u26a1': '[!]',          # ⚡
+        '\U0001f4c9': '[v]',      # 📉
+        '\U0001f6a8': '[SOS]',    # 🚨
     }
     for k, v in repl.items():
         text = text.replace(k, v)
-    return text.encode('latin-1', errors='ignore').decode('latin-1')
+    # Final pass: drop anything still outside latin-1
+    text = text.encode('latin-1', errors='ignore').decode('latin-1')
+    if maxlen and len(text) > maxlen:
+        text = text[:maxlen - 1] + '.'
+    return text
 
 def _export_pdf(df: pd.DataFrame, rev_mult: float, period_label: str) -> bytes:
     """
@@ -897,8 +1128,15 @@ def _export_pdf(df: pd.DataFrame, rev_mult: float, period_label: str) -> bytes:
       • Pipeline KPI summary table
       • Per-lane section with partner table
     Returns bytes ready for st.download_button.
+    Robust against UnicodeEncodeError — all strings are sanitised via _kb_pdf_safe()
+    before being passed to FPDF cells.
     """
-    from fpdf import FPDF
+    try:
+        from fpdf import FPDF
+    except ImportError as exc:
+        raise ImportError(
+            "fpdf2 is required for PDF export. Install it with: pip install fpdf2"
+        ) from exc
 
     LANE_RGB = {
         "Champion": (34, 197, 94),
@@ -1002,13 +1240,14 @@ def _export_pdf(df: pd.DataFrame, rev_mult: float, period_label: str) -> bytes:
         pdf.set_fill_color(int(r*0.15), int(g*0.15), int(b*0.15))
         pdf.set_text_color(r, g, b)
         pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(col_ws[0], 7, _kb_pdf_safe(lane["label"]), border=1, fill=True)
+        _lane_label_safe = _kb_pdf_safe(lane["label"], maxlen=30)
+        pdf.cell(col_ws[0], 7, _lane_label_safe, border=1, fill=True)
         pdf.set_text_color(*TEXT)
         pdf.set_font("Helvetica", "", 9)
-        pdf.cell(col_ws[1], 7, str(len(lane_df)), border=1, align="C")
-        pdf.cell(col_ws[2], 7, _fmt_pdf(lane_rev), border=1, align="R")
-        pdf.cell(col_ws[3], 7, _fmt_pdf(lane_risk), border=1, align="R")
-        pdf.cell(col_ws[4], 7, f"{lane_churn:.1f}%", border=1, align="C")
+        pdf.cell(col_ws[1], 7, _kb_pdf_safe(str(len(lane_df))), border=1, align="C")
+        pdf.cell(col_ws[2], 7, _kb_pdf_safe(_fmt_pdf(lane_rev)), border=1, align="R")
+        pdf.cell(col_ws[3], 7, _kb_pdf_safe(_fmt_pdf(lane_risk)), border=1, align="R")
+        pdf.cell(col_ws[4], 7, _kb_pdf_safe(f"{lane_churn:.1f}%"), border=1, align="C")
         pdf.ln()
 
     # ── Per-lane detail pages ──────────────────────────────────────────────
@@ -1041,7 +1280,7 @@ def _export_pdf(df: pd.DataFrame, rev_mult: float, period_label: str) -> bytes:
         pdf.set_text_color(*WHT)
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_xy(12, 2)
-        pdf.cell(0, 10, _kb_pdf_safe(f"{lane['label']} Partners  ({len(lane_df)} accounts)  |  {period_label}"))
+        pdf.cell(0, 10, _kb_pdf_safe(f"{lane['label']} Partners  ({len(lane_df)} accounts)  |  {period_label}", maxlen=80))
 
         # Table header
         pdf.set_y(18)
@@ -1060,20 +1299,18 @@ def _export_pdf(df: pd.DataFrame, rev_mult: float, period_label: str) -> bytes:
             for (col_key, _, w) in partner_cols:
                 raw = row.get(col_key, "")
                 if col_key == "recent_90_revenue":
-                    val_str = _fmt_pdf(float(raw or 0) * rev_mult)
+                    val_str = _kb_pdf_safe(_fmt_pdf(float(raw or 0) * rev_mult))
                 elif col_key == "revenue_at_risk":
-                    val_str = _fmt_pdf(float(raw or 0) * rev_mult)
+                    val_str = _kb_pdf_safe(_fmt_pdf(float(raw or 0) * rev_mult))
                 elif col_key == "churn_probability":
                     try:
                         val_str = f"{float(raw)*100:.0f}%"
                     except Exception:
-                        val_str = "—"
+                        val_str = "-"
                 elif col_key == "recency_days":
-                    val_str = _days_ago(raw)
+                    val_str = _kb_pdf_safe(_days_ago(raw))
                 else:
-                    val_str = str(raw or "—")
-                    if len(val_str) > 22:
-                        val_str = val_str[:20] + "…"
+                    val_str = _kb_pdf_safe(str(raw or "-"), maxlen=25)
                 pdf.set_text_color(*TEXT)
                 pdf.cell(w, 5.5, val_str, border=1, fill=True, align="L")
             pdf.ln()
@@ -1121,16 +1358,19 @@ def _render_export_buttons(df: pd.DataFrame, rev_mult: float, period_label: str)
     with col_pdf:
         try:
             pdf_bytes = _export_pdf(df, rev_mult, period_label)
-            filename_pdf = f"pipeline_{period_label.lower()}_{date.today().strftime('%Y%m%d')}.pdf"
+            # _export_pdf already returns bytes — no double-conversion needed
+            filename_pdf = f"pipeline_{date.today().strftime('%Y%m%d')}.pdf"
             st.download_button(
                 label="⬇️ Download PDF",
-                data=bytes(pdf_bytes),
+                data=pdf_bytes,
                 file_name=filename_pdf,
                 mime="application/pdf",
                 use_container_width=True,
                 key="kb_export_pdf",
                 help="Download a formatted PDF report with pipeline summary and per-lane partner tables",
             )
+        except ImportError:
+            st.warning("PDF export requires fpdf2. Run: `pip install fpdf2`")
         except Exception as e:
             st.error(f"PDF export failed: {e}")
 
@@ -1164,7 +1404,9 @@ def render(ai):
         return
 
     # Use cached, lightweight slice
-    df = _build_kanban_df(pf)
+    # Fix A: pass a content-hash scalar so @st.cache_data keys on data, not object id
+    _pf_hash = str(hash(tuple(pf.index.tolist())))[:16]
+    df = _build_kanban_df(pf, _pf_hash)
 
     # Category performance data from df_recent_group_spend
     group_spend = getattr(ai, "df_recent_group_spend", None)
@@ -1187,7 +1429,12 @@ def render(ai):
     period_label = date_label  # e.g. "01 Dec 2025 → 31 Dec 2025 (31d)"
 
     engine = getattr(ai, "engine", None)
-    custom_rev_df = _fetch_custom_period_revenue(engine, sel_start, sel_end)
+
+    # Fix B: session_state revenue cache — avoids repeat DB hits on same dates
+    _rev_key = f"rev_{sel_start}_{sel_end}"
+    if _rev_key not in st.session_state:
+        st.session_state[_rev_key] = _fetch_custom_period_revenue(engine, sel_start, sel_end)
+    custom_rev_df = st.session_state[_rev_key]
 
     if not custom_rev_df.empty and "company_name" in custom_rev_df.columns:
         # Merge actual period revenue onto the base kanban df
@@ -1242,11 +1489,12 @@ def render(ai):
         df = df[df["company_name"].str.contains(search_query.strip(), case=False, na=False)]
 
     # ── Period-aware health re-segmentation ──────────────────────────────
-    # Recompute segments using Quarterly thresholds (best calibrated baseline).
-    # When real period revenue is loaded, rev_mult=1.0 so the actual period
-    # figures are passed directly; when falling back to 90d scaling, rev_mult
-    # carries the day-proportional scale factor.
-    df = _recompute_segments_for_period(df, rev_mult, period="Quarterly")
+    # Fix C: lazy recompute — key includes ALL filter state to avoid stale cache
+    _filter_sig = f"{sorted(sel_states)}_{sorted(sel_cats)}_{min_rev}_{search_query.strip()}"
+    _seg_key = f"seg_{_pf_hash}_{sel_start}_{sel_end}_{hash(_filter_sig) % 999999}"
+    if _seg_key not in st.session_state:
+        st.session_state[_seg_key] = _recompute_segments_for_period(df, rev_mult, period="Quarterly")
+    df = st.session_state[_seg_key]
 
     # ── Sort ──────────────────────────────────────────────────────────────
     if sort_by == "Revenue (High→Low)":
@@ -1320,6 +1568,21 @@ def render(ai):
 
     st.markdown("---")
 
+    # ── Segment Migration Panel (Before vs After) — always visible ——————
+    # Show when span_days > 0 and engine is available
+    _base_df_for_migration = _build_kanban_df(pf, _pf_hash).copy()
+    _render_segment_migration(
+        df_curr=df,
+        base_df=_base_df_for_migration,
+        engine=engine,
+        sel_start=sel_start,
+        sel_end=sel_end,
+        span_days=span_days,
+        rev_mult=rev_mult,
+    )
+
+    st.markdown("---")
+
     # ── Top-tier partners at risk: early-warning alert ────────────────────
     _render_top_at_risk_alert(df, rev_mult)
 
@@ -1342,7 +1605,9 @@ def render(ai):
         lane_risk  = float(lane_df["revenue_at_risk"].sum()) * rev_mult
 
         with col:
-            # Lane header
+            # Lane header with playbook tooltip
+            playbook = lane.get("playbook", "")
+            tier_badge = lane.get("tier", "")
             st.markdown(
                 f"""<div style="background:#1a1c23;padding:12px;border-top:4px solid {lane['color']};border-radius:8px;margin-bottom:12px;">
                     <h4 style="margin:0;font-size:15px;color:{lane['color']};">
@@ -1350,7 +1615,10 @@ def render(ai):
                     </h4>
                     <div style="font-size:12px;color:#aaa;margin-top:4px;">
                         Value: <b>{_fmt_inr(lane_rev)}</b>
-                        &nbsp;|&nbsp; <span style="color:#f59e0b;">⚠ At Risk: {_fmt_inr(lane_risk)}</span>
+                        &nbsp;|&nbsp; <span style="color:#f59e0b;">&#9888; At Risk: {_fmt_inr(lane_risk)}</span>
+                    </div>
+                    <div style="font-size:10px;color:#4b5563;margin-top:6px;border-top:1px solid #1e2235;padding-top:5px;">
+                        <span style="color:#6366f1;font-weight:600;">Playbook:</span> {playbook}
                     </div>
                 </div>""",
                 unsafe_allow_html=True,
@@ -1369,7 +1637,8 @@ def render(ai):
             _rev_p80_all  = float((df["recent_90_revenue"] * rev_mult).quantile(0.80)) \
                 if len(df) > 1 else 0.0
 
-            shown = lane_df.head(50)
+            # Fix D: cap to 30 cards per lane for faster rendering
+            shown = lane_df.head(30)
             for _kb_i, (_, row) in enumerate(shown.iterrows()):
                 name       = str(row.get("company_name", "Unknown"))
                 rev        = _fmt_inr(float(row.get("recent_90_revenue", 0) or 0) * rev_mult)
@@ -1383,6 +1652,9 @@ def render(ai):
                 drop_pct   = row.get("revenue_drop_pct", None)
                 recency    = row.get("recency_days", None)
                 is_elite   = rev_raw >= _rev_p80_all and _rev_p80_all > 0
+
+                # ── Gone Quiet badge — zero period revenue after prior activity ———
+                gone_quiet = bool(row.get("_gone_quiet", False))
 
                 # ── Color-code churn severity ──────────────────────────────
                 if pd.notnull(churn_raw) and float(churn_raw) >= 0.7:
@@ -1414,6 +1686,13 @@ def render(ai):
                 # ── State + cluster + elite badge ─────────────────────────
                 cluster_color = "#22c55e" if "VIP" in cluster else "#6366f1" if "Growth" in cluster else "#aaa"
                 badge_html = ""
+                if gone_quiet:
+                    badge_html += (
+                        "<span style='background:#1c1000;color:#fbbf24;"
+                        "padding:2px 8px;border-radius:4px;font-size:11px;"
+                        "font-weight:700;margin-right:4px;border:1px solid #92400e;'"
+                        ">&#128274; Gone Quiet</span>"
+                    )
                 if is_elite:
                     badge_html += (
                         "<span style='background:linear-gradient(90deg,#78350f,#92400e);"
@@ -1487,5 +1766,5 @@ def render(ai):
                         st.session_state["active_page"]           = "Sales Analyzer"
                         st.rerun()
 
-            if lane_count > 50:
-                st.caption(f"Showing top 50 of {lane_count}. Use filters to narrow down.")
+            if lane_count > 30:
+                st.caption(f"Showing top 30 of {lane_count}. Use filters or search to narrow down.")

@@ -211,6 +211,30 @@ def _fmt_inr(val: float) -> str:
     return f"₹{val:,.0f}"
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _fetch_overview_stats(_engine, party_ids: tuple, start: date, end: date) -> pd.DataFrame:
+    """Live aggregate revenue/orders for selected partners within the date window."""
+    if not party_ids:
+        return pd.DataFrame()
+    try:
+        ids_str = ",".join(str(i) for i in party_ids)
+        return pd.read_sql(
+            f"""SELECT mp.company_name,
+                       COALESCE(SUM(tp.net_amt),0) AS period_revenue,
+                       COUNT(DISTINCT t.id)         AS period_orders
+                FROM transactions_dsr t
+                JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+                JOIN master_party mp ON mp.id = t.party_id
+                WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+                  AND t.party_id IN ({ids_str})
+                  AND t.date BETWEEN %(s)s AND %(e)s
+                GROUP BY mp.company_name""",
+            _engine, params={"s": start, "e": end},
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
 # ── Date picker ───────────────────────────────────────────────────────────────
 
 def _render_date_picker() -> tuple:
@@ -229,21 +253,11 @@ def _render_date_picker() -> tuple:
 
     today = date.today()
     if "sa_date_start" not in st.session_state:
-        st.session_state["sa_date_start"] = today - timedelta(days=365)
+        st.session_state["sa_date_start"] = today - timedelta(days=5 * 365)  # 5-year default
     if "sa_date_end" not in st.session_state:
         st.session_state["sa_date_end"] = today
 
-    st.markdown("""
-    <div style='background:linear-gradient(135deg,rgba(52,211,153,0.06),rgba(52,211,153,0.02));
-         border:1px solid rgba(52,211,153,0.25);border-radius:14px;padding:14px 20px;margin-bottom:14px;'>
-      <div style='font-size:11px;font-weight:700;text-transform:uppercase;
-           letter-spacing:0.12em;color:#34d399;margin-bottom:6px;'>
-        📅 Analysis Date Window
-      </div>
-      <div style='font-size:12px;color:#64748b;'>
-        Select any date range — all KPIs and product breakdowns update dynamically
-      </div>
-    </div>""", unsafe_allow_html=True)
+
 
     # Manual range
     st.markdown("<div style='font-size:11px;color:#64748b;margin-top:10px;margin-bottom:4px;'>🗓️ Custom Range</div>", unsafe_allow_html=True)
@@ -319,12 +333,7 @@ def render(ai):
     st.markdown("---")
 
     # ── Cascading Geo Filters ─────────────────────────────────────────────────
-    st.markdown("""
-    <div style='background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.22);
-         border-radius:12px;padding:16px 20px 10px 20px;margin-bottom:20px;'>
-    <div style='color:#34d399;font-weight:700;font-size:0.95rem;margin-bottom:10px;'>
-      🗺️ Select Location & Partner
-    </div>""", unsafe_allow_html=True)
+
 
     f1, f2, f3 = st.columns([1, 1, 2])
 
@@ -355,23 +364,49 @@ def render(ai):
 
     # ── Summary cards (no partner needed — show state/city totals) ────────────
     if sel_partner == "— Select a Partner —":
-        # Show aggregate stats for current filter
+        # Show aggregate stats for current filter using LIVE date-range query
         st.markdown("#### 📊 Overview — Filtered Partners")
         agg = partner_df
+
+        # Live period stats (respects date picker)
+        _pid_tuple = tuple(int(i) for i in agg["party_id"].tolist())
+        with st.spinner("Loading period stats…"):
+            period_stats = _fetch_overview_stats(engine, _pid_tuple, sel_start, sel_end)
+        period_rev = float(period_stats["period_revenue"].sum()) if not period_stats.empty else 0.0
+        period_ord = int(period_stats["period_orders"].sum())   if not period_stats.empty else 0
+        alltime_rev = float(agg["total_revenue"].sum())
+
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Partners", f"{len(agg):,}")
-        c2.metric("Total Revenue (All-Time)", _fmt_inr(float(agg["total_revenue"].sum())))
-        c3.metric("Total Orders (All-Time)", f"{int(agg['total_orders'].sum()):,}")
-        c4.metric("Avg Revenue / Partner", _fmt_inr(float(agg["total_revenue"].mean()) if len(agg) else 0))
+        c2.metric(f"💰 Revenue ({date_label})", _fmt_inr(period_rev))
+        c3.metric(f"📦 Orders ({date_label})", f"{period_ord:,}")
+        c4.metric("⏳ All-Time Revenue", _fmt_inr(alltime_rev))
 
         if not agg.empty:
-            st.markdown("#### 🏆 Top Partners by Revenue")
-            top = agg.nlargest(20, "total_revenue")[
-                ["company_name", "state_name", "city_name", "total_orders",
-                 "total_revenue", "unique_products", "last_order_date"]
-            ].copy()
-            top["total_revenue"] = top["total_revenue"].apply(_fmt_inr)
-            top.columns = ["Partner", "State", "City", "Orders", "Revenue", "Products", "Last Order"]
+            st.markdown("#### 🏆 Top Partners by Revenue (Selected Period)")
+            # Merge period stats into the top-partners table
+            if not period_stats.empty:
+                top_merged = agg.merge(period_stats, on="company_name", how="left")
+                top_merged["period_revenue"] = top_merged["period_revenue"].fillna(0)
+                top = top_merged.nlargest(20, "period_revenue")[
+                    ["company_name", "state_name", "city_name",
+                     "period_orders", "period_revenue", "total_orders",
+                     "total_revenue", "last_order_date"]
+                ].copy()
+                top["period_revenue"] = top["period_revenue"].apply(_fmt_inr)
+                top["total_revenue"]  = top["total_revenue"].apply(_fmt_inr)
+                top["period_orders"]  = top["period_orders"].fillna(0).astype(int)
+                top.columns = ["Partner", "State", "City",
+                               "Orders (Period)", "Revenue (Period)",
+                               "Orders (All-Time)", "Revenue (All-Time)", "Last Order"]
+            else:
+                top = agg.nlargest(20, "total_revenue")[
+                    ["company_name", "state_name", "city_name",
+                     "total_orders", "total_revenue",
+                     "unique_products", "last_order_date"]
+                ].copy()
+                top["total_revenue"] = top["total_revenue"].apply(_fmt_inr)
+                top.columns = ["Partner", "State", "City", "Orders", "Revenue", "Products", "Last Order"]
             st.dataframe(top, use_container_width=True, hide_index=True)
         return
 
@@ -418,21 +453,48 @@ def render(ai):
     with tab1:
         # Next-order prediction banner
         if pred:
-            da = pred["days_away"]; conf = pred["confidence"]
-            clr = {"High": "#34d399", "Medium": "#f59e0b"}.get(conf, "#ef4444")
+            da   = pred["days_away"]
+            conf = pred["confidence"]
+            trend_emoji = pred.get("trend_emoji", "➡️")
+            trend_label = pred.get("trend_label", "")
+            total_ord   = pred.get("total_orders", "")
+            cv          = pred.get("cv", "")
+            clr  = {"High": "#34d399", "Medium": "#f59e0b"}.get(conf, "#ef4444")
+            conf_bg = {"High": "rgba(52,211,153,0.15)", "Medium": "rgba(245,158,11,0.15)"}.get(conf, "rgba(239,68,68,0.15)")
             sign = "in" if da >= 0 else "overdue by"
+            pred_date_str = pred["predicted_date"].strftime("%d %b %Y")
             st.markdown(f"""
-<div style='background:rgba(52,211,153,0.07);border:1px solid {clr}44;
-     border-radius:10px;padding:10px 18px;margin-bottom:12px;
-     display:flex;align-items:center;gap:16px;'>
-  <span style='font-size:22px;'>🔮</span>
-  <div>
-    <div style='color:{clr};font-weight:700;font-size:13px;'>Next Order Prediction</div>
-    <div style='color:#cbd5e1;font-size:12px;'>
-      Expected <b style='color:#7eb8f0;'>{pred["predicted_date"].strftime("%d %b %Y")}</b>
-      &nbsp;({sign} <b>{abs(da)}</b> days) &nbsp;·&nbsp;
-      Avg gap: <b>{pred["avg_gap"]}d</b> &nbsp;·&nbsp;
-      Confidence: <span style='color:{clr};font-weight:600;'>{conf}</span>
+<div style='background:rgba(15,23,42,0.9);border:1px solid {clr}55;
+     border-radius:12px;padding:14px 20px;margin-bottom:16px;'>
+  <div style='display:flex;align-items:center;gap:12px;'>
+    <span style='font-size:28px;'>🔮</span>
+    <div style='flex:1;'>
+      <div style='color:{clr};font-weight:700;font-size:14px;margin-bottom:4px;'>
+        Next Order Prediction
+        <span style='background:{conf_bg};color:{clr};font-size:11px;
+          padding:2px 10px;border-radius:10px;margin-left:8px;font-weight:600;border:1px solid {clr}44;'>
+          {conf} Confidence
+        </span>
+      </div>
+      <div style='color:#e2e8f0;font-size:13px;'>
+        Expected <b style='color:#7eb8f0;'>{pred_date_str}</b>
+        &nbsp;···&nbsp;
+        <b style='color:#f1f5f9;'>{sign} <span style='color:{clr};'>{abs(da)}</span> days</b>
+      </div>
+      <div style='display:flex;gap:18px;margin-top:8px;flex-wrap:wrap;'>
+        <span style='font-size:11px;color:#64748b;'>
+          ⏱️ Avg gap: <b style='color:#94a3b8;'>{pred["avg_gap"]}d</b>
+        </span>
+        <span style='font-size:11px;color:#64748b;'>
+          {trend_emoji} <b style='color:#94a3b8;'>{trend_label}</b>
+        </span>
+        <span style='font-size:11px;color:#64748b;'>
+          📅 Based on <b style='color:#94a3b8;'>{total_ord} orders</b>
+        </span>
+        <span style='font-size:11px;color:#64748b;'>
+          📊 Consistency: <b style='color:#94a3b8;'>CV={cv}</b>
+        </span>
+      </div>
     </div>
   </div>
 </div>""", unsafe_allow_html=True)
@@ -468,156 +530,15 @@ def render(ai):
                     key="sa_excel")
         with ex2:
             if kpis:
-                pdf_b = export_pdf(sel_partner, str(pr.get("city_name","")),
-                    str(pr.get("state_name","")), kpis, yoy, prod_df, sel_start, sel_end)
+                pdf_b = export_pdf(sel_partner, str(pr.get("city_name", "")),
+                    str(pr.get("state_name", "")), kpis, yoy, prod_df, sel_start, sel_end)
                 st.download_button("📄 Export PDF", data=pdf_b,
                     file_name=f"{sel_partner[:20].replace(' ','_')}_{sel_end}.pdf",
                     mime="application/pdf", key="sa_pdf")
 
         st.markdown("---")
 
-    # ── Monthly Revenue Chart ─────────────────────────────────────────────────
-    if not month_df.empty:
-        month_df["month"] = pd.to_datetime(month_df["month"])
-        st.markdown("#### 📊 Monthly Revenue Trend")
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=month_df["month"], y=month_df["revenue"],
-            name="Revenue",
-            marker_color="#34d399",
-            hovertemplate="<b>%{x|%b %Y}</b><br>Revenue: ₹%{y:,.0f}<extra></extra>",
-        ))
-        fig.add_trace(go.Scatter(
-            x=month_df["month"], y=month_df["revenue"],
-            mode="lines+markers", name="Trend",
-            line=dict(color="#6ee7b7", width=2, dash="dot"),
-            marker=dict(size=6),
-        ))
-        fig.update_layout(
-            height=340,
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#94a3b8", size=12),
-            xaxis=dict(gridcolor="#1e293b", showgrid=True),
-            yaxis=dict(gridcolor="#1e293b", showgrid=True, tickprefix="₹"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
-            margin=dict(l=10, r=10, t=30, b=10),
-        )
-        st.plotly_chart(fig, use_container_width=True)
 
-    # ── Product Breakdown ─────────────────────────────────────────────────────
-    st.markdown("#### 🛒 Product-Wise Purchase Breakdown")
-
-    if prod_df.empty:
-        st.info("No product data for the selected date range.")
-    else:
-        # Category filter
-        cats = ["All"] + sorted(prod_df["category"].dropna().unique().tolist())
-        col_cat, col_search = st.columns([1, 2])
-        with col_cat:
-            sel_cat = st.selectbox("Filter by Category", cats, key="sa_prod_cat")
-        with col_search:
-            prod_search = st.text_input("Search Product", "", key="sa_prod_search",
-                                        placeholder="Type product name…")
-
-        disp = prod_df.copy()
-        if sel_cat != "All":
-            disp = disp[disp["category"] == sel_cat]
-        if prod_search:
-            disp = disp[disp["product_name"].str.contains(prod_search, case=False, na=False)]
-
-        # Summary strip above table
-        tot_rev = float(disp["total_amount"].sum())
-        tot_qty = float(disp["total_qty"].sum())
-        s1, s2, s3 = st.columns(3)
-        s1.metric("Filtered Revenue", _fmt_inr(tot_rev))
-        s2.metric("Filtered Qty", f"{tot_qty:,.0f}")
-        s3.metric("Products Shown", str(len(disp)))
-
-        # Merge Repeat/New classification
-        repeat_df = fetch_repeat_new(engine, party_id, sel_start, sel_end)
-        if not repeat_df.empty and not disp.empty:
-            disp = disp.merge(repeat_df, on="product_name", how="left")
-            disp["purchase_type"] = disp["purchase_type"].fillna("New")
-        else:
-            disp["purchase_type"] = "—"
-
-        disp_show = disp[["product_name", "category", "product_group", "purchase_type",
-                           "total_qty", "avg_rate", "total_amount",
-                           "txn_count", "last_purchased"]].copy()
-        disp_show.columns = ["Product", "Category", "Group", "New/Repeat",
-                              "Qty", "Avg Rate (₹)", "Total Amt (₹)",
-                              "# Invoices", "Last Purchased"]
-        disp_show["Avg Rate (₹)"] = disp_show["Avg Rate (₹)"].apply(lambda x: "Rs {:,.2f}".format(float(x or 0)))
-        disp_show["Total Amt (₹)"] = disp_show["Total Amt (₹)"].apply(lambda x: "Rs {:,.2f}".format(float(x or 0)))
-        st.dataframe(disp_show, use_container_width=True, hide_index=True)
-
-        # Download button
-        csv = disp.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Download Product Breakdown (CSV)",
-            data=csv,
-            file_name=f"{sel_partner.replace(' ', '_')}_products_{sel_start}_{sel_end}.csv",
-            mime="text/csv",
-            key="sa_download_csv",
-        )
-
-        st.markdown("---")
-
-        # ── Charts side-by-side ───────────────────────────────────────────────
-        ch1, ch2 = st.columns(2)
-
-        with ch1:
-            st.markdown("##### 🥧 Revenue by Category")
-            cat_agg = (prod_df.groupby("category")["total_amount"]
-                       .sum().reset_index()
-                       .sort_values("total_amount", ascending=False))
-            if not cat_agg.empty:
-                fig_pie = px.pie(
-                    cat_agg, values="total_amount", names="category",
-                    color_discrete_sequence=px.colors.sequential.Teal,
-                    hole=0.45,
-                )
-                fig_pie.update_traces(
-                    textposition="outside",
-                    hovertemplate="<b>%{label}</b><br>₹%{value:,.0f}<br>%{percent}<extra></extra>",
-                )
-                fig_pie.update_layout(
-                    height=320,
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="#94a3b8"),
-                    margin=dict(l=10, r=10, t=20, b=10),
-                    legend=dict(font=dict(size=11)),
-                )
-                st.plotly_chart(fig_pie, use_container_width=True)
-
-        with ch2:
-            st.markdown("##### 📦 Top 10 Products by Revenue")
-            top10 = prod_df.nlargest(10, "total_amount")
-            if not top10.empty:
-                fig_bar = px.bar(
-                    top10,
-                    x="total_amount",
-                    y="product_name",
-                    orientation="h",
-                    color="total_amount",
-                    color_continuous_scale="Teal",
-                    labels={"total_amount": "Revenue (₹)", "product_name": ""},
-                )
-                fig_bar.update_layout(
-                    height=320,
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="#94a3b8"),
-                    coloraxis_showscale=False,
-                    margin=dict(l=10, r=10, t=20, b=10),
-                    xaxis=dict(gridcolor="#1e293b", tickprefix="₹"),
-                )
-                fig_bar.update_traces(
-                    hovertemplate="<b>%{y}</b><br>₹%{x:,.0f}<extra></extra>"
-                )
-                st.plotly_chart(fig_bar, use_container_width=True)
 
     # ── Compare Tab ───────────────────────────────────────────────────────────
 

@@ -31,9 +31,17 @@ def fetch_yoy_kpis(engine, party_id: int, start: date, end: date) -> dict:
         return {}
 
 
-# ── Next-order prediction ─────────────────────────────────────────────────────
+# ── Next-order prediction (industry-grade) ───────────────────────────────────
 
 def predict_next_order(engine, party_id: int) -> dict:
+    """
+    5-signal next-order engine:
+      1. Weighted-recency median (recent gaps carry 2× weight)
+      2. Trend detection — accelerating / stable / decelerating
+      3. Trend-adjusted final gap
+      4. Seasonal month tendency (same-month historical gaps)
+      5. CV + data-point count → confidence tier
+    """
     try:
         df = pd.read_sql(
             """SELECT DISTINCT date FROM transactions_dsr
@@ -41,20 +49,83 @@ def predict_next_order(engine, party_id: int) -> dict:
                  AND party_id=%(pid)s ORDER BY date""",
             engine, params={"pid": party_id},
         )
-        if len(df) < 3:
+        if len(df) < 2:
             return {}
+
         dates = pd.to_datetime(df["date"]).sort_values().tolist()
-        gaps  = [(dates[i+1]-dates[i]).days for i in range(len(dates)-1)]
-        med   = sorted(gaps)[len(gaps)//2]
-        last  = dates[-1].date()
-        predicted = last + timedelta(days=med)
-        days_away = (predicted - date.today()).days
-        cv = (pd.Series(gaps).std() / med) if med > 0 else 1
-        conf = "High" if cv < 0.4 else "Medium" if cv < 0.8 else "Low"
-        return {"predicted_date": predicted, "days_away": days_away,
-                "avg_gap": med, "confidence": conf}
+        gaps  = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
+        n     = len(gaps)
+
+        if not gaps:
+            return {}
+
+        # ── 1. Weighted-recency median ─────────────────────────────────────
+        # Weight linearly from 1× (oldest gap) to 2× (most recent gap)
+        weighted_pool: list[int] = []
+        for i, g in enumerate(gaps):
+            w = round(10 * (1 + i / max(n - 1, 1)))  # 10 → 20
+            weighted_pool.extend([g] * w)
+        weighted_pool.sort()
+        w_median = weighted_pool[len(weighted_pool) // 2]
+
+        # ── 2. Trend detection (compare first-third vs last-third gaps) ────
+        split = max(1, n // 3)
+        early_avg  = sum(gaps[:split])  / split
+        recent_avg = sum(gaps[-split:]) / split
+
+        if recent_avg < early_avg * 0.85:
+            trend       = "accelerating"
+            trend_emoji = "📈"
+            trend_label = "Ordering more frequently recently"
+        elif recent_avg > early_avg * 1.15:
+            trend       = "decelerating"
+            trend_emoji = "📉"
+            trend_label = "Ordering less frequently recently"
+        else:
+            trend       = "stable"
+            trend_emoji = "➡️"
+            trend_label = "Stable ordering cadence"
+
+        # ── 3. Trend-adjusted final gap ────────────────────────────────────
+        if trend == "accelerating" and n >= 4:
+            final_gap = max(1, round(w_median * 0.90))
+        elif trend == "decelerating" and n >= 4:
+            final_gap = round(w_median * 1.10)
+        else:
+            final_gap = w_median
+
+        # ── 4. Seasonal adjustment (same calendar-month historical gaps) ───
+        last = dates[-1].date()
+        same_month_gaps = [gaps[i] for i in range(n) if dates[i].month == last.month]
+        if len(same_month_gaps) >= 2:
+            sm_median  = sorted(same_month_gaps)[len(same_month_gaps) // 2]
+            final_gap  = round(final_gap * 0.6 + sm_median * 0.4)   # blend
+
+        predicted  = last + timedelta(days=final_gap)
+        days_away  = (predicted - date.today()).days
+
+        # ── 5. Confidence tier ─────────────────────────────────────────────
+        series = pd.Series(gaps)
+        cv     = float(series.std() / w_median) if w_median > 0 else 1.0
+        if   cv < 0.25 and n >= 6:  conf = "High"
+        elif cv < 0.50 and n >= 3:  conf = "Medium"
+        else:                        conf = "Low"
+
+        return {
+            "predicted_date": predicted,
+            "days_away":      days_away,
+            "avg_gap":        final_gap,
+            "confidence":     conf,
+            "trend":          trend,
+            "trend_emoji":    trend_emoji,
+            "trend_label":    trend_label,
+            "total_orders":   len(dates),
+            "cv":             round(cv, 2),
+            "raw_median":     w_median,
+        }
     except Exception:
         return {}
+
 
 
 # ── Repeat vs New products ────────────────────────────────────────────────────

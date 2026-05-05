@@ -131,9 +131,38 @@ def render(ai):
 
     st.markdown("---")
 
+    # ── Date Range Filter ────────────────────────────────────────────────────
+    import datetime
+    today = datetime.date.today()
+    dr_col1, dr_col2 = st.columns([2, 1])
+    with dr_col1:
+        date_range = st.date_input(
+            "📅 Filter by Stock Ageing Period (select the window when stock stopped moving)",
+            value=(today - datetime.timedelta(days=365), today - datetime.timedelta(days=60)),
+            max_value=today,
+            key="inv_date_range",
+        )
+    with dr_col2:
+        st.markdown("")
+        st.caption(
+            "Stock is shown whose last sale falls within the selected window. "
+            "E.g. pick Jan–Mar 2025 to see stock that stopped moving in that period."
+        )
+
+    # Apply date range to stats_df via max_age_days
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        from_date, to_date = date_range
+        min_age = max((today - to_date).days, 0)    # stock older than this
+        max_age = max((today - from_date).days, 0)  # stock newer than this
+        if max_age >= min_age:
+            stats_df = stats_df[
+                (pd.to_numeric(stats_df["max_age_days"], errors="coerce").fillna(0) >= min_age) &
+                (pd.to_numeric(stats_df["max_age_days"], errors="coerce").fillna(0) <= max_age)
+            ]
+
     valid_items = stats_df["product_name"].unique()
     if len(valid_items) == 0:
-        banner("✅ No critical dead stock found — nothing older than 60 days with more than 10 units.", "green")
+        banner("✅ No dead stock found for the selected date range — try widening the window.", "orange")
         return
 
     # ── Priority filter ──────────────────────────────────────────────────────
@@ -209,14 +238,11 @@ def render(ai):
     # ── Stock KPIs ───────────────────────────────────────────────────────────
     stock_details = ai.get_stock_details(selected_item)
     if stock_details is not None:
-        c1, c2, c3, c4 = st.columns(4)
-        total_qty     = stock_details.get("total_stock_qty", 0)
-        cost_price    = stock_details.get("cost_price", 1000)
-        capital_locked = total_qty * cost_price
+        c1, c2, c3 = st.columns(3)
+        total_qty = stock_details.get("total_stock_qty", 0)
         c1.metric("Units to Clear", f"{total_qty} Units")
-        c2.metric("Capital Locked", f"Rs {capital_locked:,.0f}")
-        c3.metric("Max Age in WH", f"{stock_details.get('max_age_days', 0)} Days")
-        c4.metric(
+        c2.metric("Max Age in WH", f"{stock_details.get('max_age_days', 0)} Days")
+        c3.metric(
             "Priority",
             stock_details.get("priority", "High"),
             delta=stock_details.get("priority_delta", "Plan Sales"),

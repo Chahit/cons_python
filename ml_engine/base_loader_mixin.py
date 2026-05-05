@@ -604,9 +604,10 @@ class BaseLoaderMixin:
             (f["recent_90_revenue"] > 0)
             & (f["growth_rate_90d"] >= -0.05)
             & (
-                (f["growth_rate_90d"] >= 0.05)
-                | (eng_vel >= 1.1)
-                | (_recent_txns_s >= 2)
+                # Growth velocity gate: positive QoQ + minimum purchase count
+                ((f["growth_rate_90d"] >= 0.05) & (_recent_txns_s >= 2))
+                # OR stable + highly engaged (3+ purchases, very low churn)
+                | ((f["growth_rate_90d"] >= -0.05) & (_recent_txns_s >= 3) & (churn_p < 0.30))
             )
             & (cat_div >= -1)
             & (churn_p < 0.55)

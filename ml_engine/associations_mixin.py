@@ -82,6 +82,8 @@ class AssociationsMixin:
             FROM transactions_dsr t
             WHERE {approved}
         ),
+        -- ALL-TIME baskets — no date filter so times_bought_together counts
+        -- every co-purchase ever recorded, not just the lookback window.
         baskets AS (
             SELECT DISTINCT
                 t.party_id,
@@ -90,9 +92,7 @@ class AssociationsMixin:
             FROM transactions_dsr t
             JOIN transactions_dsr_products tp ON t.id = tp.dsr_id
             JOIN master_products p ON tp.product_id = p.id
-            CROSS JOIN max_date_cte md
             WHERE {approved}
-              AND t.date >= md.last_recorded_date - INTERVAL '{lookback_months} months'
         ),
         basket_total AS (
             SELECT COUNT(DISTINCT (party_id::text || '|' || sale_month)) AS total_baskets
@@ -117,6 +117,8 @@ class AssociationsMixin:
              AND a.product_name < b.product_name
             GROUP BY a.product_name, b.product_name
         ),
+        -- WINDOWED — only recent data for pricing so revenue/margin reflects
+        -- current market rates rather than historical prices.
         avg_product_value AS (
             SELECT
                 p.product_name,
@@ -210,6 +212,7 @@ class AssociationsMixin:
             approved=self._approved_condition("t"),
             lookback_months=int(self.mba_lookback_months),
         )
+
         try:
             df = pd.read_sql(query, self.engine)
             return df

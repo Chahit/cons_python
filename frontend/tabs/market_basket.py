@@ -22,7 +22,179 @@ def _inr(val):
     return f"₹{v:.0f}"
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_category_map(_engine):
+    """product_name → category_name from master tables."""
+    try:
+        import pandas as pd
+        df = pd.read_sql(
+            """SELECT mp.product_name,
+                      COALESCE(mpc.category_name, mg.group_name, 'General') AS category
+               FROM master_products mp
+               LEFT JOIN master_group mg ON mg.id = mp.group_id
+               LEFT JOIN master_product_category mpc ON mpc.id = mg.category_id_id""",
+            _engine,
+        )
+        return df.drop_duplicates("product_name").set_index("product_name")["category"].to_dict()
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _fetch_partner_recent_products(_engine, partner_name: str, n: int = 15):
+    """Last N distinct products ordered by this partner (by most recent date)."""
+    try:
+        import pandas as pd
+        return pd.read_sql(
+            """SELECT mp.product_name,
+                      COALESCE(mpc.category_name, mg.group_name, 'General') AS category,
+                      MAX(t.date)         AS last_date,
+                      SUM(tp.qty)         AS total_qty,
+                      COUNT(DISTINCT t.id) AS order_count
+               FROM transactions_dsr t
+               JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+               JOIN master_products mp            ON mp.id = tp.product_id
+               JOIN master_party p               ON p.id  = t.party_id
+               LEFT JOIN master_group mg          ON mg.id = mp.group_id
+               LEFT JOIN master_product_category mpc ON mpc.id = mg.category_id_id
+               WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+                 AND p.company_name = %(name)s
+               GROUP BY mp.product_name, mpc.category_name, mg.group_name
+               ORDER BY last_date DESC
+               LIMIT %(n)s""",
+            _engine, params={"name": partner_name, "n": n},
+        )
+    except Exception:
+        import pandas as pd
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_bundle_monthly_trends(_engine, top_pairs: list):
+    """
+    Monthly co-purchase counts for a given list of (product_a, product_b) pairs.
+    Queries raw transactions for the last 12 months.
+    top_pairs: list of [product_a, product_b] strings (already the top bundles).
+    """
+    try:
+        import pandas as pd
+        if not top_pairs:
+            return pd.DataFrame()
+        # Build pair filter — LEAST/GREATEST normalise ordering
+        pair_filters = " OR ".join(
+            f"(LEAST(mp1.product_name, mp2.product_name) = %s "
+            f"AND GREATEST(mp1.product_name, mp2.product_name) = %s)"
+            for _ in top_pairs
+        )
+        params = []
+        for a, b in top_pairs:
+            params += [min(a, b), max(a, b)]
+
+        sql = f"""
+            SELECT
+                TO_CHAR(t.date, 'YYYY-MM') AS month,
+                LEAST(mp1.product_name, mp2.product_name)    AS product_a,
+                GREATEST(mp1.product_name, mp2.product_name) AS product_b,
+                COUNT(DISTINCT t.id) AS monthly_count
+            FROM transactions_dsr t
+            JOIN transactions_dsr_products tp1 ON tp1.dsr_id = t.id
+            JOIN transactions_dsr_products tp2 ON tp2.dsr_id = t.id
+                                               AND tp2.product_id > tp1.product_id
+            JOIN master_products mp1 ON mp1.id = tp1.product_id
+            JOIN master_products mp2 ON mp2.id = tp2.product_id
+            WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+              AND t.date >= CURRENT_DATE - INTERVAL '12 months'
+              AND ({pair_filters})
+            GROUP BY month, product_a, product_b
+            ORDER BY month, monthly_count DESC
+        """
+        with _engine.connect() as conn:
+            df = pd.read_sql(sql, conn, params=params)
+        return df
+    except Exception:
+        import pandas as pd
+        return pd.DataFrame()
+
+
+def _generate_human_script(
+    partner_name, trigger_product, rec_product,
+    trigger_category, rec_category,
+    confidence, lift, frequency, gain_monthly,
+    days_since_last, partner_order_count,
+):
+    """Rule-driven, human-sounding sales call script. No AI-buzzwords."""
+    import random, hashlib
+    seed = int(hashlib.md5(f"{partner_name}{rec_product}".encode()).hexdigest(), 16) % (2**31)
+    rng  = random.Random(seed)
+
+    same_cat = (trigger_category == rec_category and trigger_category not in ("General", "Unknown", ""))
+
+    # ── Opening ──────────────────────────────────────────────────────────
+    if days_since_last > 60:
+        opens = [
+            f"I was going through accounts and noticed it's been about {days_since_last} days since your last {trigger_product} order — wanted to reach out before your next cycle.",
+            f"It's been a while since your last {trigger_product} shipment and I had a quick thought I wanted to run by you.",
+        ]
+    elif partner_order_count >= 20:
+        opens = [
+            f"With all the {trigger_product} you've been moving, I spotted something worth flagging before your next order.",
+            f"I know you're on top of your {trigger_product} ordering — this one's quick and relevant.",
+        ]
+    else:
+        opens = [
+            f"I was looking at your recent {trigger_product} orders and there's something I wanted to mention.",
+            f"Quick call about your {trigger_product} pattern — there's a pairing I think makes sense for your account.",
+        ]
+    opening = rng.choice(opens)
+
+    # ── Pitch ─────────────────────────────────────────────────────────────
+    cat_note = "same category" if same_cat else f"the {rec_category} side"
+    if confidence >= 0.65:
+        pitches = [
+            f"About {confidence:.0%} of partners who regularly order {trigger_product} end up needing {rec_product} — we've tracked this across {frequency} actual orders. It's not a coincidence.",
+            f"This is a pattern we see reliably: {trigger_product} goes out, {rec_product} follows. {confidence:.0%} of the time, same ordering cycle. Makes sense to plan for both.",
+        ]
+    elif confidence >= 0.40:
+        pitches = [
+            f"We've seen {frequency} cases where {trigger_product} and {rec_product} get ordered together from {cat_note}. Lift is {lift:.1f}x — that's meaningful correlation.",
+            f"Not a slam dunk, but {confidence:.0%} of similar accounts are picking up {rec_product} alongside {trigger_product}. Worth a conversation.",
+        ]
+    else:
+        pitches = [
+            f"It's a lower-frequency pairing but {rec_product} keeps showing up alongside {trigger_product} orders — {frequency} times. Might be worth keeping in mind.",
+            f"I wouldn't push hard on this one, but {rec_product} from {cat_note} has come up alongside {trigger_product} {frequency} times. Just flagging it.",
+        ]
+    pitch = rng.choice(pitches)
+
+    # ── Value anchor ──────────────────────────────────────────────────────
+    if gain_monthly >= 100000:
+        value = f"Partners making this combination are adding roughly {_inr(gain_monthly)}/month in incremental revenue. At your volume, that compounds fast."
+    elif gain_monthly >= 10000:
+        value = f"Incremental gain on the pairing is about {_inr(gain_monthly)}/month — not massive, but it adds up and there's no extra effort on the logistics side."
+    else:
+        value = f"It's not a big revenue mover on its own, but it consolidates a delivery and removes a separate reorder step for you."
+
+    # ── Objection handler ─────────────────────────────────────────────────
+    if lift >= 3.0:
+        objection = f"I'd push back on any hesitation here — {lift:.1f}x lift across {frequency} transactions isn't soft data. The demand is real."
+    elif lift >= 1.5:
+        objection = f"Even if you want to trial it — the {lift:.1f}x lift tells me it's not random. Start small and we'll track it from there."
+    else:
+        objection = f"Totally fair if it's not the right time. Just keep {rec_product} in mind — it's shown up {frequency} times alongside {trigger_product} and that number grows each quarter."
+
+    # ── Close ─────────────────────────────────────────────────────────────
+    closes = [
+        f"Want me to add a trial qty of {rec_product} to your next {trigger_product} order? I can set it up now.",
+        f"Should I put a combined quote together? Takes two minutes and you can decide from there.",
+        f"I can note it on your account and raise it again at your next order — or we move on it now if the timing works.",
+    ]
+    close = rng.choice(closes)
+
+    return {"opening": opening, "pitch": pitch, "value": value, "objection": objection, "close": close}
+
+
 def render(ai):
+
     apply_global_styles()
     page_header(
         title="Market Basket Analysis",
@@ -145,232 +317,83 @@ def render(ai):
     )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # SECTION 3 — Association Rules Table + Dynamic Sales Script (side-by-side)
+    # SECTION 3 — Bundle Tables: Same-Category & Cross-Category
     # ─────────────────────────────────────────────────────────────────────────
-    left, right = st.columns([2, 1])
+    import pandas as pd
+    engine = getattr(ai, "engine", None)
+    cat_map = _fetch_category_map(engine) if engine else {}
+
+    if not df_assoc.empty and cat_map:
+        df_assoc = df_assoc.copy()
+        df_assoc["cat_a"] = df_assoc["product_a"].map(cat_map).fillna("General")
+        df_assoc["cat_b"] = df_assoc["product_b"].map(cat_map).fillna("General")
+        df_assoc["bundle_type"] = df_assoc.apply(
+            lambda r: "Same Category" if r["cat_a"] == r["cat_b"] else "Cross Category", axis=1
+        )
+        df_same  = df_assoc[df_assoc["bundle_type"] == "Same Category"]
+        df_cross = df_assoc[df_assoc["bundle_type"] == "Cross Category"]
+    else:
+        df_same  = df_assoc.copy() if not df_assoc.empty else pd.DataFrame()
+        df_cross = pd.DataFrame()
+
+    _display_cols = [
+        "product_a", "product_b", "times_bought_together",
+        "confidence_a_to_b", "lift_a_to_b", "rule_strength",
+        "expected_gain_monthly", "expected_margin_monthly",
+    ]
+    _col_cfg = {
+        "product_a": "If they buy…", "product_b": "…pitch this",
+        "times_bought_together": st.column_config.NumberColumn("Frequency"),
+        "confidence_a_to_b":    st.column_config.NumberColumn("Confidence", format="%.2f"),
+        "lift_a_to_b":          st.column_config.NumberColumn("Lift", format="%.2f"),
+        "rule_strength":        "Rule Strength",
+        "expected_gain_monthly": st.column_config.NumberColumn("₹ Gain/Month", format="₹%d"),
+        "expected_margin_monthly": st.column_config.NumberColumn("₹ Margin/Month", format="₹%d"),
+    }
+
+    left = st.container()
 
     with left:
-        section_header(f"Association Rules ({len(df_assoc)} found)")
-
+        section_header(f"Product Bundle Rules ({len(df_assoc)} found)")
         with st.expander("ℹ️ Metric Glossary", expanded=False):
             st.markdown(
-                "- **Confidence**: P(B | A) — how reliably B is bought when A is bought\n"
-                "- **Lift**: strength of A→B vs random chance (>1 = meaningful)\n"
-                "- **Frequency**: number of baskets containing both A and B\n"
-                "- **Rule Strength**: High / Medium / Low quality tag\n"
-                "- **₹ Gain/Month**: estimated monthly revenue lift from this rule"
+                "- **Confidence**: P(B | A)\n- **Lift**: >1 = meaningful affinity\n"
+                "- **Same Category**: both products in same category (e.g. HDD → HDD)\n"
+                "- **Cross Category**: different categories (e.g. HDD → Cables)"
             )
 
-        if df_assoc.empty:
-            st.warning("No association rules match the current filters. Try lowering the thresholds.")
-        else:
-            _display_cols = [
-                "product_a", "product_b", "times_bought_together",
-                "confidence_a_to_b", "lift_a_to_b", "rule_strength",
-                "expected_gain_monthly", "expected_margin_monthly",
-            ]
-            _col_cfg = {
-                "product_a": "If they buy…",
-                "product_b": "…pitch this",
-                "times_bought_together": st.column_config.NumberColumn("Frequency"),
-                "confidence_a_to_b": st.column_config.NumberColumn("Confidence", format="%.2f"),
-                "lift_a_to_b": st.column_config.NumberColumn("Lift", format="%.2f"),
-                "rule_strength": "Rule Strength",
-                "expected_gain_monthly": st.column_config.NumberColumn("₹ Gain/Month", format="₹%d"),
-                "expected_margin_monthly": st.column_config.NumberColumn("₹ Margin/Month", format="₹%d"),
-            }
-            st.dataframe(
-                df_assoc[[c for c in _display_cols if c in df_assoc.columns]],
-                column_config=_col_cfg,
-                use_container_width=True,
-                hide_index=True,
-            )
+        same_tab, cross_tab = st.tabs([
+            f"🔁 Same-Category Bundles ({len(df_same)})",
+            f"🔀 Cross-Category Bundles ({len(df_cross)})",
+        ])
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Dynamic Sales Script — right panel
-    # ─────────────────────────────────────────────────────────────────────────
-    with right:
-        st.markdown(
-            "<div style='background:#0f172a;border:1px solid #1e293b;border-radius:14px;padding:14px 16px;'>"
-            "<span style='font-size:14px;font-weight:800;color:#f0f4ff;'>\U0001f4de Sales Script</span>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-
-        if not df_assoc.empty:
-            # ── Rule selector: build label list from the filtered table
-            rule_labels = [
-                f"{r['product_a']}  →  {r['product_b']}"
-                for _, r in df_assoc.iterrows()
-            ]
-            selected_label = st.selectbox(
-                "Select rule to script",
-                options=rule_labels,
-                index=0,
-                key="sales_script_rule_selector",
-                help="Choose any association rule from the table — the script updates instantly.",
-            )
-            selected_idx = rule_labels.index(selected_label)
-            top = df_assoc.iloc[selected_idx]
-
-            prod_a  = str(top.get("product_a", "Product A"))
-            prod_b  = str(top.get("product_b", "Product B"))
-            conf    = float(top.get("confidence_a_to_b", 0) or 0)
-            lift    = float(top.get("lift_a_to_b", 0) or 0)
-            supp_a  = int(top.get("support_a", 0) or 0)
-            supp_b  = int(top.get("support_b", 0) or 0)
-            freq    = int(top.get("times_bought_together", 0) or 0)
-            gain_m  = float(top.get("expected_gain_monthly", 0) or 0)
-            gain_y  = float(top.get("expected_gain_yearly", 0) or 0)
-            margin_m = float(top.get("expected_margin_monthly", 0) or 0)
-            strength = str(top.get("rule_strength", "Medium") or "Medium")
-
-            # ── Confidence badge
-            if conf >= 0.6:
-                badge_color, badge_label = "#10b981", "🟢 High Confidence"
-            elif conf >= 0.3:
-                badge_color, badge_label = "#f59e0b", "🟡 Medium Confidence"
+        with same_tab:
+            st.caption("Depth-selling within a product family — same category on both sides.")
+            if df_same.empty:
+                st.info("No same-category rules with current filters.")
             else:
-                badge_color, badge_label = "#64748b", "⚪ Low Confidence"
+                st.dataframe(df_same[[c for c in _display_cols if c in df_same.columns]],
+                             column_config=_col_cfg, use_container_width=True, hide_index=True)
 
-            st.markdown(
-                f"<div style='font-size:11px;color:{badge_color};font-weight:600;"
-                f"margin-bottom:10px;'>{badge_label} — {conf:.0%} conf · {lift:.1f}x lift · "
-                f"{strength}</div>",
-                unsafe_allow_html=True,
-            )
-
-            # ── Dynamic Opening Line
-            if conf >= 0.7:
-                opening = (
-                    f"\"Every time we see a partner ordering {prod_a}, they almost always "
-                    f"need {prod_b} within the same cycle. I'd like to add it to today's order for you — "
-                    f"shall I confirm both?\""
-                )
-                followup = (
-                    f"\"This isn't a guess — {conf:.0%} of partners who buy {prod_a} take "
-                    f"{prod_b}. That's {freq} transactions in our data backing this up.\""
-                )
-            elif conf >= 0.4:
-                opening = (
-                    f"\"We've noticed that many partners who stock {prod_a} also pick up "
-                    f"{prod_b} at the same time. It's a combination that moves well together — "
-                    f"have you considered adding it to this order?\""
-                )
-                followup = (
-                    f"\"About {conf:.0%} of {prod_a} buyers also take {prod_b}. "
-                    f"We've seen this pattern {freq} times across our partner network.\""
-                )
+        with cross_tab:
+            st.caption("Category expansion — partner buys A, pitch them B from a different category.")
+            if df_cross.empty:
+                st.info("No cross-category rules with current filters.")
             else:
-                opening = (
-                    f"\"While you're placing an order for {prod_a}, I wanted to flag that "
-                    f"{prod_b} is often complementary — some of our partners find it useful "
-                    f"to bundle both in a single delivery.\""
-                )
-                followup = (
-                    f"\"It reduces your logistics overhead and we've seen this combination "
-                    f"work well across {freq} orders in our network.\""
-                )
-
-            # ── Dynamic Value Pitch
-            if gain_m >= 1_00_000:
-                value_pitch = (
-                    f"\"Bundling this pair adds roughly {_inr(gain_m)} per month in revenue — "
-                    f"that's {_inr(gain_y)} annually. The margin contribution is {_inr(margin_m)}/month. "
-                    f"It's one of the cleanest cross-sell wins in your category right now.\""
-                )
-            elif gain_m >= 10_000:
-                value_pitch = (
-                    f"\"Cross-selling {prod_b} alongside {prod_a} typically generates an extra "
-                    f"{_inr(gain_m)}/month. Over a year that's {_inr(gain_y)} in incremental revenue "
-                    f"with {_inr(margin_m)}/month in margin.\""
-                )
-            else:
-                value_pitch = (
-                    f"\"Even a small uplift from bundling {prod_b} with {prod_a} can add "
-                    f"{_inr(gain_m)}/month incrementally — it consolidates a delivery and gives "
-                    f"your customer a more complete solution.\""
-                )
-
-            # ── Objection handler
-            if lift >= 3.0:
-                objection = (
-                    f"\"The data is actually quite clear — partners who buy {prod_a} are "
-                    f"{lift:.1f}x more likely than average to also need {prod_b}. "
-                    f"This isn't a speculative pitch, it's a pattern we see reliably.\""
-                )
-            elif lift >= 1.5:
-                objection = (
-                    f"\"The affinity between these two products is {lift:.1f}x above baseline — "
-                    f"meaning this is a real buying signal, not just random co-purchase.\""
-                )
-            else:
-                objection = (
-                    f"\"Even at a {lift:.1f}x lift, this pairing has appeared {freq} times in "
-                    f"real orders. It's worth trialling — we can always adjust next cycle.\""
-                )
-
-            # ── Render script blocks
-            blocks = [
-                ("Opening:", opening),
-                ("Follow-up (if hesitant):", followup),
-                ("Value Pitch:", value_pitch),
-                ("Handle Objection:", objection),
-            ]
-
-            for label, text in blocks:
-                st.markdown(
-                    f"<div style='font-size:11px;font-weight:700;color:#94a3b8;"
-                    f"text-transform:uppercase;letter-spacing:0.07em;margin-top:12px;'>"
-                    f"{label}</div>",
-                    unsafe_allow_html=True,
-                )
-                st.markdown(
-                    f"<div style='background:#1e293b;border-left:3px solid #3b82f6;"
-                    f"border-radius:0 8px 8px 0;padding:10px 14px;font-size:13px;"
-                    f"color:#e2e8f0;line-height:1.7;margin-top:4px;font-style:italic;'>"
-                    f"{text}</div>",
-                    unsafe_allow_html=True,
-                )
-
-            # ── Stats summary row (st.columns avoids unclosed-div React #185 crash)
-            st.markdown("<hr style='border-color:#1e293b;margin:14px 0 8px 0;'>", unsafe_allow_html=True)
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("Frequency", str(freq))
-            s2.metric("Support A", str(supp_a))
-            s3.metric("Support B", str(supp_b))
-            s4.metric("Gain/yr", _inr(gain_y))
-
-
-            # ── Copy button — builds a plain-text version of the script
-            full_script = (
-                f"CROSS-SELL SCRIPT: {prod_a} → {prod_b}\n"
-                f"{'='*55}\n"
-                f"Rule: {prod_a} → {prod_b}\n"
-                f"Confidence: {conf:.0%} | Lift: {lift:.1f}x | Frequency: {freq} | Strength: {strength}\n"
-                f"Est. Monthly Gain: {_inr(gain_m)} | Annual: {_inr(gain_y)} | Margin/mo: {_inr(margin_m)}\n"
-                f"\n--- OPENING ---\n{opening}\n"
-                f"\n--- FOLLOW-UP ---\n{followup}\n"
-                f"\n--- VALUE PITCH ---\n{value_pitch}\n"
-                f"\n--- OBJECTION HANDLER ---\n{objection}\n"
-            )
-            st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
-            with st.expander("📋 Copy Full Script"):
-                st.code(full_script, language=None)
-                st.caption("Click the copy icon (top-right of the code block) to copy.")
-
-        else:
-            st.info("Sales script will appear here once association rules are loaded.")
-
+                st.dataframe(df_cross[[c for c in _display_cols if c in df_cross.columns]],
+                             column_config=_col_cfg, use_container_width=True, hide_index=True)
     st.markdown("---")
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # SECTION 4 — Partner-Specific Recommendations
-    # ─────────────────────────────────────────────────────────────────────────
-    section_header("Partner-Specific Recommendations")
 
-    if ai.strict_view_only:
-        st.info("STRICT_VIEW_ONLY is ON. Partner-specific recommendations use view-backed history.")
+
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SECTION 4 — Partner-First Recommendations
+    # ─────────────────────────────────────────────────────────────────────────
+    st.markdown("---")
+    section_header("🎯 Partner Pitch Engine")
+    st.caption("Select a partner to see which products the algorithm recommends pitching based on their purchase history.")
+
 
     if ai.matrix is not None and not ai.matrix.empty:
         partner_names = sorted(ai.matrix.index.tolist())
@@ -381,47 +404,94 @@ def render(ai):
 
     if not partner_names:
         st.warning("No partner list available. Refresh data.")
-        return
-
-    pc1, pc2 = st.columns([3, 1])
-    with pc1:
-        selected_partner = st.selectbox("Select Partner", partner_names)
-    with pc2:
-        top_n = st.slider("Recommendations", 3, 20, 10, 1)
-
-    partner_recos = ai.get_partner_bundle_recommendations(
-        selected_partner,
-        min_confidence=min_conf,
-        min_lift=min_lift,
-        min_support=min_support,
-        include_low_support=include_low_support,
-        top_n=top_n,
-    )
-
-    if partner_recos.empty:
-        st.warning("No cross-sell opportunities found for this partner with current filters.")
     else:
-        _preco_cols = [
-            "trigger_product", "recommended_product",
-            "confidence", "lift", "frequency", "rule_strength",
-            "expected_gain_monthly", "expected_margin_monthly",
-        ]
-        _preco_cfg = {
-            "trigger_product":        "Bought Product",
-            "recommended_product":    "Recommended Product",
-            "confidence":             st.column_config.NumberColumn("Confidence", format="%.2f"),
-            "lift":                   st.column_config.NumberColumn("Lift", format="%.2f"),
-            "frequency":              st.column_config.NumberColumn("Frequency"),
-            "rule_strength":          "Rule Strength",
-            "expected_gain_monthly":  st.column_config.NumberColumn("₹ Gain/Mo", format="₹%d"),
-            "expected_margin_monthly":st.column_config.NumberColumn("₹ Margin/Mo", format="₹%d"),
-        }
-        st.dataframe(
-            partner_recos[[c for c in _preco_cols if c in partner_recos.columns]],
-            column_config=_preco_cfg,
-            use_container_width=True,
-            hide_index=True,
+        ph_col, top_col = st.columns([3, 1])
+        with ph_col:
+            selected_partner = st.selectbox("🏢 Select Partner", partner_names, key="partner_pitch_sel")
+        with top_col:
+            top_n = st.slider("Top Pitches", 3, 15, 8, 1, key="partner_top_n")
+
+        # Fetch partner's actual recent products
+        if engine:
+            with st.spinner("Loading partner history…"):
+                recent_df = _fetch_partner_recent_products(engine, selected_partner, n=20)
+        else:
+            import pandas as pd
+            recent_df = pd.DataFrame()
+
+        # Get algorithm recommendations
+        partner_recos = ai.get_partner_bundle_recommendations(
+            selected_partner,
+            min_confidence=min_conf,
+            min_lift=min_lift,
+            min_support=min_support,
+            include_low_support=include_low_support,
+            top_n=top_n,
         )
+
+        # ── Partner context strip ────────────────────────────────────────────
+        if not recent_df.empty:
+            last_product  = str(recent_df.iloc[0]["product_name"])
+            last_date     = recent_df.iloc[0]["last_date"]
+            import datetime
+            days_since = (datetime.date.today() - pd.to_datetime(last_date).date()).days
+            total_orders  = int(recent_df["order_count"].sum())
+            top_cats      = recent_df["category"].value_counts().head(2).index.tolist()
+            st.markdown(
+                f"<div style='background:#0f172a;border:1px solid #1e293b;border-radius:10px;"
+                f"padding:12px 18px;margin-bottom:16px;display:flex;gap:32px;align-items:center;'>"
+                f"<div><div style='font-size:11px;color:#64748b;'>Last Product Ordered</div>"
+                f"<div style='color:#e2e8f0;font-weight:600;'>{last_product}</div></div>"
+                f"<div><div style='font-size:11px;color:#64748b;'>Days Since Last Order</div>"
+                f"<div style='color:#f59e0b;font-weight:600;'>{days_since}d ago</div></div>"
+                f"<div><div style='font-size:11px;color:#64748b;'>Total Lines (Last 20 Products)</div>"
+                f"<div style='color:#e2e8f0;font-weight:600;'>{total_orders}</div></div>"
+                f"<div><div style='font-size:11px;color:#64748b;'>Top Categories</div>"
+                f"<div style='color:#38bdf8;font-weight:600;'>{' · '.join(top_cats) if top_cats else '—'}</div></div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            days_since   = 30
+            total_orders = 0
+            last_product = ""
+
+        if partner_recos.empty:
+            st.warning("No cross-sell opportunities found for this partner with current filters.")
+        else:
+            # Enrich recs with category info
+            if cat_map:
+                partner_recos = partner_recos.copy()
+                partner_recos["trigger_cat"] = partner_recos["trigger_product"].map(cat_map).fillna("General")
+                partner_recos["rec_cat"]     = partner_recos["recommended_product"].map(cat_map).fillna("General")
+                partner_recos["bundle_type"] = partner_recos.apply(
+                    lambda r: "🔁 Same-Cat" if r["trigger_cat"] == r["rec_cat"] else "🔀 Cross-Cat", axis=1
+                )
+
+            _preco_cols = [
+                "trigger_product", "recommended_product",
+                "confidence", "lift", "frequency", "rule_strength",
+                "expected_gain_monthly",
+            ]
+            if "bundle_type" in partner_recos.columns:
+                _preco_cols = ["bundle_type"] + _preco_cols
+            _preco_cfg = {
+                "bundle_type":          "Type",
+                "trigger_product":      "Bought Product",
+                "recommended_product":  "Pitch This",
+                "confidence":           st.column_config.NumberColumn("Conf.", format="%.2f"),
+                "lift":                 st.column_config.NumberColumn("Lift", format="%.2f"),
+                "frequency":            st.column_config.NumberColumn("Freq."),
+                "rule_strength":        "Strength",
+                "expected_gain_monthly": st.column_config.NumberColumn("₹ Gain/Mo", format="₹%d"),
+            }
+            st.dataframe(
+                partner_recos[[c for c in _preco_cols if c in partner_recos.columns]],
+                column_config=_preco_cfg,
+                use_container_width=True, hide_index=True,
+            )
+
+
 
     # ─────────────────────────────────────────────────────────────────────────
     # SECTION 5 — Advanced Association Mining

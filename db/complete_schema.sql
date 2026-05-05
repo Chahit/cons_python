@@ -103,7 +103,7 @@ GROUP BY p.product_name;
 DROP MATERIALIZED VIEW IF EXISTS view_ageing_stock;
 CREATE MATERIALIZED VIEW view_ageing_stock AS
 WITH product_stock AS (
-    -- Get current physical stock quantities per product (latest snapshot)
+    -- Raw per-location snapshot rows (all states / warehouses)
     SELECT
         p.id          AS product_id,
         p.product_name,
@@ -116,18 +116,27 @@ WITH product_stock AS (
     JOIN master_products p ON s.product_id = p.id
     WHERE s.disable = false OR s.disable IS NULL
 ),
-latest_stock AS (
-    -- Keep only the most recent snapshot per product
-    SELECT DISTINCT ON (product_id)
-        product_id,
-        product_name,
-        total_stock_qty,
-        stock_snapshot_date
+-- Most-recent snapshot date per product (may differ by state/location)
+max_dates AS (
+    SELECT product_id, MAX(stock_snapshot_date) AS latest_date
     FROM product_stock
-    ORDER BY product_id, stock_snapshot_date DESC
+    GROUP BY product_id
 ),
+-- Sum ALL state / warehouse rows at the latest date → correct national total
+aggregated AS (
+    SELECT
+        ps.product_id,
+        ps.product_name,
+        SUM(ps.total_stock_qty)  AS total_stock_qty,
+        md.latest_date           AS stock_snapshot_date
+    FROM product_stock ps
+    JOIN max_dates md
+         ON  ps.product_id          = md.product_id
+         AND ps.stock_snapshot_date = md.latest_date
+    GROUP BY ps.product_id, ps.product_name, md.latest_date
+),
+-- Last approved sale date per product (for demand-recency age calculation)
 last_sold AS (
-    -- Most recent approved sale date per product
     SELECT
         tp.product_id,
         MAX(t.date)   AS last_sold_date
@@ -137,20 +146,20 @@ last_sold AS (
     GROUP BY tp.product_id
 )
 SELECT
-    ls.product_name,
-    ls.total_stock_qty,
+    a.product_name,
+    a.total_stock_qty,
     CASE
         WHEN s.last_sold_date IS NULL THEN
             -- Product was never sold: age from stock snapshot date
-            GREATEST((CURRENT_DATE - ls.stock_snapshot_date), 0)
+            GREATEST((CURRENT_DATE - a.stock_snapshot_date), 0)
         ELSE
             -- Days since it was last sold (demand recency)
             GREATEST((CURRENT_DATE - s.last_sold_date), 0)
     END               AS max_age_days
-FROM latest_stock ls
-LEFT JOIN last_sold s ON ls.product_id = s.product_id
+FROM aggregated a
+LEFT JOIN last_sold s ON a.product_id = s.product_id
 WHERE
-    ls.total_stock_qty > 10
+    a.total_stock_qty > 10
     AND (
         s.last_sold_date IS NULL                          -- never sold
         OR (CURRENT_DATE - s.last_sold_date) > 60        -- stale > 60 days
