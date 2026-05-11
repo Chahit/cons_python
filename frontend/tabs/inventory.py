@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import sys, os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -22,6 +23,22 @@ def render(ai):
     ai.ensure_clustering()
     skel.empty()
 
+    tab_live, tab_hist = st.tabs(["📊 Live Dead Stock", "📅 Historical View"])
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 1 — LIVE DEAD STOCK (original content)
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_live:
+        _render_live_view(ai)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 2 — HISTORICAL VIEW
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_hist:
+        _render_historical_view(ai)
+
+
+def _render_live_view(ai):
     df_dead = ai.get_dead_stock()
     stats_df = getattr(ai, "df_stock_stats", None)
 
@@ -449,4 +466,196 @@ def render(ai):
             f"🎯 **{n_lookal} lookalike partners** from the same cluster segments have been added — "
             "they buy similar products but haven't purchased this item yet.",
             icon=None,
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Historical Inventory View
+# ─────────────────────────────────────────────────────────────────────────────
+def _render_historical_view(ai):
+    """
+    Shows:
+    1. 12-month trend chart — stale (60+ days) vs total stock units per snapshot week.
+    2. Snapshot date picker — drill into the exact dead-stock picture on any past date.
+    """
+    st.markdown(
+        "<div style='font-size:13px;color:#94a3b8;margin-bottom:16px;'>"
+        "Each data point represents a weekly Monday inventory upload. "
+        "Select any past date to see the full dead-stock breakdown as of that day."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── 1. Trend chart ──────────────────────────────────────────────────────
+    with st.spinner("Loading 12-month inventory trend..."):
+        try:
+            trend_df = ai.repo.fetch_dead_stock_trend(months=12)
+        except Exception as e:
+            st.warning(f"Could not load historical trend: {e}")
+            trend_df = pd.DataFrame()
+
+    if trend_df.empty:
+        banner("No historical snapshot data found in apps.master.stockageing.", "orange")
+    else:
+        trend_df["snapshot_date"] = pd.to_datetime(trend_df["snapshot_date"], errors="coerce")
+        trend_df = trend_df.dropna(subset=["snapshot_date"]).sort_values("snapshot_date")
+        trend_df["stale_stock_units"] = pd.to_numeric(trend_df["stale_stock_units"], errors="coerce").fillna(0)
+        trend_df["total_stock_units"] = pd.to_numeric(trend_df["total_stock_units"], errors="coerce").fillna(0)
+        trend_df["total_products"]    = pd.to_numeric(trend_df["total_products"],    errors="coerce").fillna(0)
+
+        # KPI row
+        latest = trend_df.iloc[-1]
+        oldest = trend_df.iloc[0]
+        stale_change = latest["stale_stock_units"] - oldest["stale_stock_units"]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Snapshots Available", f"{len(trend_df)}")
+        c2.metric("Latest Stale Units", f"{int(latest['stale_stock_units']):,}")
+        c3.metric(
+            "Change vs 12M Ago",
+            f"{int(stale_change):+,} units",
+            delta_color="inverse",
+        )
+        c4.metric("Products Tracked (Latest)", f"{int(latest['total_products']):,}")
+
+        st.markdown("#### 📈 Stale Stock Trend (60+ day units)")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=trend_df["snapshot_date"],
+            y=trend_df["total_stock_units"],
+            name="Total Stock Units",
+            fill="tozeroy",
+            line=dict(color="#3b82f6", width=2),
+            fillcolor="rgba(59,130,246,0.08)",
+            hovertemplate="%{x|%d %b %Y}<br>Total: %{y:,.0f} units<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=trend_df["snapshot_date"],
+            y=trend_df["stale_stock_units"],
+            name="Stale Stock (60+ days)",
+            fill="tozeroy",
+            line=dict(color="#ef4444", width=2.5),
+            fillcolor="rgba(239,68,68,0.12)",
+            hovertemplate="%{x|%d %b %Y}<br>Stale: %{y:,.0f} units<extra></extra>",
+        ))
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(title="Snapshot Date", gridcolor="#1e2235"),
+            yaxis=dict(title="Stock Units", gridcolor="#1e2235"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            height=360,
+            margin=dict(l=0, r=0, t=10, b=0),
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── 2. Snapshot date picker ─────────────────────────────────────────────
+    st.markdown("#### 🗓️ Drill Into a Specific Snapshot Date")
+
+    with st.spinner("Fetching available snapshot dates..."):
+        try:
+            snap_dates = ai.repo.fetch_available_snapshot_dates()
+        except Exception as e:
+            st.warning(f"Could not fetch snapshot dates: {e}")
+            snap_dates = []
+
+    if not snap_dates:
+        banner("No historical snapshots available in the database yet.", "orange")
+        return
+
+    # Format for display
+    date_labels = {d: d.strftime("%d %b %Y (%A)") for d in snap_dates}
+    selected_snap = st.selectbox(
+        "Select snapshot date",
+        options=snap_dates,
+        format_func=lambda d: date_labels.get(d, str(d)),
+        index=0,
+        key="inv_hist_snap",
+    )
+
+    with st.spinner(f"Loading dead stock as of {selected_snap.strftime('%d %b %Y')}..."):
+        try:
+            snap_df = ai.repo.fetch_ageing_stock_snapshot(selected_snap)
+        except Exception as e:
+            st.error(f"Failed to load snapshot: {e}")
+            return
+
+    if snap_df is None or snap_df.empty:
+        st.info(f"No dead stock recorded on {selected_snap.strftime('%d %b %Y')}.")
+        return
+
+    snap_df["total_stock_qty"] = pd.to_numeric(snap_df["total_stock_qty"], errors="coerce").fillna(0)
+    snap_df["max_age_days"]    = pd.to_numeric(snap_df["max_age_days"],    errors="coerce").fillna(0)
+
+    # Summary metrics
+    total_units = int(snap_df["total_stock_qty"].sum())
+    n_products  = len(snap_df)
+    oldest_days = int(snap_df["max_age_days"].max())
+    worst_item  = snap_df.loc[snap_df["max_age_days"].idxmax(), "product_name"] if n_products > 0 else "—"
+
+    st.markdown(
+        f"<div style='background:#0f1117;border:1px solid #f59e0b44;border-radius:10px;"
+        f"padding:14px 20px;margin-bottom:14px;'>"
+        f"<b style='color:#f59e0b;'>Snapshot: {selected_snap.strftime('%d %B %Y')}</b> &nbsp;—&nbsp; "
+        f"<span style='color:#e2e8f0;'>{n_products} dead-stock products &nbsp;|&nbsp; "
+        f"{total_units:,} total units &nbsp;|&nbsp; "
+        f"Oldest item: <b>{worst_item}</b> ({oldest_days} days)</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    # Age bucket bar chart for the selected snapshot
+    b60  = snap_df[snap_df["max_age_days"] <= 60]["total_stock_qty"].sum()
+    b90  = snap_df[(snap_df["max_age_days"] > 60) & (snap_df["max_age_days"] <= 90)]["total_stock_qty"].sum()
+    b180 = snap_df[(snap_df["max_age_days"] > 90) & (snap_df["max_age_days"] <= 180)]["total_stock_qty"].sum()
+    b365 = snap_df[snap_df["max_age_days"] > 180]["total_stock_qty"].sum()
+
+    bucket_fig = px.bar(
+        pd.DataFrame({
+            "Age Bucket": ["60-90 Days", "90-180 Days", "180+ Days", ">1 Year"],
+            "Units":      [b60, b90, b180, b365],
+        }),
+        x="Age Bucket", y="Units",
+        color="Age Bucket",
+        color_discrete_map={
+            "60-90 Days":  "#f59e0b",
+            "90-180 Days": "#f97316",
+            "180+ Days":   "#ef4444",
+            ">1 Year":     "#7f1d1d",
+        },
+        text="Units",
+        title=f"Dead Stock by Age — {selected_snap.strftime('%d %b %Y')}",
+    )
+    bucket_fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+    bucket_fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        height=300, showlegend=False,
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
+    st.plotly_chart(bucket_fig, use_container_width=True)
+
+    # Full product table
+    with st.expander(f"📋 Full Product List ({n_products} items)", expanded=True):
+        display_df = snap_df[["product_name", "total_stock_qty", "max_age_days"]].copy()
+        display_df = display_df.sort_values("max_age_days", ascending=False)
+        display_df["max_age_days"] = display_df["max_age_days"].astype(int)
+        display_df["total_stock_qty"] = display_df["total_stock_qty"].astype(int)
+        st.dataframe(
+            display_df,
+            column_config={
+                "product_name":    "Product",
+                "total_stock_qty": st.column_config.NumberColumn("Stock Units", format="%d"),
+                "max_age_days":    st.column_config.NumberColumn("Age (Days)", format="%d"),
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        csv = display_df.to_csv(index=False)
+        st.download_button(
+            f"⬇️ Download Snapshot ({selected_snap.strftime('%d %b %Y')})",
+            csv,
+            f"inventory_snapshot_{selected_snap.isoformat()}.csv",
+            "text/csv",
         )

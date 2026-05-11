@@ -211,6 +211,37 @@ class DataRepository:
             df["product_group"] = "General"
         return df
 
+    def fetch_dead_stock_trend(self, months: int = 12):
+        """
+        Returns total & stale (60+ day) stock units per weekly snapshot date
+        over the last `months` months. Used for the historical trend chart.
+        Stale = days_61_to_90_qty + days_above_90_qty already aged on that date.
+        """
+        try:
+            return pd.read_sql(
+                f"""
+                SELECT
+                    to_date                                     AS snapshot_date,
+                    COUNT(DISTINCT product_id)                  AS total_products,
+                    SUM(days_61_to_90_qty + days_above_90_qty)  AS stale_stock_units,
+                    SUM(days_0_to_15_qty + days_16_to_30_qty
+                        + days_31_to_60_qty + days_61_to_90_qty
+                        + days_above_90_qty)                    AS total_stock_units
+                FROM "apps.master.stockageing"
+                WHERE (disable = false OR disable IS NULL)
+                  AND to_date >= CURRENT_DATE - INTERVAL '{int(months)} months'
+                GROUP BY to_date
+                ORDER BY to_date
+                """,
+                self.engine,
+            )
+        except Exception as e:
+            print(f"[fetch_dead_stock_trend] {e}")
+            return pd.DataFrame(columns=[
+                "snapshot_date", "total_products",
+                "stale_stock_units", "total_stock_units",
+            ])
+
     def fetch_table_data(self, table_name):
         """Generic table fetcher for raw data modeling"""
         try:

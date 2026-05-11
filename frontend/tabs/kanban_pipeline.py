@@ -128,6 +128,7 @@ def _build_kanban_df(_pf_df, _df_hash: str = ""):
         "churn_probability", "credit_risk_band",
         "recent_90_revenue", "prev_90_revenue", "revenue_drop_pct", "revenue_at_risk",
         "cluster_label", "cluster_type", "recency_days",
+        "recent_txns", "days_since_first_purchase",
     ]
     df = _pf_df.reset_index()
     if "company_name" not in df.columns and "index" in df.columns:
@@ -148,6 +149,8 @@ def _build_kanban_df(_pf_df, _df_hash: str = ""):
         ("prev_90_revenue", 0.0),
         ("revenue_drop_pct", None),
         ("revenue_at_risk", None),
+        ("recent_txns", 0),
+        ("days_since_first_purchase", 9999),
     ]:
         if col not in df.columns:
             df[col] = default
@@ -255,6 +258,7 @@ def _recompute_segments_for_period(
     recency     = pd.to_numeric(df.get("recency_days",      pd.Series(0,   index=df.index)), errors="coerce").fillna(0)
     lifetime    = pd.to_numeric(df.get("lifetime_revenue",  pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
     recent_txns = pd.to_numeric(df.get("recent_txns",       pd.Series(0,   index=df.index)), errors="coerce").fillna(0)
+    days_first  = pd.to_numeric(df.get("days_since_first_purchase", pd.Series(9999, index=df.index)), errors="coerce").fillna(9999)
 
     rev_tier_pct     = th["rev_tier_pct"]
     rev_tier_q       = float(scaled_rev.quantile(rev_tier_pct)) if len(scaled_rev) > 0 else 0.0
@@ -275,18 +279,32 @@ def _recompute_segments_for_period(
         rok  = bool(recency_ok.get(i, True))
         ltv  = float(lifetime.get(i, 0)     or 0)
         txns = float(recent_txns.get(i, 0)  or 0)
+        dfp  = float(days_first.get(i, 9999) or 9999)  # days since first purchase
 
         is_top10_ltv = ltv >= ltv_p90 and ltv_p90 > 0
         is_abs_floor = sr  >= abs_floor_scaled and abs_floor_scaled > 0
 
+        # Partner joined Consistent in the last 3-6 months: first purchase
+        # between 90 and 180 days ago (relative to data_last_date / today).
+        is_new_partner = 90 <= dfp <= 180
+        # Partners with < 6 months history cannot be Champion — no track record.
+        is_too_new_for_champion = dfp < 180
+
         # Industry Silver tier: growth velocity gate.
-        # Requires positive QoQ (>=5%) AND >= 2 purchases to prevent
-        # single-order false positives. Stable + highly engaged also qualifies.
+        # Path A: positive QoQ (>=5%) AND >= 2 purchases (original logic)
+        # Path B: newly onboarded partner (3-6 months) actively buying (>= 1 txn)
         growth_velocity_ok = (
             sr > 0 and cp < 0.55 and hs < th["score_champ"] and rok
             and (
-                (gr >= 0.05 and txns >= 2)
-                or (gr >= -0.05 and txns >= 3 and cp < 0.30)
+                # Path A – growth velocity (original)
+                (
+                    (
+                        (gr >= 0.05 and txns >= 2)
+                        or (gr >= -0.05 and txns >= 3 and cp < 0.30)
+                    )
+                )
+                # Path B – new partner (3-6 months) with at least 1 purchase
+                or (is_new_partner and txns >= 1)
             )
         )
 
@@ -300,16 +318,28 @@ def _recompute_segments_for_period(
             segments.append("Critical")
         # ❜ Lifetime Revenue Shield
         elif is_top10_ltv and sr > 0 and cp < 0.50 and dp < 30.0:
-            segments.append("Champion")
+            if is_too_new_for_champion:
+                segments.append("Emerging")
+            else:
+                segments.append("Champion")
         # ❝ Score path
         elif hs >= th["score_champ"] and dp < th["drop_champ"] and cp < th["churn_champ"] and rok:
-            segments.append("Champion")
+            if is_too_new_for_champion:
+                segments.append("Emerging")
+            else:
+                segments.append("Champion")
         # ❞ Revenue-tier Champion
         elif sr >= rev_tier_q and sr > 0 and cp < th["rev_tier_churn"] and dp < th["rev_tier_drop"] and hs >= th["rev_tier_score"] and rok:
-            segments.append("Champion")
+            if is_too_new_for_champion:
+                segments.append("Emerging")
+            else:
+                segments.append("Champion")
         # ❟ Absolute revenue floor
         elif is_abs_floor and sr > 0 and cp < th["abs_churn_cap"] and dp < th["abs_drop_cap"] and rok:
-            segments.append("Champion")
+            if is_too_new_for_champion:
+                segments.append("Emerging")
+            else:
+                segments.append("Champion")
         # ❠ Emerging: growth velocity gate (industry Silver tier)
         elif growth_velocity_ok:
             segments.append("Emerging")

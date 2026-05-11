@@ -369,7 +369,8 @@ class BaseLoaderMixin:
                     WHERE t.date >= (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '180 days'
                       AND t.date < (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '90 days'
                 ) AS category_count_prev,
-                MAX(t.date)::date AS last_purchase_date
+                MAX(t.date)::date AS last_purchase_date,
+                MIN(t.date)::date AS first_purchase_date
             FROM transactions_dsr t
             JOIN transactions_dsr_products tp ON t.id = tp.dsr_id
             LEFT JOIN master_products p ON tp.product_id = p.id
@@ -395,6 +396,7 @@ class BaseLoaderMixin:
             COALESCE(ss.category_count, 0) AS category_count,
             COALESCE(ss.category_count_prev, 0) AS category_count_prev,
             ss.last_purchase_date,
+            ss.first_purchase_date,
             (SELECT last_recorded_date FROM max_date_cte) AS data_last_date,
             COALESCE(v.revenue_volatility, 0) AS revenue_volatility
         FROM master_party mp
@@ -413,11 +415,19 @@ class BaseLoaderMixin:
         features["last_purchase_date"] = pd.to_datetime(
             features["last_purchase_date"], errors="coerce"
         )
+        features["first_purchase_date"] = pd.to_datetime(
+            features["first_purchase_date"], errors="coerce"
+        )
         features["data_last_date"] = pd.to_datetime(
             features["data_last_date"], errors="coerce"
         )
         features["recency_days"] = (
             features["data_last_date"] - features["last_purchase_date"]
+        ).dt.days.fillna(9999)
+        # How many days ago did this partner place their FIRST order with Consistent?
+        # Used to identify "New Partners" (3–6 months = 90–180 days) for Emerging lane.
+        features["days_since_first_purchase"] = (
+            features["data_last_date"] - features["first_purchase_date"]
         ).dt.days.fillna(9999)
 
         prev = features["prev_90_revenue"].replace(0, np.nan)
@@ -590,7 +600,11 @@ class BaseLoaderMixin:
         ltv_p90 = float(_lifetime_rev.quantile(0.90)) if len(_lifetime_rev) > 0 else 0.0
         _lrev_rank = _lifetime_rev.rank(pct=True)      # also used in labels below
 
-        # ── Emerging signal: acceleration on a smaller base (unchanged) ─────
+        # ── Emerging signal ────────────────────────────────────────────────
+        # Two distinct paths into the Emerging lane:
+        #   Path A (Growth Velocity): smaller-base partner with positive QoQ momentum
+        #   Path B (New Partner):     joined Consistent in last 3-6 months and is
+        #                             actively purchasing in the most recent 90-day window
         rev_p65 = f["recent_90_revenue"].quantile(0.65)
         cat_div = pd.to_numeric(
             f["category_diversity_change"] if "category_diversity_change" in f.columns else _zero,
@@ -600,18 +614,33 @@ class BaseLoaderMixin:
             f["recent_txns"] if "recent_txns" in f.columns else _zero,
             errors="coerce",
         ).fillna(0.0)
-        f["_emerging_flag"] = (
-            (f["recent_90_revenue"] > 0)
-            & (f["growth_rate_90d"] >= -0.05)
+        _days_first = pd.to_numeric(
+            f["days_since_first_purchase"] if "days_since_first_purchase" in f.columns
+            else pd.Series(9999, index=f.index),
+            errors="coerce",
+        ).fillna(9999)
+        # New partner window: first purchase was 3-6 months ago (90-180 days)
+        _is_new_partner = (_days_first >= 90) & (_days_first <= 180)
+
+        # Path A: classic growth-velocity emerging (unchanged logic)
+        _path_a = (
+            (f["growth_rate_90d"] >= -0.05)
             & (
-                # Growth velocity gate: positive QoQ + minimum purchase count
                 ((f["growth_rate_90d"] >= 0.05) & (_recent_txns_s >= 2))
-                # OR stable + highly engaged (3+ purchases, very low churn)
                 | ((f["growth_rate_90d"] >= -0.05) & (_recent_txns_s >= 3) & (churn_p < 0.30))
             )
             & (cat_div >= -1)
-            & (churn_p < 0.55)
             & (f["recent_90_revenue"] <= rev_p65)
+        )
+        # Path B: newly onboarded partner (3-6 months) actively buying
+        _path_b = (
+            _is_new_partner
+            & (_recent_txns_s >= 1)
+        )
+        f["_emerging_flag"] = (
+            (f["recent_90_revenue"] > 0)
+            & (churn_p < 0.55)
+            & (_path_a | _path_b)
         )
 
         # ── Five-segment classification (evaluation order is critical) ──────
@@ -621,7 +650,11 @@ class BaseLoaderMixin:
             cp      = float(churn_p.get(row.Index, 0) or 0)
             ltv     = float(_lifetime_rev.get(row.Index, 0) or 0)
             lrev_r  = float(_lrev_rank.get(row.Index, 0) or 0)
+            dfp     = float(_days_first.get(row.Index, 9999) or 9999)  # days since first purchase
             is_top10_ltv = ltv >= ltv_p90 and ltv_p90 > 0
+            # Partners who joined < 6 months ago have no track record long enough
+            # to justify Champion status — cap them at Emerging regardless of score.
+            is_too_new_for_champion = dfp < 180
 
             # ① Hard override: revenue stopped after buying previously
             if row.recent_90_revenue <= 0 and row.prev_90_revenue > 0:
@@ -633,19 +666,28 @@ class BaseLoaderMixin:
             #    + no revenue freefall → unconditionally Champion.
             #    These accounts define the business; they cannot be At Risk
             #    solely because their YoY growth rate plateaued at scale.
+            #    Exception: partners < 6 months old are redirected to Emerging.
             elif (
                 is_top10_ltv
                 and row.recent_90_revenue > 0
                 and cp < 0.50
                 and row.revenue_drop_pct < 30.0
             ):
-                segments.append("Champion")
-                statuses.append("Champion (Elite Account — Top-10% LTV)")
+                if is_too_new_for_champion:
+                    segments.append("Emerging")
+                    statuses.append("Emerging (New Partner — High Potential)")
+                else:
+                    segments.append("Champion")
+                    statuses.append("Champion (Elite Account — Top-10% LTV)")
 
             # ③ Champion: score path — high composite + growing + low churn
             elif row.health_score >= 0.72 and row.revenue_drop_pct < 10 and cp < 0.35:
-                segments.append("Champion")
-                statuses.append("Champion (High Performer)")
+                if is_too_new_for_champion:
+                    segments.append("Emerging")
+                    statuses.append("Emerging (New Partner — High Potential)")
+                else:
+                    segments.append("Champion")
+                    statuses.append("Champion (High Performer)")
 
             # ④ Champion: revenue-tier path — top-20% recent rev + not truly churning
             elif (
@@ -654,8 +696,12 @@ class BaseLoaderMixin:
                 and row.revenue_drop_pct < 25.0
                 and row.health_score >= 0.40
             ):
-                segments.append("Champion")
-                statuses.append("Champion (Volume Leader)")
+                if is_too_new_for_champion:
+                    segments.append("Emerging")
+                    statuses.append("Emerging (New Partner — High Potential)")
+                else:
+                    segments.append("Champion")
+                    statuses.append("Champion (Volume Leader)")
 
             # ⑤ Emerging: acceleration signals on a smaller base
             elif f.at[row.Index, "_emerging_flag"]:
