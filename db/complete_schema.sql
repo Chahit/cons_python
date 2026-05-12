@@ -208,26 +208,65 @@ ORDER BY vas.max_age_days DESC, historical_revenue DESC;
 
 
 -- --------------------------------------------------------------
--- 1E. view_product_associations
+-- 1E. view_product_associations  (FIXED — basket-based counting)
+--
 --     Pre-computed product co-purchase frequencies for the
 --     Market Basket (MBA) module.
+--
+--     KEY FIX: Old definition used COUNT(DISTINCT t.id) — invoice count.
+--     If partner X placed 11 invoices in July buying both A and B, the old
+--     view counted 11 co-occurrences. The correct MBA basket unit is ONE
+--     occurrence per (partner, month) pair, regardless of invoice count.
+--     This inflated times_bought_together by ~14% and cut computed
+--     confidence values nearly in half.
+--
+--     New definition matches the Python _load_associations_with_metrics()
+--     query exactly: DISTINCT (party_id, YYYY-MM, product_name) baskets.
+--     Also stores support_a / support_b so callers can compute
+--     confidence and lift without an extra query.
 -- --------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS view_product_associations AS
+DROP MATERIALIZED VIEW IF EXISTS view_product_associations;
+CREATE MATERIALIZED VIEW view_product_associations AS
+WITH baskets AS (
+    SELECT DISTINCT
+        t.party_id,
+        TO_CHAR(t.date, 'YYYY-MM') AS sale_month,
+        p.product_name
+    FROM transactions_dsr t
+    JOIN transactions_dsr_products tp ON t.id = tp.dsr_id
+    JOIN master_products p            ON tp.product_id = p.id
+    WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+),
+product_support AS (
+    SELECT product_name, COUNT(*) AS product_basket_count
+    FROM baskets
+    GROUP BY product_name
+),
+pair_support AS (
+    SELECT
+        a.product_name AS item_1,
+        b.product_name AS item_2,
+        COUNT(*)       AS times_bought_together,
+        COUNT(DISTINCT a.party_id) AS unique_buyers_together
+    FROM baskets a
+    JOIN baskets b
+      ON  a.party_id   = b.party_id
+      AND a.sale_month = b.sale_month
+      AND a.product_name < b.product_name
+    GROUP BY a.product_name, b.product_name
+    HAVING COUNT(*) >= 2
+)
 SELECT
-    p1.product_name             AS item_1,
-    p2.product_name             AS item_2,
-    COUNT(DISTINCT t.id)        AS times_bought_together,
-    COUNT(DISTINCT t.party_id)  AS unique_buyers_together
-FROM transactions_dsr t
-JOIN transactions_dsr_products tp1 ON tp1.dsr_id  = t.id
-JOIN transactions_dsr_products tp2 ON tp2.dsr_id  = t.id
-                                   AND tp2.product_id > tp1.product_id   -- avoid duplicates
-JOIN master_products p1             ON p1.id = tp1.product_id
-JOIN master_products p2             ON p2.id = tp2.product_id
-WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
-GROUP BY p1.product_name, p2.product_name
-HAVING COUNT(DISTINCT t.id) >= 2     -- minimum support threshold
-ORDER BY times_bought_together DESC;
+    ps.item_1,
+    ps.item_2,
+    ps.times_bought_together,
+    ps.unique_buyers_together,
+    psa.product_basket_count AS support_a,
+    psb.product_basket_count AS support_b
+FROM pair_support ps
+LEFT JOIN product_support psa ON psa.product_name = ps.item_1
+LEFT JOIN product_support psb ON psb.product_name = ps.item_2
+ORDER BY ps.times_bought_together DESC;
 
 
 -- --------------------------------------------------------------

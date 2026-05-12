@@ -414,11 +414,66 @@ def _render_live_view(ai):
             return f"Bulk Buyer ({txns} orders, avg {avg}/order)"
         return f"Frequent ({txns} orders, avg {avg}/order)"
 
-    # Guard: remove any duplicate columns before apply (prevents DataFrame return)
     leads = leads.loc[:, ~leads.columns.duplicated()]
     leads["purchase_pattern"] = leads.apply(_purchase_pattern, axis=1, result_type="reduce")
 
-    leads = leads.sort_values("buyer_past_purchase_qty", ascending=False)
+    # ── Lead Scoring — rank buyers by recency + frequency + volume ────────────
+    # Formula (higher = better lead):
+    #   50% recency score   : 1 / (1 + days_since_last_purchase / 30)  → max 1.0 if bought today
+    #   30% frequency score : log(purchase_txn_count + 1) normalised
+    #   20% volume score    : log(buyer_past_purchase_qty + 1) normalised
+    #
+    # This ensures a buyer who bought 500 units last week scores higher than
+    # someone who bought 5,000 units 18 months ago.
+    if "last_purchase_date" in leads.columns:
+        today = pd.Timestamp("today").normalize()
+        leads["last_purchase_date"] = pd.to_datetime(leads["last_purchase_date"], errors="coerce")
+        leads["_days_since"] = (today - leads["last_purchase_date"]).dt.days.fillna(999).clip(lower=0)
+    else:
+        leads["_days_since"] = 999
+
+    import numpy as np
+    leads["_recency_score"]   = 1.0 / (1.0 + leads["_days_since"] / 30.0)
+    leads["_freq_raw"]        = np.log1p(leads["purchase_txn_count"].clip(lower=0))
+    leads["_vol_raw"]         = np.log1p(leads["buyer_past_purchase_qty"].clip(lower=0))
+
+    # Normalise frequency and volume to [0, 1] within this product's buyer set
+    def _norm(s):
+        mn, mx = s.min(), s.max()
+        return (s - mn) / (mx - mn) if mx > mn else pd.Series(0.5, index=s.index)
+
+    leads["_freq_score"] = _norm(leads["_freq_raw"])
+    leads["_vol_score"]  = _norm(leads["_vol_raw"])
+
+    leads["lead_score"] = (
+        0.50 * leads["_recency_score"]
+      + 0.30 * leads["_freq_score"]
+      + 0.20 * leads["_vol_score"]
+    ).round(3)
+
+    # ── Lead Warmth label ─────────────────────────────────────────────────────
+    def _warmth(row):
+        if row.get("Audience Type", "").startswith("Lookalike"):
+            return "🎯 Lookalike"
+        d = row["_days_since"]
+        if d <= 90:
+            return "🔥 Hot"
+        elif d <= 365:
+            return "🟡 Warm"
+        else:
+            return "🔵 Cold"
+
+    leads["Lead Warmth"] = leads.apply(_warmth, axis=1, result_type="reduce")
+
+    # Drop internal scoring columns
+    leads.drop(columns=[c for c in ["_days_since","_recency_score","_freq_raw",
+                                     "_vol_raw","_freq_score","_vol_score"] if c in leads.columns],
+               inplace=True)
+
+    # Sort: Past Buyers by lead_score DESC, Lookalikes appended at bottom
+    past   = leads[~leads["Audience Type"].str.startswith("Lookalike", na=False)].sort_values("lead_score", ascending=False)
+    lookal = leads[leads["Audience Type"].str.startswith("Lookalike",  na=False)]
+    leads  = pd.concat([past, lookal], ignore_index=True)
 
     # ── Header + Export ──────────────────────────────────────────────────────
     col_hdr, col_dl = st.columns([3, 1])
@@ -439,10 +494,18 @@ def _render_live_view(ai):
             use_container_width=True,
         )
 
-    # ── Display table ────────────────────────────────────────────────────────
+    if leads.empty:
+        st.warning(
+            "⚠️ No historical buyers found for this product. "
+            "It may be a new SKU or was never sold through the DSR system. "
+            "Consider running a cold outreach campaign to partners in similar product categories."
+        )
+        return
+
     _display_cols = [c for c in [
-        "potential_buyer", "mobile_no", "state_name", "Audience Type",
-        "buyer_past_purchase_qty", "purchase_pattern", "last_purchase_date",
+        "potential_buyer", "mobile_no", "state_name", "Lead Warmth",
+        "Audience Type", "buyer_past_purchase_qty", "purchase_pattern",
+        "last_purchase_date", "lead_score",
     ] if c in leads.columns]
 
     st.dataframe(
@@ -451,12 +514,17 @@ def _render_live_view(ai):
             "potential_buyer":        "Partner Name",
             "mobile_no":              "Contact Number",
             "state_name":             "Area (State)",
+            "Lead Warmth":            "Lead Warmth",
             "Audience Type":          "Audience Strategy",
             "buyer_past_purchase_qty": st.column_config.NumberColumn(
                 "Total Qty Bought", format="%d"
             ),
             "purchase_pattern":       "Purchase Pattern",
             "last_purchase_date":     "Last Purchase",
+            "lead_score":             st.column_config.NumberColumn(
+                "Lead Score", format="%.2f",
+                help="0–1 score: 50% recency + 30% frequency + 20% volume. Higher = contact first."
+            ),
         },
         use_container_width=True,
         hide_index=True,

@@ -34,21 +34,27 @@ class AssociationsMixin:
             try:
                 df = self.repo.fetch_view_product_associations(limit=2000)
                 if not df.empty:
-                    # View-first fast path: derive lightweight defaults to keep UI/ranking functional.
-                    max_pair = float(df["times_bought_together"].max()) if "times_bought_together" in df.columns else 1.0
-                    max_pair = max(max_pair, 1.0)
+                    # The rebuilt view now stores support_a and support_b (basket counts).
+                    # Use them for correct confidence/lift instead of the old proxy
+                    # that normalised by max_pair (statistically wrong).
                     if "support_a" not in df.columns:
                         df["support_a"] = df["times_bought_together"].astype(float)
                     if "support_b" not in df.columns:
                         df["support_b"] = df["times_bought_together"].astype(float)
+                    # Approximate total baskets from the largest support value
+                    total_baskets = float(df[["support_a", "support_b"]].max().max()) or 1.0
                     if "confidence_a_to_b" not in df.columns:
+                        # P(B|A) = times_together / support_a
                         df["confidence_a_to_b"] = (
-                            df["times_bought_together"].astype(float) / max_pair
-                        ).clip(0.05, 1.0)
+                            df["times_bought_together"].astype(float)
+                            / df["support_a"].replace(0, 1)
+                        ).clip(0.0, 1.0)
                     if "lift_a_to_b" not in df.columns:
-                        df["lift_a_to_b"] = 1.0 + (
-                            df["times_bought_together"].astype(float) / max_pair
-                        )
+                        # lift = P(B|A) / P(B) where P(B) = support_b / total_baskets
+                        p_b = (df["support_b"].astype(float) / total_baskets).replace(0, 1)
+                        df["lift_a_to_b"] = (
+                            df["confidence_a_to_b"] / p_b
+                        ).clip(0.0, 50.0)
                     if "expected_revenue_gain" not in df.columns:
                         df["expected_revenue_gain"] = (
                             df["times_bought_together"].astype(float) * 1000.0
