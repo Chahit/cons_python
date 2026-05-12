@@ -31,6 +31,7 @@ LEFT JOIN master_city mc    ON mc.id  = mp.city_id
 LEFT JOIN transactions_dsr t
        ON t.party_id = mp.id
       AND LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+      AND t.is_active = true
 LEFT JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
 GROUP BY mp.id, mp.company_name, mp.mobile_no, ms.state_name, mc.name;
 

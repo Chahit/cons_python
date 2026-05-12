@@ -19,6 +19,8 @@ def fetch_yoy_kpis(engine, party_id: int, start: date, end: date) -> dict:
                       COUNT(DISTINCT t.id)         AS orders
                FROM transactions_dsr t
                JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+               JOIN due_payment dp ON dp.dsr_id = t.id
+                    AND dp.is_active = TRUE AND dp.deleted_at IS NULL
                WHERE LOWER(CAST(t.is_approved AS TEXT))='true'
                  AND t.party_id=%(pid)s
                  AND t.date BETWEEN %(s)s AND %(e)s""",
@@ -193,6 +195,8 @@ def fetch_multi_partner_kpis(engine, party_ids: list, start: date, end: date) ->
                           MAX(t.date)                   AS last_order
                    FROM transactions_dsr t
                    JOIN transactions_dsr_products tp ON tp.dsr_id=t.id
+                   JOIN due_payment dp ON dp.dsr_id = t.id
+                        AND dp.is_active = TRUE AND dp.deleted_at IS NULL
                    JOIN master_party mp ON mp.id=t.party_id
                    WHERE LOWER(CAST(t.is_approved AS TEXT))='true'
                      AND t.party_id=%(pid)s
@@ -214,6 +218,8 @@ def fetch_multi_monthly(engine, party_id: int, name: str, start: date, end: date
                       ROUND(SUM(tp.net_amt)::NUMERIC,2)  AS revenue
                FROM transactions_dsr t
                JOIN transactions_dsr_products tp ON tp.dsr_id=t.id
+               JOIN due_payment dp ON dp.dsr_id = t.id
+                    AND dp.is_active = TRUE AND dp.deleted_at IS NULL
                WHERE LOWER(CAST(t.is_approved AS TEXT))='true'
                  AND t.party_id=%(pid)s
                  AND t.date BETWEEN %(s)s AND %(e)s

@@ -65,6 +65,8 @@ def _load_geo_summary(_engine):
                 LEFT JOIN transactions_dsr t
                        ON t.party_id = mp.id
                       AND LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+                LEFT JOIN due_payment dp ON dp.dsr_id = t.id
+                      AND dp.is_active = TRUE AND dp.deleted_at IS NULL
                 LEFT JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
                 GROUP BY mp.id, mp.company_name, mp.mobile_no, ms.state_name, mc.name
                 HAVING COUNT(DISTINCT t.id) > 0
@@ -90,6 +92,8 @@ def _fetch_partner_kpis(_engine, party_id: int, start: date, end: date) -> dict:
                 MAX(t.date)                    AS last_order
             FROM transactions_dsr t
             JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+            JOIN due_payment dp ON dp.dsr_id = t.id
+                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
             WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
               AND t.party_id = %(pid)s
               AND t.date BETWEEN %(s)s AND %(e)s
@@ -128,6 +132,8 @@ def _fetch_product_breakdown(_engine, party_id: int, start: date, end: date) -> 
                 MAX(t.date)                             AS last_purchased
             FROM transactions_dsr t
             JOIN transactions_dsr_products tp  ON tp.dsr_id = t.id
+            JOIN due_payment dp ON dp.dsr_id = t.id
+                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
             JOIN master_products p             ON p.id = tp.product_id
             LEFT JOIN master_group mg          ON mg.id = p.group_id
             LEFT JOIN master_product_category mpc ON mpc.id = mg.category_id_id
@@ -156,6 +162,8 @@ def _fetch_monthly_revenue(_engine, party_id: int, start: date, end: date) -> pd
                 COUNT(DISTINCT t.id)               AS orders
             FROM transactions_dsr t
             JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+            JOIN due_payment dp ON dp.dsr_id = t.id
+                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
             WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
               AND t.party_id = %(pid)s
               AND t.date BETWEEN %(s)s AND %(e)s
@@ -189,6 +197,8 @@ def _fetch_alltime_history(_engine, party_id: int):
                 MAX(t.date)                             AS last_purchased
             FROM transactions_dsr t
             JOIN transactions_dsr_products tp  ON tp.dsr_id = t.id
+            JOIN due_payment dp ON dp.dsr_id = t.id
+                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
             JOIN master_products p             ON p.id = tp.product_id
             LEFT JOIN master_group mg          ON mg.id = p.group_id
             LEFT JOIN master_product_category mpc ON mpc.id = mg.category_id_id
@@ -207,7 +217,7 @@ def _fmt_inr(val: float) -> str:
     if val >= 1_00_00_000:
         return f"₹{val/1_00_00_000:.2f} Cr"
     if val >= 1_00_000:
-        return f"₹{val/1_00_000:.2f} L"
+        return f"₹{val/1_00_00_000:.2f} L"
     return f"₹{val:,.0f}"
 
 
@@ -224,6 +234,8 @@ def _fetch_overview_stats(_engine, party_ids: tuple, start: date, end: date) -> 
                        COUNT(DISTINCT t.id)         AS period_orders
                 FROM transactions_dsr t
                 JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+                JOIN due_payment dp ON dp.dsr_id = t.id
+                     AND dp.is_active = TRUE AND dp.deleted_at IS NULL
                 JOIN master_party mp ON mp.id = t.party_id
                 WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
                   AND t.party_id IN ({ids_str})
