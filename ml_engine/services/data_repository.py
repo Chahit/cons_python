@@ -18,85 +18,90 @@ class DataRepository:
 
     def fetch_view_ageing_stock(self):
         """
-        Fetch current live stock aggregated across ALL branch warehouses (area_id).
+        Fetch dead/stale stock using ageing bucket columns directly.
 
-        Strategy:
-          - Uses the most recent snapshot date (max to_date) as the AGE ANCHOR —
-            not CURRENT_DATE — so age numbers don't drift between weekly uploads.
-          - Does NOT restrict rows to only the latest to_date. Some products may not
-            appear in every weekly upload; DISTINCT ON across ALL dates ensures every
-            product with any ageing row is included (no missing products).
-          1. DISTINCT ON (product_id, area_id) ORDER BY to_date DESC
-             -> picks the most recent snapshot row per (product, branch), any date
-          2. SUM branch_stock_qty GROUP BY product
-             -> correct national total (all 15-16 warehouses, no double-counting)
+        KEY FIX — why the old query was wrong:
+          The old filter `(snap_date - MAX(last_sold_date)) > 60` drops any product
+          that had even ONE recent sale, even if 99% of its stock has been sitting
+          for 90+ days. e.g. CPU COOLER with 15,940 aged units was invisible because
+          someone bought 1 unit 8 days ago.
 
-        Falls back to the materialized view if the raw table is inaccessible.
+        The apps.master.stockageing table already pre-computes how old the stock is:
+          days_61_to_90_qty  = units sitting 61-90 days  (stale)
+          days_above_90_qty  = units sitting 90+ days    (critical dead stock)
+
+        Correct approach:
+          stale_qty = days_61_to_90_qty + days_above_90_qty  per branch
+          Show a product if SUM(stale_qty) > 0 across all branches.
+          The total_stock_qty shown is also only the stale portion.
+          age_days = derived from last_sold (for display) but NOT used as a filter.
         """
         try:
             return pd.read_sql(
                 """
-                WITH latest_snapshot_date AS (
-                    -- Age anchor: the most recent Monday upload date.
+                WITH snap AS (
                     SELECT MAX(to_date) AS snap_date
                     FROM "apps.master.stockageing"
                     WHERE (disable = false OR disable IS NULL)
                 ),
-                latest_per_branch AS (
-                    -- Most recent row per (product, branch) across ALL upload dates.
-                    -- No date filter here — so products not in the latest batch
-                    -- but present in older batches are still included.
+                branch_stock AS (
                     SELECT DISTINCT ON (s.product_id, s.area_id)
-                        p.id          AS product_id,
+                        p.id           AS product_id,
                         p.product_name,
-                        (s.days_0_to_15_qty + s.days_16_to_30_qty +
-                         s.days_31_to_60_qty + s.days_61_to_90_qty +
-                         s.days_above_90_qty) AS branch_stock_qty,
-                        s.to_date     AS stock_snapshot_date
+                        -- Total stock at this branch (all age buckets)
+                        COALESCE(s.days_0_to_15_qty,  0)
+                      + COALESCE(s.days_16_to_30_qty, 0)
+                      + COALESCE(s.days_31_to_60_qty, 0)
+                      + COALESCE(s.days_61_to_90_qty, 0)
+                      + COALESCE(s.days_above_90_qty, 0) AS total_branch_qty,
+                        -- Stale stock at this branch (60+ day buckets only)
+                        COALESCE(s.days_61_to_90_qty, 0)
+                      + COALESCE(s.days_above_90_qty, 0) AS stale_branch_qty,
+                        s.to_date AS stock_snapshot_date
                     FROM "apps.master.stockageing" s
+                    CROSS JOIN snap
                     JOIN master_products p ON s.product_id = p.id
                     WHERE (s.disable = false OR s.disable IS NULL)
+                      AND s.to_date = snap.snap_date
                     ORDER BY s.product_id, s.area_id, s.to_date DESC
                 ),
                 aggregated AS (
                     SELECT
                         product_id,
                         product_name,
-                        SUM(branch_stock_qty)    AS total_stock_qty,
+                        SUM(total_branch_qty) AS total_stock_qty,
+                        SUM(stale_branch_qty) AS stale_stock_qty,
                         MAX(stock_snapshot_date) AS stock_snapshot_date
-                    FROM latest_per_branch
+                    FROM branch_stock
                     GROUP BY product_id, product_name
                 ),
                 last_sold AS (
+                    -- Used ONLY for display (age_days label) — NOT for filtering
                     SELECT tp.product_id, MAX(t.date) AS last_sold_date
                     FROM transactions_dsr_products tp
                     JOIN transactions_dsr t ON tp.dsr_id = t.id
                     WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
-                      AND t.date <= (SELECT snap_date FROM latest_snapshot_date)
+                      AND t.date <= (SELECT snap_date FROM snap)
                     GROUP BY tp.product_id
-                ),
-                ref AS (SELECT snap_date FROM latest_snapshot_date)
+                )
                 SELECT
                     a.product_name,
-                    a.total_stock_qty,
+                    a.stale_stock_qty   AS total_stock_qty,
                     CASE
-                        WHEN s.last_sold_date IS NULL
-                            THEN GREATEST(((SELECT snap_date FROM ref) - a.stock_snapshot_date), 0)
+                        WHEN ls.last_sold_date IS NULL
+                            THEN GREATEST(((SELECT snap_date FROM snap)::date - a.stock_snapshot_date), 0)
                         ELSE
-                            GREATEST(((SELECT snap_date FROM ref) - s.last_sold_date), 0)
+                            GREATEST(((SELECT snap_date FROM snap)::date - ls.last_sold_date), 0)
                     END AS max_age_days
                 FROM aggregated a
-                LEFT JOIN last_sold s ON a.product_id = s.product_id
-                WHERE a.total_stock_qty > 10
-                  AND (
-                        s.last_sold_date IS NULL
-                        OR ((SELECT snap_date FROM ref) - s.last_sold_date) > 60
-                  )
+                LEFT JOIN last_sold ls ON a.product_id = ls.product_id
+                WHERE a.stale_stock_qty > 0
                 ORDER BY max_age_days DESC
                 """,
                 self.engine,
             )
-        except Exception:
+        except Exception as e:
+            print(f"[fetch_view_ageing_stock] failed: {e}, falling back to materialized view")
             return pd.read_sql(
                 "SELECT product_name, total_stock_qty, max_age_days FROM view_ageing_stock",
                 self.engine,
@@ -211,22 +216,119 @@ class DataRepository:
         return df
 
     def fetch_view_stock_liquidation_leads(self):
-        df = pd.read_sql("SELECT * FROM view_stock_liquidation_leads", self.engine)
-        # Normalize: DB view uses historical_qty_bought, frontend expects buyer_past_purchase_qty
-        if "historical_qty_bought" in df.columns and "buyer_past_purchase_qty" not in df.columns:
-            df = df.rename(columns={"historical_qty_bought": "buyer_past_purchase_qty"})
-        # Ensure purchase_txn_count exists (for purchase pattern analysis)
-        if "purchase_txn_count" not in df.columns:
-            df["purchase_txn_count"] = 1
-        # Ensure state_name exists (for Area column)
-        if "state_name" not in df.columns:
-            df["state_name"] = "Unknown"
-        # Ensure product_category exists (for category filter)
-        if "product_category" not in df.columns:
-            df["product_category"] = "General"
-        # Ensure product_group exists
-        if "product_group" not in df.columns:
-            df["product_group"] = "General"
+        """
+        Fetch stale dead stock + buyer leads using bucket-based stale detection.
+
+        Uses days_61_to_90_qty + days_above_90_qty directly as the stale
+        quantity signal. This matches the stockageing table's design intent
+        and does NOT drop products that had any recent sale.
+        """
+        try:
+            df = pd.read_sql(
+                """
+                WITH snap AS (
+                    SELECT MAX(to_date) AS snap_date
+                    FROM "apps.master.stockageing"
+                    WHERE (disable = false OR disable IS NULL)
+                ),
+                branch_stock AS (
+                    SELECT DISTINCT ON (s.product_id, s.area_id)
+                        p.id           AS product_id,
+                        p.product_name,
+                        COALESCE(s.days_0_to_15_qty,  0)
+                      + COALESCE(s.days_16_to_30_qty, 0)
+                      + COALESCE(s.days_31_to_60_qty, 0)
+                      + COALESCE(s.days_61_to_90_qty, 0)
+                      + COALESCE(s.days_above_90_qty, 0) AS total_branch_qty,
+                        COALESCE(s.days_61_to_90_qty, 0)
+                      + COALESCE(s.days_above_90_qty, 0) AS stale_branch_qty,
+                        s.to_date AS stock_snapshot_date
+                    FROM "apps.master.stockageing" s
+                    CROSS JOIN snap
+                    JOIN master_products p ON s.product_id = p.id
+                    WHERE (s.disable = false OR s.disable IS NULL)
+                      AND s.to_date = snap.snap_date
+                    ORDER BY s.product_id, s.area_id, s.to_date DESC
+                ),
+                aggregated AS (
+                    SELECT
+                        product_id,
+                        product_name,
+                        SUM(total_branch_qty) AS total_stock_qty,
+                        SUM(stale_branch_qty) AS stale_stock_qty,
+                        MAX(stock_snapshot_date) AS stock_snapshot_date
+                    FROM branch_stock
+                    GROUP BY product_id, product_name
+                ),
+                last_sold AS (
+                    SELECT tp.product_id, MAX(t.date) AS last_sold_date
+                    FROM transactions_dsr_products tp
+                    JOIN transactions_dsr t ON tp.dsr_id = t.id
+                    WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+                      AND t.date <= (SELECT snap_date FROM snap)
+                    GROUP BY tp.product_id
+                ),
+                dead_stock AS (
+                    SELECT
+                        a.product_id,
+                        a.product_name   AS dead_stock_item,
+                        a.stale_stock_qty AS qty_in_stock,
+                        CASE
+                            WHEN ls.last_sold_date IS NULL
+                                THEN GREATEST(((SELECT snap_date FROM snap)::date - a.stock_snapshot_date), 0)
+                            ELSE
+                                GREATEST(((SELECT snap_date FROM snap)::date - ls.last_sold_date), 0)
+                        END AS max_age_days
+                    FROM aggregated a
+                    LEFT JOIN last_sold ls ON a.product_id = ls.product_id
+                    WHERE a.stale_stock_qty > 0
+                )
+                SELECT
+                    ds.dead_stock_item,
+                    ds.qty_in_stock,
+                    ds.max_age_days,
+                    mp.company_name                          AS potential_buyer,
+                    mp.mobile_no                             AS mobile_no,
+                    mp.id                                    AS party_id,
+                    COALESCE(ms.state_name,    'Unknown')   AS state_name,
+                    COALESCE(mg.group_name,    'General')   AS product_group,
+                    COALESCE(mpc.category_name,'General')   AS product_category,
+                    MAX(t.date)                              AS last_purchase_date,
+                    SUM(tp.qty)                              AS buyer_past_purchase_qty,
+                    COUNT(DISTINCT t.id)                     AS purchase_txn_count,
+                    SUM(tp.net_amt)                          AS historical_revenue
+                FROM dead_stock ds
+                JOIN master_products p                ON p.id = ds.product_id
+                LEFT JOIN master_group mg             ON p.group_id = mg.id
+                LEFT JOIN master_product_category mpc ON mg.category_id_id = mpc.id
+                JOIN transactions_dsr_products tp     ON tp.product_id = p.id
+                JOIN transactions_dsr t               ON t.id = tp.dsr_id
+                                                     AND LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+                JOIN master_party mp                  ON mp.id = t.party_id
+                LEFT JOIN master_state ms             ON mp.state_id = ms.id
+                GROUP BY
+                    ds.dead_stock_item, ds.qty_in_stock, ds.max_age_days,
+                    mp.company_name, mp.mobile_no, mp.id,
+                    ms.state_name, mg.group_name, mpc.category_name
+                ORDER BY ds.max_age_days DESC, historical_revenue DESC
+                """,
+                self.engine,
+            )
+        except Exception as e:
+            print(f"[fetch_stock_leads] query failed ({e}), falling back to materialized view")
+            df = pd.read_sql("SELECT * FROM view_stock_liquidation_leads", self.engine)
+            if "historical_qty_bought" in df.columns and "buyer_past_purchase_qty" not in df.columns:
+                df = df.rename(columns={"historical_qty_bought": "buyer_past_purchase_qty"})
+
+        for col, default in [
+            ("purchase_txn_count",      1),
+            ("state_name",              "Unknown"),
+            ("product_category",        "General"),
+            ("product_group",           "General"),
+            ("buyer_past_purchase_qty", 0),
+        ]:
+            if col not in df.columns:
+                df[col] = default
         return df
 
     def fetch_dead_stock_trend(self, months: int = 12):

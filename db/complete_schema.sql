@@ -94,52 +94,62 @@ GROUP BY p.product_name;
 
 
 -- --------------------------------------------------------------
--- 1C. view_ageing_stock  (FIXED — real date-based calculation)
---     Dead stock detection: identifies products with stock
---     remaining and NO sale in the last 60+ days.
---     max_age_days = CURRENT_DATE - last transaction date for
---     each product (using approved transactions).
+-- 1C. view_ageing_stock  (FIXED — bucket-based stale detection)
+--     Dead stock detection: identifies products with stock sitting
+--     60+ days using the pre-computed ageing bucket columns directly.
+--
+--     KEY FIX: The old approach filtered on (CURRENT_DATE - last_sold_date) > 60
+--     which incorrectly dropped products that had any recent sale, even if
+--     thousands of units had been sitting for 90+ days.
+--
+--     Correct approach: use days_61_to_90_qty + days_above_90_qty directly.
+--     These are pre-computed per branch per snapshot — the table already
+--     knows what is stale. No last_sold join needed for filtering.
 -- --------------------------------------------------------------
 DROP MATERIALIZED VIEW IF EXISTS view_ageing_stock;
 CREATE MATERIALIZED VIEW view_ageing_stock AS
-WITH product_stock AS (
-    -- Raw per-location snapshot rows (all states / warehouses)
-    SELECT
-        p.id          AS product_id,
+WITH snap AS (
+    -- Use the most recent snapshot date as reference
+    SELECT MAX(to_date) AS snap_date
+    FROM "apps.master.stockageing"
+    WHERE (disable = false OR disable IS NULL)
+),
+branch_stock AS (
+    -- One row per (product, branch) from the latest snapshot only
+    SELECT DISTINCT ON (s.product_id, s.area_id)
+        p.id            AS product_id,
         p.product_name,
-        (
-            s.days_0_to_15_qty  + s.days_16_to_30_qty +
-            s.days_31_to_60_qty + s.days_61_to_90_qty  + s.days_above_90_qty
-        )             AS total_stock_qty,
-        s.to_date     AS stock_snapshot_date
+        COALESCE(s.days_0_to_15_qty,  0)
+      + COALESCE(s.days_16_to_30_qty, 0)
+      + COALESCE(s.days_31_to_60_qty, 0)
+      + COALESCE(s.days_61_to_90_qty, 0)
+      + COALESCE(s.days_above_90_qty, 0) AS total_branch_qty,
+        -- Stale = sitting 61+ days per the ageing buckets
+        COALESCE(s.days_61_to_90_qty, 0)
+      + COALESCE(s.days_above_90_qty, 0) AS stale_branch_qty,
+        s.to_date       AS stock_snapshot_date
     FROM "apps.master.stockageing" s
+    CROSS JOIN snap
     JOIN master_products p ON s.product_id = p.id
-    WHERE s.disable = false OR s.disable IS NULL
+    WHERE (s.disable = false OR s.disable IS NULL)
+      AND s.to_date = snap.snap_date
+    ORDER BY s.product_id, s.area_id, s.to_date DESC
 ),
--- Most-recent snapshot date per product (may differ by state/location)
-max_dates AS (
-    SELECT product_id, MAX(stock_snapshot_date) AS latest_date
-    FROM product_stock
-    GROUP BY product_id
-),
--- Sum ALL state / warehouse rows at the latest date → correct national total
 aggregated AS (
     SELECT
-        ps.product_id,
-        ps.product_name,
-        SUM(ps.total_stock_qty)  AS total_stock_qty,
-        md.latest_date           AS stock_snapshot_date
-    FROM product_stock ps
-    JOIN max_dates md
-         ON  ps.product_id          = md.product_id
-         AND ps.stock_snapshot_date = md.latest_date
-    GROUP BY ps.product_id, ps.product_name, md.latest_date
+        product_id,
+        product_name,
+        SUM(total_branch_qty) AS total_stock_qty,
+        SUM(stale_branch_qty) AS stale_stock_qty,
+        MAX(stock_snapshot_date) AS stock_snapshot_date
+    FROM branch_stock
+    GROUP BY product_id, product_name
 ),
--- Last approved sale date per product (for demand-recency age calculation)
 last_sold AS (
+    -- Used for age display only — NOT for filtering
     SELECT
         tp.product_id,
-        MAX(t.date)   AS last_sold_date
+        MAX(t.date) AS last_sold_date
     FROM transactions_dsr_products tp
     JOIN transactions_dsr t ON tp.dsr_id = t.id
     WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
@@ -147,23 +157,16 @@ last_sold AS (
 )
 SELECT
     a.product_name,
-    a.total_stock_qty,
+    a.stale_stock_qty                               AS total_stock_qty,
     CASE
         WHEN s.last_sold_date IS NULL THEN
-            -- Product was never sold: age from stock snapshot date
             GREATEST((CURRENT_DATE - a.stock_snapshot_date), 0)
         ELSE
-            -- Days since it was last sold (demand recency)
             GREATEST((CURRENT_DATE - s.last_sold_date), 0)
-    END               AS max_age_days
+    END                                             AS max_age_days
 FROM aggregated a
 LEFT JOIN last_sold s ON a.product_id = s.product_id
-WHERE
-    a.total_stock_qty > 10
-    AND (
-        s.last_sold_date IS NULL                          -- never sold
-        OR (CURRENT_DATE - s.last_sold_date) > 60        -- stale > 60 days
-    )
+WHERE a.stale_stock_qty > 0
 ORDER BY max_age_days DESC;
 
 
