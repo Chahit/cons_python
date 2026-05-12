@@ -403,13 +403,23 @@ def render(ai):
                 )
                 _assoc_prod = ai.get_associations(
                     search_term=sel_product, min_confidence=0.0, min_lift=0.0,
-                    min_support=1, include_low_support=True, limit=300,
+                    min_support=1, include_low_support=True, limit=2000,
                 )
                 trigger_prods: tuple = ()
                 if not _assoc_prod.empty:
-                    t_from_b = _assoc_prod[_assoc_prod["product_b"] == sel_product]["product_a"].tolist()
-                    t_from_a = _assoc_prod[_assoc_prod["product_a"] == sel_product]["product_b"].tolist()
-                    trigger_prods = tuple(set(t_from_b + t_from_a))[:15]
+                    # Collect triggers from BOTH directions: A→product and product→A
+                    # Using product_b == sel_product gives rules where sel_product is recommended
+                    # Using product_a == sel_product gives rules where sel_product is the trigger
+                    # Both sides surface partners likely to be interested
+                    t_from_b = _assoc_prod[
+                        _assoc_prod["product_b"] == sel_product
+                    ]["product_a"].tolist()
+                    t_from_a = _assoc_prod[
+                        _assoc_prod["product_a"] == sel_product
+                    ]["product_b"].tolist()
+                    # No arbitrary cap — use all triggers, sorted by frequency descending
+                    # (the DB prospect query caps rows anyway)
+                    trigger_prods = tuple(set(t_from_b + t_from_a))
 
                 existing_names: tuple = tuple(buyers_df["company_name"].tolist()) if not buyers_df.empty else ()
                 prospects_df = (
@@ -418,28 +428,48 @@ def render(ai):
                 )
 
                 if engine and not buyers_df.empty and hasattr(ai, "matrix") and ai.matrix is not None and "cluster_label" in ai.matrix.columns:
-                    buyer_clusters = ai.matrix.loc[ai.matrix.index.intersection(existing_names), "cluster_label"]
+                    buyer_clusters = ai.matrix.loc[
+                        ai.matrix.index.intersection(existing_names), "cluster_label"
+                    ]
                     if not buyer_clusters.empty:
                         top_clusters = buyer_clusters.value_counts().head(2).index.tolist()
                         cluster_prospects = ai.matrix[
-                            ai.matrix["cluster_label"].isin(top_clusters) & 
-                            (~ai.matrix.index.isin(existing_names))
+                            ai.matrix["cluster_label"].isin(top_clusters)
+                            & (~ai.matrix.index.isin(existing_names))
                         ].copy()
                         if not cluster_prospects.empty:
-                            cluster_prospects["company_name"] = cluster_prospects.index
-                            cluster_prospects["mobile_no"] = "—"
-                            cluster_prospects["state_name"] = cluster_prospects.get("state", "Unknown")
-                            cluster_prospects["trigger_product"] = "Cluster Peer (" + cluster_prospects["cluster_label"].astype(str) + ")"
-                            cluster_prospects["trigger_qty"] = 0
+                            cluster_prospects["company_name"]   = cluster_prospects.index
+                            cluster_prospects["mobile_no"]      = "—"
+                            cluster_prospects["state_name"]     = cluster_prospects.get("state", "Unknown")
+                            cluster_prospects["trigger_product"] = "🎯 Lookalike (" + cluster_prospects["cluster_label"].astype(str) + ")"
+                            cluster_prospects["trigger_qty"]    = 0
                             cluster_prospects["trigger_orders"] = 0
                             cluster_prospects["last_purchase_date"] = pd.NaT
-                            cluster_df = cluster_prospects[["company_name", "mobile_no", "state_name", "trigger_product", "trigger_qty", "trigger_orders", "last_purchase_date"]]
-                            
+                            cluster_df = cluster_prospects[[
+                                "company_name", "mobile_no", "state_name",
+                                "trigger_product", "trigger_qty", "trigger_orders",
+                                "last_purchase_date",
+                            ]]
+                            # Lookalikes always go to the bottom — real co-purchase signals rank higher
                             if prospects_df.empty:
                                 prospects_df = cluster_df.reset_index(drop=True)
                             else:
-                                prospects_df = pd.concat([prospects_df, cluster_df]).drop_duplicates(subset=["company_name"])
-                                prospects_df = prospects_df.sort_values(["trigger_qty", "trigger_orders"], ascending=[False, False]).reset_index(drop=True)
+                                # Combine: real prospects first (already sorted by trigger_qty),
+                                # then lookalikes appended after
+                                prospects_df = pd.concat(
+                                    [prospects_df, cluster_df], ignore_index=True
+                                ).drop_duplicates(subset=["company_name"])
+                                # Sort: real triggers first (trigger_qty > 0), lookalikes last
+                                prospects_df["_is_lookalike"] = prospects_df["trigger_qty"] == 0
+                                prospects_df = (
+                                    prospects_df
+                                    .sort_values(
+                                        ["_is_lookalike", "trigger_qty", "trigger_orders"],
+                                        ascending=[True, False, False],
+                                    )
+                                    .drop(columns=["_is_lookalike"])
+                                    .reset_index(drop=True)
+                                )
 
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Proven Buyers", f"{len(buyers_df)}")
@@ -545,163 +575,160 @@ def render(ai):
         model_name = str(getattr(ai, "gemini_model", "gemini-1.5-flash"))
         key = str(getattr(ai, "gemini_api_key", "")).strip()
 
+        # ── Recommendation Plan (cached per partner, triggered by button) ────
+        _plan_cache_key = f"_reco_plan_{selected_partner}_{top_n}"
+        plan = st.session_state.get(_plan_cache_key, None)
 
+        _btn_col, _info_col = st.columns([1, 4])
+        with _btn_col:
+            _gen_plan = st.button(
+                "Generate Recommendation Plan",
+                key="reco_plan_btn",
+                help="Runs AI analysis to build a personalised action plan. Results are cached until you change the partner.",
+                use_container_width=True,
+            )
+        with _info_col:
+            if plan is None:
+                st.info("💡 Click **Generate Recommendation Plan** to run AI analysis for this partner.")
+            else:
+                st.success(f"✅ Showing cached plan for **{selected_partner}**. Re-click to refresh.")
 
+        if _gen_plan:
+            with st.spinner("Generating recommendation plan..."):
+                plan = ai.get_partner_recommendation_plan(
+                    partner_name=selected_partner,
+                    top_n=int(top_n),
+                    use_genai=True,
+                    api_key=key if key else None,
+                    model=model_name,
+                )
+            st.session_state[_plan_cache_key] = plan
+            st.rerun()
 
-    # ── Recommendation Plan (cached per partner, triggered by button) ────────
-    _plan_cache_key = f"_reco_plan_{selected_partner}_{top_n}"
-    plan = st.session_state.get(_plan_cache_key, None)
-
-    _btn_col, _info_col = st.columns([1, 4])
-    with _btn_col:
-        _gen_plan = st.button(
-            "Generate Recommendation Plan",
-            key="reco_plan_btn",
-            help="Runs AI analysis to build a personalised action plan. Results are cached until you change the partner.",
-            use_container_width=True,
-        )
-    with _info_col:
         if plan is None:
-            st.info("💡 Click **Generate Recommendation Plan** to run AI analysis for this partner.")
+            st.caption("No plan generated yet. Click the button above to start.")
         else:
-            st.success(f"✅ Showing cached plan for **{selected_partner}**. Re-click to refresh.")
-
-    if _gen_plan:
-        with st.spinner("Generating recommendation plan..."):
-            plan = ai.get_partner_recommendation_plan(
-                partner_name=selected_partner,
-                top_n=int(top_n),
-                use_genai=True,
-                api_key=key if key else None,
-                model=model_name,
-            )
-        st.session_state[_plan_cache_key] = plan
-        st.rerun()
-
-    if plan is None:
-        return
-
-    # --- Export Buttons ---
-    rex1, rex2, rex3 = st.columns([1, 1, 4])
-    with rex1:
-        reco_pdf = export_recommendation_plan_pdf(selected_partner, plan)
-        st.download_button(
-            "\u2B07 Download PDF",
-            data=reco_pdf,
-            file_name=f"Reco_Plan_{selected_partner.replace(' ', '_')}.pdf",
-            mime="application/pdf",
-            key="reco_pdf",
-        )
-    with rex2:
-        reco_xls = export_recommendation_plan_excel(selected_partner, plan)
-        st.download_button(
-            "\u2B07 Download Excel",
-            data=reco_xls,
-            file_name=f"Reco_Plan_{selected_partner.replace(' ', '_')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="reco_xlsx",
-        )
-
-    st.markdown("---")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("Partner", str(plan.get("partner_name", selected_partner)))
-    with c2:
-        st.metric(
-            "Segment",
-            f"{plan.get('cluster_label', 'Unknown')} ({plan.get('cluster_type', 'Unknown')})",
-        )
-    st.info(f"Suggested Sequence: {plan.get('sequence_summary', 'N/A')}")
-
-    actions = plan.get("actions", []) or []
-    bundles = ai.get_partner_bundle_recommendations(partner_name=selected_partner, top_n=5)
-
-
-    explanation = plan.get("plain_language_explanation", {}) or {}
-
-    # ======================================================================
-    # Enhanced Recommendations (Bandits + Collaborative + Learned Scoring)
-    # ======================================================================
-    st.markdown("---")
-    if explanation and isinstance(explanation, dict):
-        st.subheader("Recommendation Explanation (Plain Language)")
-        summary = str(explanation.get("summary", "")).strip()
-        if summary:
-            st.info(summary)
-        reasons = explanation.get("reasons", []) or []
-        if isinstance(reasons, list):
-            for idx, reason in enumerate(reasons, start=1):
-                st.write(f"{idx}. {reason}")
-
-        signals = explanation.get("model_signals", {}) or {}
-        if isinstance(signals, dict) and signals:
-            s1, s2, s3 = st.columns(3)
-            with s1:
-                st.metric(
-                    "Peer Gap (Top Category)",
-                    f"{float(signals.get('peer_gap_delta_pct', 0.0)):.1f}%",
+            # --- Export Buttons ---
+            rex1, rex2, rex3 = st.columns([1, 1, 4])
+            with rex1:
+                reco_pdf = export_recommendation_plan_pdf(selected_partner, plan)
+                st.download_button(
+                    "\u2B07 Download PDF",
+                    data=reco_pdf,
+                    file_name=f"Reco_Plan_{selected_partner.replace(' ', '_')}.pdf",
+                    mime="application/pdf",
+                    key="reco_pdf",
                 )
-            with s2:
-                st.metric(
-                    "Churn Probability",
-                    f"{float(signals.get('churn_probability', 0.0)) * 100:.1f}%",
+            with rex2:
+                reco_xls = export_recommendation_plan_excel(selected_partner, plan)
+                st.download_button(
+                    "\u2B07 Download Excel",
+                    data=reco_xls,
+                    file_name=f"Reco_Plan_{selected_partner.replace(' ', '_')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="reco_xlsx",
                 )
-            with s3:
+
+            st.markdown("---")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Partner", str(plan.get("partner_name", selected_partner)))
+            with c2:
                 st.metric(
-                    "Credit Risk",
-                    f"{float(signals.get('credit_risk_score', 0.0)) * 100:.1f}%",
+                    "Segment",
+                    f"{plan.get('cluster_label', 'Unknown')} ({plan.get('cluster_type', 'Unknown')})",
                 )
-    elif explanation and isinstance(explanation, str):
-        st.subheader("Recommendation Explanation")
-        st.info(explanation)
+            st.info(f"Suggested Sequence: {plan.get('sequence_summary', 'N/A')}")
 
-    st.markdown("---")
-    st.subheader("📨 Personalized Pitch Scripts")
-    st.caption("Built from your inventory, partner purchase history, and affinity signals — no generic discounts.")
+            actions = plan.get("actions", []) or []
+            bundles = ai.get_partner_bundle_recommendations(partner_name=selected_partner, top_n=5)
 
-    if not actions:
-        st.info("Generate recommendations first to create pitch scripts.")
-    else:
-        seq_options = [int(a.get("sequence", i + 1)) for i, a in enumerate(actions)]
-        selected_seq = st.selectbox("Pick Recommendation", seq_options, index=0, key="rh_seq_sel")
+            explanation = plan.get("plain_language_explanation", {}) or {}
 
-        sel_action  = next((a for a in actions if int(a.get("sequence", 0)) == selected_seq), actions[0])
-        rec_product = str(sel_action.get("recommended_offer", "") or "")
+            # ==================================================================
+            # Enhanced Recommendations (Bandits + Collaborative + Learned Scoring)
+            # ==================================================================
+            st.markdown("---")
+            if explanation and isinstance(explanation, dict):
+                st.subheader("Recommendation Explanation (Plain Language)")
+                summary = str(explanation.get("summary", "")).strip()
+                if summary:
+                    st.info(summary)
+                reasons = explanation.get("reasons", []) or []
+                if isinstance(reasons, list):
+                    for idx, reason in enumerate(reasons, start=1):
+                        st.write(f"{idx}. {reason}")
 
-        # Affinity triggers from bundle recs
-        trigger_prods = [str(r.trigger_product) for r in bundles.itertuples()] if not bundles.empty else []
+                signals = explanation.get("model_signals", {}) or {}
+                if isinstance(signals, dict) and signals:
+                    s1, s2, s3 = st.columns(3)
+                    with s1:
+                        st.metric(
+                            "Peer Gap (Top Category)",
+                            f"{float(signals.get('peer_gap_delta_pct', 0.0)):.1f}%",
+                        )
+                    with s2:
+                        st.metric(
+                            "Churn Probability",
+                            f"{float(signals.get('churn_probability', 0.0)) * 100:.1f}%",
+                        )
+                    with s3:
+                        st.metric(
+                            "Credit Risk",
+                            f"{float(signals.get('credit_risk_score', 0.0)) * 100:.1f}%",
+                        )
+            elif explanation and isinstance(explanation, str):
+                st.subheader("Recommendation Explanation")
+                st.info(explanation)
 
-        # Partner context
-        _engine = getattr(ai, "engine", None)
-        partner_ctx = _fetch_partner_context(_engine, selected_partner) if _engine else {}
+            st.markdown("---")
+            st.subheader("📨 Personalized Pitch Scripts")
+            st.caption("Built from your inventory, partner purchase history, and affinity signals — no generic discounts.")
 
-        scripts = _build_personalized_scripts(
-            partner_name     = selected_partner,
-            rec_product      = rec_product,
-            trigger_products = trigger_prods,
-            partner_ctx      = partner_ctx,
-            cluster_label    = str(plan.get("cluster_label", "")),
-            health_segment   = str(plan.get("health_segment", "")),
-        )
+            if not actions:
+                st.info("Generate recommendations first to create pitch scripts.")
+            else:
+                seq_options = [int(a.get("sequence", i + 1)) for i, a in enumerate(actions)]
+                selected_seq = st.selectbox("Pick Recommendation", seq_options, index=0, key="rh_seq_sel")
 
-        wa_col, em_col = st.columns(2)
-        with wa_col:
-            st.markdown(
-                "<div style='background:#0f172a;border:1px solid #25d366;border-radius:10px;"
-                "padding:10px 14px;margin-bottom:8px;font-size:12px;font-weight:700;color:#25d366;'>"
-                "💬 WhatsApp Message</div>", unsafe_allow_html=True,
-            )
-            st.text_area("WhatsApp", value=scripts["whatsapp"], height=190, key="rh_wa",
-                         label_visibility="collapsed")
-        with em_col:
-            st.markdown(
-                "<div style='background:#0f172a;border:1px solid #3b82f6;border-radius:10px;"
-                "padding:10px 14px;margin-bottom:8px;font-size:12px;font-weight:700;color:#3b82f6;'>"
-                "📧 Email</div>", unsafe_allow_html=True,
-            )
-            st.text_input("Subject", value=scripts["email_subject"], key="rh_subj")
-            st.text_area("Email Body", value=scripts["email_body"], height=150, key="rh_email",
-                         label_visibility="collapsed")
+                sel_action  = next((a for a in actions if int(a.get("sequence", 0)) == selected_seq), actions[0])
+                rec_product = str(sel_action.get("recommended_offer", "") or "")
+
+                # Affinity triggers from bundle recs
+                trigger_prods = [str(r.trigger_product) for r in bundles.itertuples()] if not bundles.empty else []
+
+                # Partner context
+                _engine = getattr(ai, "engine", None)
+                partner_ctx = _fetch_partner_context(_engine, selected_partner) if _engine else {}
+
+                scripts = _build_personalized_scripts(
+                    partner_name     = selected_partner,
+                    rec_product      = rec_product,
+                    trigger_products = trigger_prods,
+                    partner_ctx      = partner_ctx,
+                    cluster_label    = str(plan.get("cluster_label", "")),
+                    health_segment   = str(plan.get("health_segment", "")),
+                )
+
+                wa_col, em_col = st.columns(2)
+                with wa_col:
+                    st.markdown(
+                        "<div style='background:#0f172a;border:1px solid #25d366;border-radius:10px;"
+                        "padding:10px 14px;margin-bottom:8px;font-size:12px;font-weight:700;color:#25d366;'>"
+                        "💬 WhatsApp Message</div>", unsafe_allow_html=True,
+                    )
+                    st.text_area("WhatsApp", value=scripts["whatsapp"], height=190, key="rh_wa",
+                                 label_visibility="collapsed")
+                with em_col:
+                    st.markdown(
+                        "<div style='background:#0f172a;border:1px solid #3b82f6;border-radius:10px;"
+                        "padding:10px 14px;margin-bottom:8px;font-size:12px;font-weight:700;color:#3b82f6;'>"
+                        "📧 Email</div>", unsafe_allow_html=True,
+                    )
+                    st.text_input("Subject", value=scripts["email_subject"], key="rh_subj")
+                    st.text_area("Email Body", value=scripts["email_body"], height=150, key="rh_email",
+                                 label_visibility="collapsed")
+
 
 
 

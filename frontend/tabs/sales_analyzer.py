@@ -217,7 +217,7 @@ def _fmt_inr(val: float) -> str:
     if val >= 1_00_00_000:
         return f"₹{val/1_00_00_000:.2f} Cr"
     if val >= 1_00_000:
-        return f"₹{val/1_00_00_000:.2f} L"
+        return f"₹{val/1_00_000:.2f} L"
     return f"₹{val:,.0f}"
 
 
