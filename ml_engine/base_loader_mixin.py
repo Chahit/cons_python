@@ -340,6 +340,8 @@ class BaseLoaderMixin:
                 SUM(tp.net_amt) AS monthly_revenue
             FROM transactions_dsr t
             JOIN transactions_dsr_products tp ON t.id = tp.dsr_id
+            JOIN due_payment dp ON dp.dsr_id = t.id
+                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
             WHERE {approved}
             GROUP BY t.party_id, DATE_TRUNC('month', t.date)
         ),
@@ -373,6 +375,8 @@ class BaseLoaderMixin:
                 MIN(t.date)::date AS first_purchase_date
             FROM transactions_dsr t
             JOIN transactions_dsr_products tp ON t.id = tp.dsr_id
+            JOIN due_payment dp ON dp.dsr_id = t.id
+                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
             LEFT JOIN master_products p ON tp.product_id = p.id
             WHERE {approved}
             GROUP BY t.party_id

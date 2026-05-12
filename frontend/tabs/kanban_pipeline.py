@@ -362,10 +362,10 @@ def _recompute_segments_for_period(
 def _fetch_custom_period_revenue(_engine, start_dt: date, end_dt: date) -> pd.DataFrame:
     """
     Query the DB for actual partner revenue within [start_dt, end_dt].
+    Matches Sales Analyzer logic exactly: INNER JOIN due_payment ensures only
+    billed/confirmed transactions are counted (is_active=TRUE, deleted_at IS NULL).
     Returns a DataFrame with columns:
         company_name, period_revenue, period_txns, last_purchase_date
-    Falls back to an empty DataFrame if the DB is unreachable or
-    transactions_dsr is not available.
     """
     if _engine is None:
         return pd.DataFrame()
@@ -377,6 +377,8 @@ def _fetch_custom_period_revenue(_engine, start_dt: date, end_dt: date) -> pd.Da
         MAX(t.date)::date                     AS last_purchase_date
     FROM transactions_dsr t
     JOIN transactions_dsr_products tp ON t.id = tp.dsr_id
+    JOIN due_payment dp ON dp.dsr_id = t.id
+         AND dp.is_active = TRUE AND dp.deleted_at IS NULL
     JOIN master_party mp ON t.party_id = mp.id
     WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
       AND t.date >= '{start}'::date
