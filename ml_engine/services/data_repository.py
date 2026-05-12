@@ -21,12 +21,13 @@ class DataRepository:
         Fetch current live stock aggregated across ALL branch warehouses (area_id).
 
         Strategy:
-          - Uses the most recent snapshot date (max to_date) from apps.master.stockageing
-            as the reference point for age calculation — NOT CURRENT_DATE.
-          - This matches the Historical View logic exactly, since dead stock is uploaded
-            only once a week; using CURRENT_DATE would inflate days between uploads.
+          - Uses the most recent snapshot date (max to_date) as the AGE ANCHOR —
+            not CURRENT_DATE — so age numbers don't drift between weekly uploads.
+          - Does NOT restrict rows to only the latest to_date. Some products may not
+            appear in every weekly upload; DISTINCT ON across ALL dates ensures every
+            product with any ageing row is included (no missing products).
           1. DISTINCT ON (product_id, area_id) ORDER BY to_date DESC
-             -> picks the single most recent snapshot row per (product, branch)
+             -> picks the most recent snapshot row per (product, branch), any date
           2. SUM branch_stock_qty GROUP BY product
              -> correct national total (all 15-16 warehouses, no double-counting)
 
@@ -36,11 +37,15 @@ class DataRepository:
             return pd.read_sql(
                 """
                 WITH latest_snapshot_date AS (
+                    -- Age anchor: the most recent Monday upload date.
                     SELECT MAX(to_date) AS snap_date
                     FROM "apps.master.stockageing"
                     WHERE (disable = false OR disable IS NULL)
                 ),
                 latest_per_branch AS (
+                    -- Most recent row per (product, branch) across ALL upload dates.
+                    -- No date filter here — so products not in the latest batch
+                    -- but present in older batches are still included.
                     SELECT DISTINCT ON (s.product_id, s.area_id)
                         p.id          AS product_id,
                         p.product_name,
@@ -51,7 +56,6 @@ class DataRepository:
                     FROM "apps.master.stockageing" s
                     JOIN master_products p ON s.product_id = p.id
                     WHERE (s.disable = false OR s.disable IS NULL)
-                      AND s.to_date = (SELECT snap_date FROM latest_snapshot_date)
                     ORDER BY s.product_id, s.area_id, s.to_date DESC
                 ),
                 aggregated AS (
