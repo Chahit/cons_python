@@ -87,6 +87,7 @@ def _days_ago(recency_days):
     """Format recency_days as human-readable last-order string."""
     try:
         d = int(float(recency_days))
+        if d >= 3650: return "—"   # sentinel / no purchase data
         if d == 0:  return "Today"
         if d == 1:  return "1d ago"
         if d < 31:  return f"{d}d ago"
@@ -1462,9 +1463,14 @@ def render(ai):
 
     engine = getattr(ai, "engine", None)
 
-    # Fix B: session_state revenue cache — avoids repeat DB hits on same dates
-    _rev_key = f"rev_{sel_start}_{sel_end}"
+    # Fix: version-tagged cache key ensures stale pre-fix values are never served.
+    # Bump _REV_V whenever the revenue query changes to force a fresh DB hit.
+    _REV_V = "v4"
+    _rev_key = f"rev_{_REV_V}_{sel_start}_{sel_end}"
     if _rev_key not in st.session_state:
+        # Purge any old-version keys to free session memory
+        for _old in [k for k in list(st.session_state.keys()) if k.startswith("rev_") and k != _rev_key]:
+            del st.session_state[_old]
         st.session_state[_rev_key] = _fetch_custom_period_revenue(engine, sel_start, sel_end)
     custom_rev_df = st.session_state[_rev_key]
 

@@ -334,6 +334,7 @@ class BaseLoaderMixin:
             WHERE {approved}
         ),
         monthly_party AS (
+            -- Billed monthly revenue (due_payment join) for volatility calculation
             SELECT
                 t.party_id,
                 DATE_TRUNC('month', t.date)::date AS sale_month,
@@ -345,10 +346,32 @@ class BaseLoaderMixin:
             WHERE {approved}
             GROUP BY t.party_id, DATE_TRUNC('month', t.date)
         ),
-        sales_stats AS (
+        sales_revenue AS (
+            -- Revenue only: INNER JOIN due_payment = billed/confirmed amounts only.
+            -- Matches Sales Analyzer exactly (538 Cr for FY2025-26).
             SELECT
                 t.party_id,
                 SUM(tp.net_amt) AS lifetime_revenue,
+                COALESCE(SUM(tp.net_amt) FILTER (
+                    WHERE t.date >= (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '90 days'
+                ), 0) AS recent_90_revenue,
+                COALESCE(SUM(tp.net_amt) FILTER (
+                    WHERE t.date >= (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '180 days'
+                      AND t.date < (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '90 days'
+                ), 0) AS prev_90_revenue
+            FROM transactions_dsr t
+            JOIN transactions_dsr_products tp ON t.id = tp.dsr_id
+            JOIN due_payment dp ON dp.dsr_id = t.id
+                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
+            WHERE {approved}
+            GROUP BY t.party_id
+        ),
+        sales_activity AS (
+            -- Activity & dates: NO due_payment filter.
+            -- All approved transactions count for recency/frequency/categories.
+            -- This ensures last_purchase_date is never NULL for active partners.
+            SELECT
+                t.party_id,
                 COUNT(DISTINCT DATE_TRUNC('month', t.date)) AS active_months,
                 COUNT(DISTINCT t.id) FILTER (
                     WHERE t.date >= (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '90 days'
@@ -357,13 +380,6 @@ class BaseLoaderMixin:
                     WHERE t.date >= (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '180 days'
                       AND t.date < (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '90 days'
                 ) AS prev_txns,
-                COALESCE(SUM(tp.net_amt) FILTER (
-                    WHERE t.date >= (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '90 days'
-                ), 0) AS recent_90_revenue,
-                COALESCE(SUM(tp.net_amt) FILTER (
-                    WHERE t.date >= (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '180 days'
-                      AND t.date < (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '90 days'
-                ), 0) AS prev_90_revenue,
                 COUNT(DISTINCT p.group_id) FILTER (
                     WHERE t.date >= (SELECT last_recorded_date FROM max_date_cte) - INTERVAL '90 days'
                 ) AS category_count,
@@ -375,8 +391,6 @@ class BaseLoaderMixin:
                 MIN(t.date)::date AS first_purchase_date
             FROM transactions_dsr t
             JOIN transactions_dsr_products tp ON t.id = tp.dsr_id
-            JOIN due_payment dp ON dp.dsr_id = t.id
-                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
             LEFT JOIN master_products p ON tp.product_id = p.id
             WHERE {approved}
             GROUP BY t.party_id
@@ -391,22 +405,23 @@ class BaseLoaderMixin:
         SELECT
             mp.company_name,
             COALESCE(ms.state_name, 'Unknown') AS state,
-            COALESCE(ss.lifetime_revenue, 0) AS lifetime_revenue,
-            COALESCE(ss.active_months, 0) AS active_months,
-            COALESCE(ss.recent_txns, 0) AS recent_txns,
-            COALESCE(ss.prev_txns, 0) AS prev_txns,
-            COALESCE(ss.recent_90_revenue, 0) AS recent_90_revenue,
-            COALESCE(ss.prev_90_revenue, 0) AS prev_90_revenue,
-            COALESCE(ss.category_count, 0) AS category_count,
-            COALESCE(ss.category_count_prev, 0) AS category_count_prev,
-            ss.last_purchase_date,
-            ss.first_purchase_date,
+            COALESCE(sr.lifetime_revenue, 0)    AS lifetime_revenue,
+            COALESCE(sa.active_months, 0)       AS active_months,
+            COALESCE(sa.recent_txns, 0)         AS recent_txns,
+            COALESCE(sa.prev_txns, 0)           AS prev_txns,
+            COALESCE(sr.recent_90_revenue, 0)   AS recent_90_revenue,
+            COALESCE(sr.prev_90_revenue, 0)     AS prev_90_revenue,
+            COALESCE(sa.category_count, 0)      AS category_count,
+            COALESCE(sa.category_count_prev, 0) AS category_count_prev,
+            sa.last_purchase_date,
+            sa.first_purchase_date,
             (SELECT last_recorded_date FROM max_date_cte) AS data_last_date,
-            COALESCE(v.revenue_volatility, 0) AS revenue_volatility
+            COALESCE(v.revenue_volatility, 0)   AS revenue_volatility
         FROM master_party mp
-        LEFT JOIN master_state ms ON mp.state_id = ms.id
-        LEFT JOIN sales_stats ss ON mp.id = ss.party_id
-        LEFT JOIN volatility v ON mp.id = v.party_id
+        LEFT JOIN master_state ms      ON mp.state_id = ms.id
+        LEFT JOIN sales_revenue sr     ON mp.id = sr.party_id
+        LEFT JOIN sales_activity sa    ON mp.id = sa.party_id
+        LEFT JOIN volatility v         ON mp.id = v.party_id
         """.format(approved=self._approved_condition("t"))
         try:
             features = pd.read_sql(query, self.engine)
