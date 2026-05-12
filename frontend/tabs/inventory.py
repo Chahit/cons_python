@@ -46,6 +46,33 @@ def _render_live_view(ai):
         banner("✅ No inventory data available to analyze.", "green")
         return
 
+    # ── Show latest snapshot date as context banner ───────────────────────────
+    try:
+        snap_dates = ai.repo.fetch_available_snapshot_dates()
+        if snap_dates:
+            latest_snap = snap_dates[0]  # newest first
+            import datetime
+            snap_label = latest_snap.strftime("%d %B %Y (%A)") if hasattr(latest_snap, "strftime") else str(latest_snap)
+            st.markdown(
+                f"""
+                <div style="
+                    background: rgba(245,158,11,0.08);
+                    border-left: 4px solid #f59e0b;
+                    border-radius: 6px;
+                    padding: 10px 16px;
+                    margin-bottom: 14px;
+                    font-size: 0.88rem;
+                ">
+                    📅 <b>Data as of latest weekly snapshot: {snap_label}</b>
+                    &nbsp;— Product list, quantities and age (days) shown below reflect
+                    this snapshot, consistent with the Historical View.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    except Exception:
+        pass
+
     # ── Ageing Distribution ──────────────────────────────────────────────────
     st.subheader("📊 Portfolio Ageing Distribution")
     age_cols = ["age_0_30", "age_31_60", "age_61_90", "age_90_plus"]

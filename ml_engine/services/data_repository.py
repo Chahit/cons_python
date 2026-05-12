@@ -21,6 +21,10 @@ class DataRepository:
         Fetch current live stock aggregated across ALL branch warehouses (area_id).
 
         Strategy:
+          - Uses the most recent snapshot date (max to_date) from apps.master.stockageing
+            as the reference point for age calculation — NOT CURRENT_DATE.
+          - This matches the Historical View logic exactly, since dead stock is uploaded
+            only once a week; using CURRENT_DATE would inflate days between uploads.
           1. DISTINCT ON (product_id, area_id) ORDER BY to_date DESC
              -> picks the single most recent snapshot row per (product, branch)
           2. SUM branch_stock_qty GROUP BY product
@@ -31,7 +35,12 @@ class DataRepository:
         try:
             return pd.read_sql(
                 """
-                WITH latest_per_branch AS (
+                WITH latest_snapshot_date AS (
+                    SELECT MAX(to_date) AS snap_date
+                    FROM "apps.master.stockageing"
+                    WHERE (disable = false OR disable IS NULL)
+                ),
+                latest_per_branch AS (
                     SELECT DISTINCT ON (s.product_id, s.area_id)
                         p.id          AS product_id,
                         p.product_name,
@@ -41,7 +50,8 @@ class DataRepository:
                         s.to_date     AS stock_snapshot_date
                     FROM "apps.master.stockageing" s
                     JOIN master_products p ON s.product_id = p.id
-                    WHERE s.disable = false OR s.disable IS NULL
+                    WHERE (s.disable = false OR s.disable IS NULL)
+                      AND s.to_date = (SELECT snap_date FROM latest_snapshot_date)
                     ORDER BY s.product_id, s.area_id, s.to_date DESC
                 ),
                 aggregated AS (
@@ -58,22 +68,26 @@ class DataRepository:
                     FROM transactions_dsr_products tp
                     JOIN transactions_dsr t ON tp.dsr_id = t.id
                     WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+                      AND t.date <= (SELECT snap_date FROM latest_snapshot_date)
                     GROUP BY tp.product_id
-                )
+                ),
+                ref AS (SELECT snap_date FROM latest_snapshot_date)
                 SELECT
                     a.product_name,
                     a.total_stock_qty,
                     CASE
                         WHEN s.last_sold_date IS NULL
-                            THEN GREATEST((CURRENT_DATE - a.stock_snapshot_date), 0)
+                            THEN GREATEST(((SELECT snap_date FROM ref) - a.stock_snapshot_date), 0)
                         ELSE
-                            GREATEST((CURRENT_DATE - s.last_sold_date), 0)
+                            GREATEST(((SELECT snap_date FROM ref) - s.last_sold_date), 0)
                     END AS max_age_days
                 FROM aggregated a
                 LEFT JOIN last_sold s ON a.product_id = s.product_id
                 WHERE a.total_stock_qty > 10
-                  AND (s.last_sold_date IS NULL
-                       OR (CURRENT_DATE - s.last_sold_date) > 60)
+                  AND (
+                        s.last_sold_date IS NULL
+                        OR ((SELECT snap_date FROM ref) - s.last_sold_date) > 60
+                  )
                 ORDER BY max_age_days DESC
                 """,
                 self.engine,
