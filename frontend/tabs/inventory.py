@@ -46,26 +46,34 @@ def _render_live_view(ai):
         banner("✅ No inventory data available to analyze.", "green")
         return
 
-    # ── Show latest snapshot date as context banner ───────────────────────────
+    # ── Show latest snapshot date + staleness warning ───────────────────────
     try:
+        import datetime
         snap_dates = ai.repo.fetch_available_snapshot_dates()
         if snap_dates:
             latest_snap = snap_dates[0]  # newest first
-            import datetime
             snap_label = latest_snap.strftime("%d %B %Y (%A)") if hasattr(latest_snap, "strftime") else str(latest_snap)
+            days_old = (datetime.date.today() - latest_snap).days if hasattr(latest_snap, "strftime") else 0
+            if days_old > 14:
+                banner_bg  = "rgba(239,68,68,0.10)"
+                banner_bdr = "#ef4444"
+                freshness  = f"⚠️ <b>Snapshot is {days_old} days old</b> — quantities may differ from current physical stock. Upload a fresh ageing report to update."
+            else:
+                banner_bg  = "rgba(245,158,11,0.08)"
+                banner_bdr = "#f59e0b"
+                freshness  = "Data is recent."
             st.markdown(
                 f"""
                 <div style="
-                    background: rgba(245,158,11,0.08);
-                    border-left: 4px solid #f59e0b;
+                    background: {banner_bg};
+                    border-left: 4px solid {banner_bdr};
                     border-radius: 6px;
                     padding: 10px 16px;
                     margin-bottom: 14px;
                     font-size: 0.88rem;
                 ">
-                    📅 <b>Data as of latest weekly snapshot: {snap_label}</b>
-                    &nbsp;— Product list, quantities and age (days) shown below reflect
-                    this snapshot, consistent with the Historical View.
+                    📅 <b>Latest weekly snapshot: {snap_label}</b>
+                    &nbsp;— {freshness}
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -118,7 +126,7 @@ def _render_live_view(ai):
             ),
             height=360,
             xaxis=dict(
-                title="Age Bucket (Days Since Last Sale)",
+                title="Days Stock Has Been in Warehouse",
                 tickfont=dict(size=13),
             ),
             yaxis=dict(title="Capital Locked (Rs)"),
@@ -256,8 +264,10 @@ def _render_live_view(ai):
     if stock_details is not None:
         c1, c2, c3 = st.columns(3)
         total_qty = stock_details.get("total_stock_qty", 0)
-        c1.metric("Units to Clear", f"{total_qty} Units")
-        c2.metric("Max Age in WH", f"{stock_details.get('max_age_days', 0)} Days")
+        c1.metric("Units to Clear", f"{int(total_qty):,} Units")
+        age_val = stock_details.get('max_age_days', 0)
+        age_label = "90+ Days" if age_val >= 91 else f"{age_val} Days"
+        c2.metric("Max Age in WH", age_label)
         c3.metric(
             "Priority",
             stock_details.get("priority", "High"),

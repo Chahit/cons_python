@@ -20,21 +20,19 @@ class DataRepository:
         """
         Fetch dead/stale stock using ageing bucket columns directly.
 
-        KEY FIX — why the old query was wrong:
-          The old filter `(snap_date - MAX(last_sold_date)) > 60` drops any product
-          that had even ONE recent sale, even if 99% of its stock has been sitting
-          for 90+ days. e.g. CPU COOLER with 15,940 aged units was invisible because
-          someone bought 1 unit 8 days ago.
+        CRITICAL FIX (max_age_days):
+          Previously used (snap_date - last_sold_date) which gives 'days since
+          last sale' — NOT how long the stock has been in the warehouse.
+          e.g. CPU COOLER with 15,940 units ALL in days_above_90_qty was
+          showing max_age_days=1 because 1 unit was sold the day before the snap.
 
-        The apps.master.stockageing table already pre-computes how old the stock is:
-          days_61_to_90_qty  = units sitting 61-90 days  (stale)
-          days_above_90_qty  = units sitting 90+ days    (critical dead stock)
+          Now max_age_days is derived from the oldest bucket that has stale stock:
+            days_above_90_qty > 0  →  91 days (confirmed 90+ day stock)
+            days_61_to_90_qty > 0  →  75 days (midpoint 61-90)
+            (fresh buckets are not shown — only stale 61+ products appear)
 
-        Correct approach:
-          stale_qty = days_61_to_90_qty + days_above_90_qty  per branch
-          Show a product if SUM(stale_qty) > 0 across all branches.
-          The total_stock_qty shown is also only the stale portion.
-          age_days = derived from last_sold (for display) but NOT used as a filter.
+        stale_stock_qty = days_61_to_90_qty + days_above_90_qty (per branch, summed).
+        total_stock_qty = all buckets summed (for context).
         """
         try:
             return pd.read_sql(
@@ -48,15 +46,19 @@ class DataRepository:
                     SELECT DISTINCT ON (s.product_id, s.area_id)
                         p.id           AS product_id,
                         p.product_name,
-                        -- Total stock at this branch (all age buckets)
+                        -- Full stock at this branch (all buckets)
                         COALESCE(s.days_0_to_15_qty,  0)
                       + COALESCE(s.days_16_to_30_qty, 0)
                       + COALESCE(s.days_31_to_60_qty, 0)
                       + COALESCE(s.days_61_to_90_qty, 0)
                       + COALESCE(s.days_above_90_qty, 0) AS total_branch_qty,
-                        -- Stale stock at this branch (60+ day buckets only)
-                        COALESCE(s.days_61_to_90_qty, 0)
-                      + COALESCE(s.days_above_90_qty, 0) AS stale_branch_qty,
+                        -- Stale buckets only (61+ days)
+                        COALESCE(s.days_61_to_90_qty, 0) AS stale_61_90,
+                        COALESCE(s.days_above_90_qty, 0) AS stale_above_90,
+                        -- Fresh buckets (for ageing distribution chart)
+                        COALESCE(s.days_0_to_15_qty,  0)
+                      + COALESCE(s.days_16_to_30_qty, 0) AS fresh_0_30,
+                        COALESCE(s.days_31_to_60_qty, 0) AS fresh_31_60,
                         s.to_date AS stock_snapshot_date
                     FROM "apps.master.stockageing" s
                     CROSS JOIN snap
@@ -69,34 +71,35 @@ class DataRepository:
                     SELECT
                         product_id,
                         product_name,
-                        SUM(total_branch_qty) AS total_stock_qty,
-                        SUM(stale_branch_qty) AS stale_stock_qty,
-                        MAX(stock_snapshot_date) AS stock_snapshot_date
+                        SUM(total_branch_qty)            AS total_stock_qty,
+                        SUM(stale_61_90)                 AS stale_qty_61_90,
+                        SUM(stale_above_90)              AS stale_qty_above_90,
+                        SUM(fresh_0_30)                  AS age_0_30,
+                        SUM(fresh_31_60)                 AS age_31_60,
+                        SUM(stale_61_90)                 AS age_61_90,
+                        SUM(stale_above_90)              AS age_90_plus,
+                        MAX(stock_snapshot_date)         AS stock_snapshot_date
                     FROM branch_stock
                     GROUP BY product_id, product_name
-                ),
-                last_sold AS (
-                    -- Used ONLY for display (age_days label) — NOT for filtering
-                    SELECT tp.product_id, MAX(t.date) AS last_sold_date
-                    FROM transactions_dsr_products tp
-                    JOIN transactions_dsr t ON tp.dsr_id = t.id
-                    WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
-                      AND t.date <= (SELECT snap_date FROM snap)
-                    GROUP BY tp.product_id
                 )
                 SELECT
                     a.product_name,
-                    a.stale_stock_qty   AS total_stock_qty,
+                    (a.stale_qty_61_90 + a.stale_qty_above_90)  AS total_stock_qty,
+                    -- max_age_days from BUCKET DATA (correct warehouse age)
+                    -- NOT from last_sold_date which gives 'days since last sale'
                     CASE
-                        WHEN ls.last_sold_date IS NULL
-                            THEN GREATEST(((SELECT snap_date FROM snap)::date - a.stock_snapshot_date), 0)
-                        ELSE
-                            GREATEST(((SELECT snap_date FROM snap)::date - ls.last_sold_date), 0)
-                    END AS max_age_days
+                        WHEN a.stale_qty_above_90 > 0 THEN 91
+                        WHEN a.stale_qty_61_90    > 0 THEN 75
+                        ELSE 0
+                    END                                          AS max_age_days,
+                    a.age_0_30,
+                    a.age_31_60,
+                    a.age_61_90,
+                    a.age_90_plus,
+                    a.stock_snapshot_date                        AS snap_date
                 FROM aggregated a
-                LEFT JOIN last_sold ls ON a.product_id = ls.product_id
-                WHERE a.stale_stock_qty > 0
-                ORDER BY max_age_days DESC
+                WHERE (a.stale_qty_61_90 + a.stale_qty_above_90) > 0
+                ORDER BY max_age_days DESC, total_stock_qty DESC
                 """,
                 self.engine,
             )
