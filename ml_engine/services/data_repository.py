@@ -75,10 +75,6 @@ class DataRepository:
                     JOIN master_products p ON s.product_id = p.id
                     WHERE (s.disable = false OR s.disable IS NULL)
                       AND s.to_date = snap.snap_date
-                      -- Exclude main distribution warehouse (Delhi, area_id=8).
-                      -- Central warehouse stock is in the distribution pipeline,
-                      -- NOT dead stock. Including it inflates stale qty by ~362k units.
-                      AND s.area_id != 8
                     ORDER BY s.product_id, s.area_id, s.to_date DESC
                 ),
                 aggregated AS (
@@ -268,11 +264,6 @@ class DataRepository:
                     JOIN master_products p ON s.product_id = p.id
                     WHERE (s.disable = false OR s.disable IS NULL)
                       AND s.to_date = snap.snap_date
-                      -- CRITICAL: exclude Delhi main distribution warehouse (area_id=8).
-                      -- It holds pipeline stock, NOT dead stock. Same exclusion as
-                      -- fetch_view_ageing_stock — without this, stale qty is inflated
-                      -- by ~362k units for products that have zero actual branch dead stock.
-                      AND s.area_id != 8
                     ORDER BY s.product_id, s.area_id, s.to_date DESC
                 ),
                 aggregated AS (
