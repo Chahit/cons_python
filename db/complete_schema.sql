@@ -106,7 +106,7 @@ GROUP BY p.product_name;
 --     These are pre-computed per branch per snapshot — the table already
 --     knows what is stale. No last_sold join needed for filtering.
 -- --------------------------------------------------------------
-DROP MATERIALIZED VIEW IF EXISTS view_ageing_stock;
+DROP MATERIALIZED VIEW IF EXISTS view_ageing_stock CASCADE;
 CREATE MATERIALIZED VIEW view_ageing_stock AS
 WITH snap AS (
     -- Use the most recent snapshot date as reference
@@ -176,7 +176,8 @@ ORDER BY max_age_days DESC;
 --     bought them, ranking potential liquidation buyers.
 --     Includes: state (area), product group & category, purchase count.
 -- --------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS view_stock_liquidation_leads AS
+DROP MATERIALIZED VIEW IF EXISTS view_stock_liquidation_leads CASCADE;
+CREATE MATERIALIZED VIEW view_stock_liquidation_leads AS
 SELECT
     vas.product_name                        AS dead_stock_item,
     vas.total_stock_qty                     AS qty_in_stock,
