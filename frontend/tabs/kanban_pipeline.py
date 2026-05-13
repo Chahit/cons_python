@@ -359,7 +359,6 @@ def _recompute_segments_for_period(
     return df
 
 
-@st.cache_data(ttl=600, show_spinner=False)
 def _fetch_custom_period_revenue(_engine, start_dt: date, end_dt: date) -> pd.DataFrame:
     """
     Query the DB for actual partner revenue within [start_dt, end_dt].

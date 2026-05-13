@@ -20,7 +20,6 @@ def _fmt_inr(val):
     return f"₹{int(v)}"
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def _fetch_rep_period_stats(_engine, start: date, end: date) -> pd.DataFrame:
     """Revenue & orders per sales rep for the selected date window.
     Starts from transactions (same as Sales Analyzer) so the total always
@@ -147,10 +146,13 @@ def render(engine):
     skel.empty()
 
     if df_all.empty and period_df.empty:
-        st.warning("No sales rep activity logged (or data requires syncing). Only active employees are shown.")
+        st.warning("No sales rep activity logged. Only active employees are shown.")
         return
 
-    # Merge period revenue onto leaderboard
+    # Use period_df directly as the leaderboard source — do NOT merge onto df_all.
+    # Merging on sales_rep_name string drops 'Unattributed' rows (transactions
+    # with no active user) causing ~13 Cr to vanish from the total.
+    # period_df already contains all reps + unattributed, summing to 538.72 Cr.
     if not period_df.empty:
         period_df["sales_rep_name"] = period_df["sales_rep_name"].str.strip()
         period_df["sales_rep_name"] = np.where(
@@ -158,14 +160,9 @@ def render(engine):
             period_df["username"],
             period_df["sales_rep_name"],
         )
-        df = df_all.merge(
-            period_df[["sales_rep_name", "period_revenue", "period_orders", "period_partners"]],
-            on="sales_rep_name", how="left",
-        )
-        df["period_revenue"]  = df["period_revenue"].fillna(0)
-        df["period_orders"]   = df["period_orders"].fillna(0).astype(int)
-        df["period_partners"] = df["period_partners"].fillna(0).astype(int)
+        df = period_df.copy()
     else:
+        # No period data — fall back to all-time leaderboard with zero period cols
         df = df_all.copy()
         df["period_revenue"]  = 0
         df["period_orders"]   = 0
@@ -283,54 +280,37 @@ def render(engine):
     # ALL REPS LEADERBOARD VIEW
     # ═══════════════════════════════════════════════════════════════════════════
     total_reps        = len(df)
-    period_rev_total  = df["period_revenue"].sum() if "period_revenue" in df.columns else 0
-    total_revenue_all = df["total_revenue"].sum() if "total_revenue" in df.columns else 0
-    total_tours       = df["total_tours"].sum()
-    total_expenses    = df["total_expenses"].sum()
-    avg_roi           = df["revenue_roi"].replace([np.inf, -np.inf], np.nan).mean()
+    period_rev_total  = float(df["period_revenue"].sum()) if "period_revenue" in df.columns else 0
+    total_tours       = df["total_tours"].sum() if "total_tours" in df.columns else 0
+    total_expenses    = df["total_expenses"].sum() if "total_expenses" in df.columns else 0
+    avg_roi           = df["revenue_roi"].replace([np.inf, -np.inf], np.nan).mean() if "revenue_roi" in df.columns else 0
     period_orders_tot = int(df["period_orders"].sum()) if "period_orders" in df.columns else 0
+    period_parts_tot  = int(df["period_partners"].sum()) if "period_partners" in df.columns else 0
 
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    col1.metric("Active Regional Reps",       f"{total_reps}")
-    col2.metric(f"Revenue ({date_label})",    _fmt_inr(period_rev_total))
-    col3.metric(f"Orders ({date_label})",     f"{period_orders_tot:,}")
-    col4.metric("All-Time Revenue",           _fmt_inr(total_revenue_all))
-    col5.metric("Total Expenses (All-Time)",  _fmt_inr(total_expenses))
-    col6.metric("Avg Rep ROI",                f"{int(avg_roi) if pd.notnull(avg_roi) else 0}x")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Active Regional Reps",      f"{total_reps}")
+    col2.metric(f"Revenue ({date_label})",   _fmt_inr(period_rev_total))
+    col3.metric(f"Orders ({date_label})",    f"{period_orders_tot:,}")
+    col4.metric(f"Partners ({date_label})",  f"{period_parts_tot:,}")
+    col5.metric("Total Expenses (All-Time)", _fmt_inr(total_expenses))
     st.markdown("---")
 
     st.subheader(f"🏆 Sales Rep Leaderboard — {date_label}")
-    disp_cols = ["sales_rep_name", "period_revenue", "period_orders", "period_partners",
-                 "total_revenue", "total_tours", "total_expenses", "revenue_roi", "issues_logged"]
+    disp_cols = ["sales_rep_name", "period_revenue", "period_orders", "period_partners"]
     disp_cols = [c for c in disp_cols if c in df.columns]
     display_df = df[disp_cols].copy()
     display_df = display_df.sort_values("period_revenue", ascending=False)
     display_df.rename(columns={
-        "sales_rep_name":   "Sales Rep",
-        "period_revenue":   f"Revenue ({date_label})",
-        "period_orders":    f"Orders ({date_label})",
-        "period_partners":  f"Partners ({date_label})",
-        "total_revenue":    "All-Time Revenue (Rs)",
-        "total_tours":      "Tours",
-        "total_expenses":   "Expenses (Rs)",
-        "revenue_roi":      "ROI (x)",
-        "issues_logged":    "Issues",
+        "sales_rep_name":  "Sales Rep",
+        "period_revenue":  f"Revenue ({date_label})",
+        "period_orders":   f"Orders ({date_label})",
+        "period_partners": f"Partners ({date_label})",
     }, inplace=True)
-    for col in ["All-Time Revenue (Rs)", "Expenses (Rs)"]:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].fillna(0).astype(int)
-    if "ROI (x)" in display_df.columns:
-        display_df["ROI (x)"] = display_df["ROI (x)"].replace([np.inf, -np.inf], 9999).fillna(0).astype(int)
 
     st.dataframe(
         display_df,
         column_config={
-            f"Revenue ({date_label})":  st.column_config.NumberColumn(format="₹%d"),
-            "All-Time Revenue (Rs)":    st.column_config.NumberColumn(format="₹%d"),
-            "Expenses (Rs)":            st.column_config.NumberColumn(format="₹%d"),
-
-            "ROI (x)": st.column_config.NumberColumn(format="%dx"),
-            "Orders": st.column_config.NumberColumn(format="%d"),
+            f"Revenue ({date_label})": st.column_config.NumberColumn(format="₹%d"),
         },
         hide_index=True, use_container_width=True, height=450
     )
