@@ -260,46 +260,50 @@ class DataRepository:
                       + COALESCE(s.days_above_90_qty, 0) AS total_branch_qty,
                         COALESCE(s.days_61_to_90_qty, 0)
                       + COALESCE(s.days_above_90_qty, 0) AS stale_branch_qty,
+                        COALESCE(s.days_61_to_90_qty, 0) AS stale_61_90,
+                        COALESCE(s.days_above_90_qty, 0) AS stale_above_90,
                         s.to_date AS stock_snapshot_date
                     FROM "apps.master.stockageing" s
                     CROSS JOIN snap
                     JOIN master_products p ON s.product_id = p.id
                     WHERE (s.disable = false OR s.disable IS NULL)
                       AND s.to_date = snap.snap_date
+                      -- CRITICAL: exclude Delhi main distribution warehouse (area_id=8).
+                      -- It holds pipeline stock, NOT dead stock. Same exclusion as
+                      -- fetch_view_ageing_stock — without this, stale qty is inflated
+                      -- by ~362k units for products that have zero actual branch dead stock.
+                      AND s.area_id != 8
                     ORDER BY s.product_id, s.area_id, s.to_date DESC
                 ),
                 aggregated AS (
                     SELECT
                         product_id,
                         product_name,
-                        SUM(total_branch_qty) AS total_stock_qty,
-                        SUM(stale_branch_qty) AS stale_stock_qty,
+                        SUM(total_branch_qty)    AS total_stock_qty,
+                        SUM(stale_branch_qty)    AS stale_stock_qty,
+                        SUM(stale_61_90)         AS stale_qty_61_90,
+                        SUM(stale_above_90)      AS stale_qty_above_90,
                         MAX(stock_snapshot_date) AS stock_snapshot_date
                     FROM branch_stock
                     GROUP BY product_id, product_name
                 ),
-                last_sold AS (
-                    SELECT tp.product_id, MAX(t.date) AS last_sold_date
-                    FROM transactions_dsr_products tp
-                    JOIN transactions_dsr t ON tp.dsr_id = t.id
-                    WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
-                      AND t.date <= (SELECT snap_date FROM snap)
-                    GROUP BY tp.product_id
-                ),
                 dead_stock AS (
                     SELECT
                         a.product_id,
-                        a.product_name   AS dead_stock_item,
+                        a.product_name    AS dead_stock_item,
                         a.stale_stock_qty AS qty_in_stock,
+                        -- Bucket-based age: matches fetch_view_ageing_stock exactly.
+                        -- last_sold_date gives 'days since last sale' NOT warehouse age.
+                        -- e.g. 15,940 units in days_above_90 but 1 unit sold yesterday
+                        -- would show max_age_days=1 with last_sold_date approach.
                         CASE
-                            WHEN ls.last_sold_date IS NULL
-                                THEN GREATEST(((SELECT snap_date FROM snap)::date - a.stock_snapshot_date), 0)
-                            ELSE
-                                GREATEST(((SELECT snap_date FROM snap)::date - ls.last_sold_date), 0)
+                            WHEN a.stale_qty_above_90 > 0 THEN 91
+                            WHEN a.stale_qty_61_90    > 0 THEN 75
+                            ELSE 0
                         END AS max_age_days
                     FROM aggregated a
-                    LEFT JOIN last_sold ls ON a.product_id = ls.product_id
-                    WHERE a.stale_stock_qty > 0
+                    -- min 5 units threshold — mirrors fetch_view_ageing_stock
+                    WHERE a.stale_stock_qty > 5
                 )
                 SELECT
                     ds.dead_stock_item,
