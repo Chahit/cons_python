@@ -4,6 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import sys, os
+from datetime import date, timedelta
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from styles import apply_global_styles, page_header, skeleton_loader
 
@@ -19,6 +20,96 @@ def _fmt_inr(val):
     return f"₹{int(v)}"
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _fetch_rep_period_stats(_engine, start: date, end: date) -> pd.DataFrame:
+    """Revenue & orders per sales rep for the selected date window (Sales Analyzer logic)."""
+    if _engine is None:
+        return pd.DataFrame()
+    try:
+        return pd.read_sql(
+            """
+            SELECT
+                u.id                                          AS user_id,
+                TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS sales_rep_name,
+                u.username,
+                COUNT(DISTINCT t.id)                          AS period_orders,
+                COALESCE(SUM(tp.net_amt), 0)                  AS period_revenue,
+                COUNT(DISTINCT t.party_id)                    AS period_partners
+            FROM auth_user u
+            JOIN transactions_dsr t   ON t.user_id = u.id
+            JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+            WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+              AND u.is_active = TRUE
+              AND t.date BETWEEN %(s)s AND %(e)s
+            GROUP BY u.id, u.first_name, u.last_name, u.username
+            ORDER BY period_revenue DESC
+            """,
+            _engine,
+            params={"s": start, "e": end},
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+def _render_date_picker() -> tuple:
+    """Render a date-range picker chip bar identical to the Sales Analyzer."""
+    st.markdown("""
+    <style>
+    div[data-testid="column"] .stButton>button{
+        border-radius:20px!important;font-size:12px!important;
+        padding:4px 14px!important;border:1px solid #374151!important;
+        background:#1e2235!important;color:#10b981!important;
+        transition:all 0.18s ease!important;
+    }
+    div[data-testid="column"] .stButton>button:hover{
+        background:#059669!important;border-color:#059669!important;color:#fff!important;
+    }
+    </style>""", unsafe_allow_html=True)
+
+    today = date.today()
+    if "srep_date_start" not in st.session_state:
+        st.session_state["srep_date_start"] = today - timedelta(days=365)
+    if "srep_date_end" not in st.session_state:
+        st.session_state["srep_date_end"] = today
+
+    st.markdown("<div style='font-size:11px;color:#64748b;margin-bottom:4px;'>🗓️ Custom Range</div>",
+                unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1.5, 1.5, 1])
+    with c1:
+        new_start = st.date_input("Start Date", value=st.session_state["srep_date_start"],
+                                  max_value=today, key="srep_cal_start")
+    with c2:
+        new_end = st.date_input("End Date", value=st.session_state["srep_date_end"],
+                                min_value=new_start, max_value=today, key="srep_cal_end")
+    with c3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if st.button("✅ Apply", key="srep_apply", use_container_width=True):
+            st.session_state["srep_date_start"] = new_start
+            st.session_state["srep_date_end"]   = new_end
+
+    sel_start = st.session_state["srep_date_start"]
+    sel_end   = st.session_state["srep_date_end"]
+    if sel_end < sel_start:
+        sel_end = sel_start
+    span = max((sel_end - sel_start).days, 1)
+
+    st.markdown(f"""
+    <div style='background:rgba(15,26,43,0.9);border:1px solid #1e3a5f;border-radius:8px;
+         padding:8px 16px;margin-top:8px;display:flex;align-items:center;gap:10px;'>
+      <span style='font-size:15px;'>📅</span>
+      <span style='color:#6ee7b7;font-size:13px;font-weight:600;'>Active Window</span>
+      <span style='color:#475569;'>–</span>
+      <span style='color:#64748b;font-size:12px;'>
+        <b style='color:#7eb8f0;'>{sel_start.strftime('%d %b %Y')}</b>
+        &nbsp;→&nbsp;
+        <b style='color:#7eb8f0;'>{sel_end.strftime('%d %b %Y')}</b>
+      </span>
+      <span style='margin-left:auto;font-size:11px;color:#4b5563;'>{span} day window</span>
+    </div>""", unsafe_allow_html=True)
+
+    return sel_start, sel_end, span
+
+
 def render(engine):
     apply_global_styles()
     page_header(
@@ -27,17 +118,52 @@ def render(engine):
         icon="💼",
         accent_color="#10b981",
     )
+
+    # ── Date Picker ───────────────────────────────────────────────────────────
+    sel_start, sel_end, span_days = _render_date_picker()
+    date_label = f"{sel_start.strftime('%d %b %Y')} → {sel_end.strftime('%d %b %Y')}"
+    st.markdown("---")
+
+    # ── Fetch period-specific stats directly from DB ──────────────────────────
+    _db_engine = getattr(engine, "engine", None)
+    period_df = _fetch_rep_period_stats(_db_engine, sel_start, sel_end)
+
     skel = st.empty()
     with skel.container():
         skeleton_loader(n_metric_cards=4, n_rows=2, label="Fetching performance metrics...")
-    df = engine.get_sales_rep_leaderboard()
+    df_all = engine.get_sales_rep_leaderboard()   # all-time for context
     skel.empty()
 
-    if df.empty:
+    if df_all.empty and period_df.empty:
         st.warning("No sales rep activity logged (or data requires syncing). Only active employees are shown.")
         return
 
-    # ── Search / Select Rep ───────────────────────────────────────────────────
+    # Merge period revenue onto leaderboard
+    if not period_df.empty:
+        period_df["sales_rep_name"] = period_df["sales_rep_name"].str.strip()
+        period_df["sales_rep_name"] = np.where(
+            period_df["sales_rep_name"] == "",
+            period_df["username"],
+            period_df["sales_rep_name"],
+        )
+        df = df_all.merge(
+            period_df[["sales_rep_name", "period_revenue", "period_orders", "period_partners"]],
+            on="sales_rep_name", how="left",
+        )
+        df["period_revenue"]  = df["period_revenue"].fillna(0)
+        df["period_orders"]   = df["period_orders"].fillna(0).astype(int)
+        df["period_partners"] = df["period_partners"].fillna(0).astype(int)
+    else:
+        df = df_all.copy()
+        df["period_revenue"]  = 0
+        df["period_orders"]   = 0
+        df["period_partners"] = 0
+
+    if df.empty:
+        st.warning("No sales rep activity found.")
+        return
+
+
     rep_names = ["🌐 All Reps (Leaderboard)"] + df["sales_rep_name"].tolist()
     selected_rep = st.selectbox(
         "🔍 Select a Sales Rep for Detailed Analysis",
@@ -144,44 +270,53 @@ def render(engine):
     # ═══════════════════════════════════════════════════════════════════════════
     # ALL REPS LEADERBOARD VIEW
     # ═══════════════════════════════════════════════════════════════════════════
-    total_reps      = len(df)
+    total_reps        = len(df)
+    period_rev_total  = df["period_revenue"].sum() if "period_revenue" in df.columns else 0
     total_revenue_all = df["total_revenue"].sum() if "total_revenue" in df.columns else 0
-    total_tours     = df["total_tours"].sum()
-    total_expenses  = df["total_expenses"].sum()
-    avg_roi         = df["revenue_roi"].replace([np.inf, -np.inf], np.nan).mean()
+    total_tours       = df["total_tours"].sum()
+    total_expenses    = df["total_expenses"].sum()
+    avg_roi           = df["revenue_roi"].replace([np.inf, -np.inf], np.nan).mean()
+    period_orders_tot = int(df["period_orders"].sum()) if "period_orders" in df.columns else 0
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Active Regional Reps", f"{total_reps}")
-    col2.metric("Total Revenue", _fmt_inr(total_revenue_all))
-    col3.metric("Total Area Tours", f"{int(total_tours)}")
-    col4.metric("Total Expenses", _fmt_inr(total_expenses))
-    col5.metric("Avg Rep ROI", f"{int(avg_roi) if pd.notnull(avg_roi) else 0}x")
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1.metric("Active Regional Reps",       f"{total_reps}")
+    col2.metric(f"Revenue ({date_label})",    _fmt_inr(period_rev_total))
+    col3.metric(f"Orders ({date_label})",     f"{period_orders_tot:,}")
+    col4.metric("All-Time Revenue",           _fmt_inr(total_revenue_all))
+    col5.metric("Total Expenses (All-Time)",  _fmt_inr(total_expenses))
+    col6.metric("Avg Rep ROI",                f"{int(avg_roi) if pd.notnull(avg_roi) else 0}x")
     st.markdown("---")
 
-    st.subheader("🏆 Sales Rep Leaderboard (Active Employees Only)")
-    display_df = df[[
-        "sales_rep_name", "total_orders", "total_revenue", "unique_customers",
-        "total_tours", "total_expenses", "revenue_roi", "issues_logged"
-    ]].copy()
+    st.subheader(f"🏆 Sales Rep Leaderboard — {date_label}")
+    disp_cols = ["sales_rep_name", "period_revenue", "period_orders", "period_partners",
+                 "total_revenue", "total_tours", "total_expenses", "revenue_roi", "issues_logged"]
+    disp_cols = [c for c in disp_cols if c in df.columns]
+    display_df = df[disp_cols].copy()
+    display_df = display_df.sort_values("period_revenue", ascending=False)
     display_df.rename(columns={
-        "sales_rep_name": "Sales Rep",
-        "total_orders": "Orders",
-        "total_revenue": "Revenue (Rs)",
-        "unique_customers": "Partners Served",
-        "total_tours": "Tours",
-        "total_expenses": "Expenses (Rs)",
-        "revenue_roi": "ROI (x)",
-        "issues_logged": "Issues Logged",
+        "sales_rep_name":   "Sales Rep",
+        "period_revenue":   f"Revenue ({date_label})",
+        "period_orders":    f"Orders ({date_label})",
+        "period_partners":  f"Partners ({date_label})",
+        "total_revenue":    "All-Time Revenue (Rs)",
+        "total_tours":      "Tours",
+        "total_expenses":   "Expenses (Rs)",
+        "revenue_roi":      "ROI (x)",
+        "issues_logged":    "Issues",
     }, inplace=True)
-    display_df["Revenue (Rs)"] = display_df["Revenue (Rs)"].fillna(0).astype(int)
-    display_df["Expenses (Rs)"] = display_df["Expenses (Rs)"].fillna(0).astype(int)
-    display_df["ROI (x)"] = display_df["ROI (x)"].replace([np.inf, -np.inf], 9999).fillna(0).astype(int)
+    for col in ["All-Time Revenue (Rs)", "Expenses (Rs)"]:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].fillna(0).astype(int)
+    if "ROI (x)" in display_df.columns:
+        display_df["ROI (x)"] = display_df["ROI (x)"].replace([np.inf, -np.inf], 9999).fillna(0).astype(int)
 
     st.dataframe(
         display_df,
         column_config={
-            "Revenue (Rs)": st.column_config.NumberColumn(format="₹%d"),
-            "Expenses (Rs)": st.column_config.NumberColumn(format="₹%d"),
+            f"Revenue ({date_label})":  st.column_config.NumberColumn(format="₹%d"),
+            "All-Time Revenue (Rs)":    st.column_config.NumberColumn(format="₹%d"),
+            "Expenses (Rs)":            st.column_config.NumberColumn(format="₹%d"),
+
             "ROI (x)": st.column_config.NumberColumn(format="%dx"),
             "Orders": st.column_config.NumberColumn(format="%d"),
         },

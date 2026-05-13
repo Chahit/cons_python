@@ -331,17 +331,7 @@ def render(ai):
         st.warning("No partner matrix available. Refresh data and try again.")
         return
 
-    states = sorted(ai.matrix["state"].dropna().unique().tolist())
-    selected_state = st.selectbox("State / Region", states)
-    partner_list = sorted(ai.matrix[ai.matrix["state"] == selected_state].index.unique().tolist())
-    if not partner_list:
-        st.warning("No partners found for selected state.")
-        return
-
-    selected_partner = st.selectbox("Partner", partner_list)
-    top_n = st.slider("Top Actions", 1, 5, 3, 1)
-
-    # ────────────────────────────── Tabs ──────────────────────────────────────
+    # ── Tabs ─────────────────────────────────────────────────────────────────
     tab_rec, tab_product = st.tabs([
         "📋 Recommendations", "🎯 Product → Partner",
     ])
@@ -574,6 +564,19 @@ def render(ai):
     with tab_rec:
         model_name = str(getattr(ai, "gemini_model", "gemini-1.5-flash"))
         key = str(getattr(ai, "gemini_api_key", "")).strip()
+
+        # ── Partner selection (this tab only — Product→Partner has its own UI) ─
+        _rec_states = sorted(ai.matrix["state"].dropna().unique().tolist())
+        _rec_state = st.selectbox("State / Region", _rec_states, key="rh_rec_state")
+        _rec_partners = sorted(ai.matrix[ai.matrix["state"] == _rec_state].index.unique().tolist())
+        if not _rec_partners:
+            st.warning("No partners found for selected state.")
+            st.stop()
+        _rsel_col, _tn_col = st.columns([3, 1])
+        with _rsel_col:
+            selected_partner = st.selectbox("Partner", _rec_partners, key="rh_rec_partner")
+        with _tn_col:
+            top_n = st.slider("Top Actions", 1, 5, 3, 1, key="rh_rec_topn")
 
         # ── Recommendation Plan (cached per partner, triggered by button) ────
         _plan_cache_key = f"_reco_plan_{selected_partner}_{top_n}"
