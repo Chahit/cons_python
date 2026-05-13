@@ -1463,16 +1463,11 @@ def render(ai):
 
     engine = getattr(ai, "engine", None)
 
-    # Fix: version-tagged cache key ensures stale pre-fix values are never served.
-    # Bump _REV_V whenever the revenue query changes to force a fresh DB hit.
-    _REV_V = "v4"
-    _rev_key = f"rev_{_REV_V}_{sel_start}_{sel_end}"
-    if _rev_key not in st.session_state:
-        # Purge any old-version keys to free session memory
-        for _old in [k for k in list(st.session_state.keys()) if k.startswith("rev_") and k != _rev_key]:
-            del st.session_state[_old]
-        st.session_state[_rev_key] = _fetch_custom_period_revenue(engine, sel_start, sel_end)
-    custom_rev_df = st.session_state[_rev_key]
+    # Call the @st.cache_data-decorated function directly.
+    # No session_state layer — @st.cache_data(ttl=600) handles deduplication
+    # and properly invalidates when the function body changes.
+    # (session_state was causing stale pre-fix values to persist indefinitely.)
+    custom_rev_df = _fetch_custom_period_revenue(engine, sel_start, sel_end)
 
     if not custom_rev_df.empty and "company_name" in custom_rev_df.columns:
         # Merge actual period revenue onto the base kanban df

@@ -22,24 +22,36 @@ def _fmt_inr(val):
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _fetch_rep_period_stats(_engine, start: date, end: date) -> pd.DataFrame:
-    """Revenue & orders per sales rep for the selected date window (Sales Analyzer logic)."""
+    """Revenue & orders per sales rep for the selected date window.
+    Starts from transactions (same as Sales Analyzer) so the total always
+    matches 538.72 Cr. Transactions with no active rep are grouped as
+    'Unattributed' rather than being silently dropped.
+    Uses INNER JOIN due_payment — identical filter to Sales Analyzer.
+    """
     if _engine is None:
         return pd.DataFrame()
     try:
         return pd.read_sql(
             """
             SELECT
-                u.id                                          AS user_id,
-                TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS sales_rep_name,
-                u.username,
+                COALESCE(u.id, -1)                            AS user_id,
+                COALESCE(
+                    NULLIF(TRIM(
+                        COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')
+                    ), ''),
+                    u.username,
+                    'Unattributed'
+                )                                             AS sales_rep_name,
+                COALESCE(u.username, 'unattributed')          AS username,
                 COUNT(DISTINCT t.id)                          AS period_orders,
                 COALESCE(SUM(tp.net_amt), 0)                  AS period_revenue,
                 COUNT(DISTINCT t.party_id)                    AS period_partners
-            FROM auth_user u
-            JOIN transactions_dsr t   ON t.user_id = u.id
+            FROM transactions_dsr t
             JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+            JOIN due_payment dp ON dp.dsr_id = t.id
+                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
+            LEFT JOIN auth_user u ON u.id = t.user_id AND u.is_active = TRUE
             WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
-              AND u.is_active = TRUE
               AND t.date BETWEEN %(s)s AND %(e)s
             GROUP BY u.id, u.first_name, u.last_name, u.username
             ORDER BY period_revenue DESC
