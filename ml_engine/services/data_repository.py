@@ -29,10 +29,19 @@ class DataRepository:
           Now max_age_days is derived from the oldest bucket that has stale stock:
             days_above_90_qty > 0  →  91 days (confirmed 90+ day stock)
             days_61_to_90_qty > 0  →  75 days (midpoint 61-90)
-            (fresh buckets are not shown — only stale 61+ products appear)
 
-        stale_stock_qty = days_61_to_90_qty + days_above_90_qty (per branch, summed).
-        total_stock_qty = all buckets summed (for context).
+        CRITICAL FIX (area exclusion):
+          area_id=8 is Delhi — the MAIN DISTRIBUTION WAREHOUSE with 215M+ units
+          of opening stock. Products there are in the distribution pipeline, NOT
+          dead stock. Including Delhi inflated stale qty by 362,791 units (78%!).
+          e.g. SMPS 0602 showed 7,095 stale units (all from Delhi area_id=8) but
+          actual branch-level dead stock is 0 — confirmed by the company.
+
+          Fix: exclude area_id=8 from stale stock aggregation. Only count
+          stale stock at regional BRANCH level (areas 1,2,3,4,5,6,7,... except 8).
+
+        stale_stock_qty = days_61_to_90_qty + days_above_90_qty (branch-only, summed).
+        minimum threshold: > 5 units to filter single-unit noise.
         """
         try:
             return pd.read_sql(
@@ -46,6 +55,7 @@ class DataRepository:
                     SELECT DISTINCT ON (s.product_id, s.area_id)
                         p.id           AS product_id,
                         p.product_name,
+                        s.area_id,
                         -- Full stock at this branch (all buckets)
                         COALESCE(s.days_0_to_15_qty,  0)
                       + COALESCE(s.days_16_to_30_qty, 0)
@@ -65,6 +75,10 @@ class DataRepository:
                     JOIN master_products p ON s.product_id = p.id
                     WHERE (s.disable = false OR s.disable IS NULL)
                       AND s.to_date = snap.snap_date
+                      -- Exclude main distribution warehouse (Delhi, area_id=8).
+                      -- Central warehouse stock is in the distribution pipeline,
+                      -- NOT dead stock. Including it inflates stale qty by ~362k units.
+                      AND s.area_id != 8
                     ORDER BY s.product_id, s.area_id, s.to_date DESC
                 ),
                 aggregated AS (
@@ -98,7 +112,8 @@ class DataRepository:
                     a.age_90_plus,
                     a.stock_snapshot_date                        AS snap_date
                 FROM aggregated a
-                WHERE (a.stale_qty_61_90 + a.stale_qty_above_90) > 0
+                -- minimum 5 units to filter single-unit noise
+                WHERE (a.stale_qty_61_90 + a.stale_qty_above_90) > 5
                 ORDER BY max_age_days DESC, total_stock_qty DESC
                 """,
                 self.engine,
