@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Sales Analyzer — Technical Brief</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root{--p:#22c55e;--pl:#f0fdf4;--pd:#14532d;--blue:#2563eb;--bl:#dbeafe;--amber:#f59e0b;--al:#fffbeb;--red:#dc2626;--rl:#fee2e2;--purple:#7c3aed;--pul:#ede9fe;--t:#111827;--ts:#4b5563;--tm:#9ca3af;--b:#e5e7eb;--bg:#f9fafb;--cd:#ffffff;--cb:#0f172a;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Inter',sans-serif;font-size:15px;line-height:1.75;color:var(--t);background:var(--bg);-webkit-font-smoothing:antialiased;}
+  .cover{background:linear-gradient(135deg,#052e16 0%,#166534 55%,#22c55e 100%);color:#fff;padding:72px 80px 60px;}
+  .cb{display:inline-block;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);border-radius:20px;padding:4px 14px;font-size:11px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:24px;}
+  .cover h1{font-size:42px;font-weight:700;letter-spacing:-.5px;line-height:1.15;margin-bottom:14px;}
+  .cover h1 span{color:#bbf7d0;}
+  .sub{font-size:16px;color:#d1fae5;max-width:640px;margin-bottom:40px;line-height:1.6;}
+  .cm{display:flex;gap:32px;flex-wrap:wrap;border-top:1px solid rgba(255,255,255,.15);padding-top:28px;}
+  .cmi{font-size:12px;color:#bbf7d0;}.cmi strong{display:block;color:#fff;font-size:14px;font-weight:600;margin-bottom:2px;}
+  .con{max-width:900px;margin:0 auto;padding:56px 40px;}
+  .ib{background:var(--pl);border-left:4px solid var(--p);border-radius:0 10px 10px 0;padding:20px 24px;margin-bottom:48px;font-size:14.5px;color:var(--pd);line-height:1.7;}
+  .toc{background:var(--cd);border:1px solid var(--b);border-radius:12px;padding:28px 32px;margin-bottom:48px;}
+  .toc h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--tm);font-weight:600;margin-bottom:16px;}
+  .tg{display:grid;grid-template-columns:1fr 1fr;gap:6px 32px;}
+  .ti{font-size:13.5px;color:var(--pd);font-weight:500;padding:4px 0;border-bottom:1px dashed var(--b);}
+  .tn{color:var(--tm);font-weight:400;margin-right:6px;font-size:12px;}
+  .sec{margin-bottom:60px;}
+  .sh{display:flex;align-items:center;gap:14px;margin-bottom:22px;padding-bottom:14px;border-bottom:2px solid var(--b);}
+  .sn{background:var(--p);color:#fff;font-size:11px;font-weight:700;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .sec h2{font-size:21px;font-weight:700;color:var(--t);}
+  .sf{font-family:'JetBrains Mono',monospace;font-size:11px;background:var(--cb);color:#86efac;padding:2px 8px;border-radius:4px;margin-left:auto;white-space:nowrap;}
+  h3{font-size:15px;font-weight:600;color:var(--t);margin:26px 0 10px;}
+  p{margin-bottom:14px;color:var(--ts);font-size:14.5px;}
+  .formula{background:var(--cb);border-radius:10px;padding:18px 22px;margin:16px 0;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#e2e8f0;line-height:1.9;overflow-x:auto;white-space:pre;}
+  .formula .c{color:#475569;}.formula .v{color:#fcd34d;}.formula .g{color:#34d399;}.formula .r{color:#f87171;}
+  .call{border-radius:10px;padding:16px 20px;margin:18px 0;font-size:14px;display:flex;gap:12px;align-items:flex-start;}
+  .ci{font-size:18px;flex-shrink:0;line-height:1.5;}
+  .cb2 strong{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin-bottom:5px;}
+  .call.g2{background:var(--pl);color:var(--pd);}.call.i{background:var(--bl);color:#1e3a8a;}
+  .call.w{background:var(--al);color:#7c2d12;}.call.r2{background:var(--rl);color:#7f1d1d;}
+  .tw{overflow-x:auto;margin:18px 0;border-radius:10px;border:1px solid var(--b);}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  thead tr{background:var(--pl);}
+  th{padding:11px 16px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--pd);border-bottom:2px solid #86efac;}
+  td{padding:11px 16px;border-bottom:1px solid var(--b);color:var(--ts);vertical-align:top;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:var(--pl);}
+  td code{font-family:'JetBrains Mono',monospace;font-size:11.5px;background:var(--pl);padding:1px 5px;border-radius:3px;color:var(--pd);}
+  td strong{color:var(--t);font-weight:600;}
+  .flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:16px 0;}
+  .fb{background:var(--cd);border:1px solid var(--b);border-radius:8px;padding:10px 14px;font-size:12px;font-weight:600;color:var(--t);}
+  .fb.s{background:var(--pl);border-color:#86efac;color:var(--pd);}
+  .fb.o{background:#dcfce7;border-color:#86efac;color:#14532d;}
+  .fa{font-size:14px;color:var(--p);font-weight:700;}
+  .footer{text-align:center;padding:40px 20px;color:var(--tm);font-size:12px;border-top:1px solid var(--b);margin-top:16px;}
+  .footer strong{color:var(--ts);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0;}
+  .card{border-radius:10px;padding:16px 18px;border:1px solid var(--b);}
+  .card.g{background:var(--pl);border-color:#86efac;}.card.b{background:var(--bl);border-color:#93c5fd;}
+  .card.a{background:var(--al);border-color:#fcd34d;}.card.p{background:var(--pul);border-color:#c4b5fd;}
+  .ct{font-size:13px;font-weight:700;color:var(--t);margin-bottom:6px;}
+  .cd2{font-size:13px;color:var(--ts);line-height:1.6;}
+  @media(max-width:640px){.cover{padding:40px 24px;}.cover h1{font-size:28px;}.con{padding:32px 20px;}.tg,.grid2{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="cb">Sales Analyzer — Internal Technical Brief</div>
+  <h1>Sales<br/><span>Analyzer Module</span></h1>
+  <p class="sub">Cascading geographic drill-down (State → City → Partner) with a date-range engine, YoY KPI comparison, 5-signal next-order prediction, repeat vs. new product classification, multi-partner comparison, and enterprise Excel + PDF export.</p>
+  <div class="cm">
+    <div class="cmi"><strong>UI Files</strong>sales_analyzer.py (693 lines) + sales_analyzer_extras.py (404 lines)</div>
+    <div class="cmi"><strong>Data Source</strong>view_sales_analyzer_partner_summary · transactions_dsr</div>
+    <div class="cmi"><strong>Exports</strong>Excel (openpyxl 3-sheet) · PDF (fpdf landscape A4)</div>
+    <div class="cmi"><strong>May 2026</strong>Version 1.0 — Production</div>
+  </div>
+</div>
+
+<div class="con">
+
+<div class="ib">
+  The Sales Analyzer is the primary single-partner deep-dive tool. Unlike the Kanban pipeline (which shows portfolio-level health scores) or the Cluster Intelligence tab (which shows group-level segmentation), this module answers: <em>"What exactly has this specific partner bought, when, and how does it compare to last period?"</em> — with export-ready outputs for field sales reps.
+</div>
+
+<div class="toc">
+  <h2>Contents</h2>
+  <div class="tg">
+    <div class="ti"><span class="tn">01</span>Architecture &amp; Data Sources</div>
+    <div class="ti"><span class="tn">05</span>Repeat vs. New Product Classification</div>
+    <div class="ti"><span class="tn">02</span>Revenue Accuracy — Approved-Only Filter</div>
+    <div class="ti"><span class="tn">06</span>Multi-Partner Comparison View</div>
+    <div class="ti"><span class="tn">03</span>Date Range Engine</div>
+    <div class="ti"><span class="tn">07</span>Excel Export (openpyxl)</div>
+    <div class="ti"><span class="tn">04</span>5-Signal Next-Order Prediction</div>
+    <div class="ti"><span class="tn">08</span>PDF Export + Kanban Deep-Link</div>
+  </div>
+</div>
+
+<!-- S1 -->
+<div class="sec">
+  <div class="sh"><div class="sn">01</div><h2>Architecture &amp; Data Sources</h2><span class="sf">sales_analyzer.py</span></div>
+  <p>The module uses a two-level data strategy: a <strong>materialized view</strong> for fast partner list lookup, and <strong>live queries</strong> for all date-windowed KPIs. This ensures the partner selector loads instantly while all analytics respect the active date range.</p>
+  <div class="flow">
+    <div class="fb s">view_sales_analyzer_partner_summary</div><span class="fa">→</span>
+    <div class="fb">State/City/Partner selector</div><span class="fa">+</span>
+    <div class="fb s">transactions_dsr (live)</div><span class="fa">→</span>
+    <div class="fb o">KPIs · Product Breakdown · Monthly Revenue</div>
+  </div>
+  <div class="tw"><table>
+    <thead><tr><th>Function</th><th>Query target</th><th>Cache TTL</th><th>Output</th></tr></thead>
+    <tbody>
+      <tr><td><code>_load_geo_summary()</code></td><td>view_sales_analyzer_partner_summary (with raw fallback)</td><td>600s</td><td>All partners with state/city/all-time stats for the cascading selector</td></tr>
+      <tr><td><code>_fetch_partner_kpis()</code></td><td>transactions_dsr + transactions_dsr_products + due_payment</td><td>120s</td><td>Revenue, orders, qty, unique products, last order date for the active date window</td></tr>
+      <tr><td><code>_fetch_product_breakdown()</code></td><td>Same + master_products + master_group + master_product_category</td><td>120s</td><td>Per-product table: qty, avg_rate (net_amt/qty), total_amount, category, txn_count</td></tr>
+      <tr><td><code>_fetch_monthly_revenue()</code></td><td>DATE_TRUNC('month') aggregation</td><td>120s</td><td>Month-by-month revenue + orders for the bar chart</td></tr>
+      <tr><td><code>_fetch_alltime_history()</code></td><td>No date filter, full transaction history</td><td>300s</td><td>Every product ever purchased, with first/last purchase date</td></tr>
+      <tr><td><code>_fetch_overview_stats()</code></td><td>Multi-party IN clause for the overview panel</td><td>120s</td><td>Aggregate period revenue/orders across all filtered partners (no partner selected)</td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+<!-- S2 -->
+<div class="sec">
+  <div class="sh"><div class="sn">02</div><h2>Revenue Accuracy — Approved-Only Filter</h2></div>
+  <p>Every revenue query applies a three-layer filter to ensure only genuine, approved transactions are counted. This was a critical fix from a previous session that eliminated 10–30% revenue inflation caused by cancelled or reversed transactions being included in totals.</p>
+  <div class="formula"><span class="c">Three mandatory join conditions on every revenue query:</span>
+
+1. <span class="v">is_approved</span> check:
+   WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+   <span class="c">← Excludes cancelled/rejected DSR transactions</span>
+
+2. <span class="v">due_payment</span> join:
+   JOIN due_payment dp ON dp.dsr_id = t.id
+        AND dp.is_active = TRUE
+        AND dp.deleted_at IS NULL
+   <span class="c">← Excludes reversed/void payment records</span>
+
+3. Revenue column: <span class="v">net_amt</span> (not gross_amt)
+   <span class="c">← net_amt already deducts returns/adjustments; gross_amt includes them</span>
+
+<span class="g">Combined effect: 100% accurate revenue — no inflation from cancellations</span></div>
+  <div class="call r2"><div class="ci">🔴</div><div class="cb2"><strong>Why this matters</strong>Without the due_payment join, reversed transactions still show <code>is_approved=true</code> but the payment record has <code>is_active=false</code>. Using gross_amt on top of that caused some partner revenues to appear 10–30% higher than actuals. This is now fixed across all Sales Analyzer queries.</div></div>
+</div>
+
+<!-- S3 -->
+<div class="sec">
+  <div class="sh"><div class="sn">03</div><h2>Date Range Engine</h2><span class="sf">_render_date_picker()</span></div>
+  <p>The date picker supports both quick preset chips and a custom calendar range. The default window is 5 years (to show all historical data), narrowable to any custom range the user defines. The active window is shown as a confirmation banner below the picker.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Preset</th><th>Days</th><th>Use case</th></tr></thead>
+    <tbody>
+      <tr><td>15 Days</td><td>15</td><td>Recent activity check — last fortnight's orders</td></tr>
+      <tr><td>1 Month</td><td>30</td><td>Monthly sales review</td></tr>
+      <tr><td>2 Months</td><td>60</td><td>Bi-monthly performance window</td></tr>
+      <tr><td>3 Months</td><td>90</td><td>Quarterly review (most common for partner health checks)</td></tr>
+      <tr><td>6 Months</td><td>180</td><td>Half-year trend analysis</td></tr>
+      <tr><td>1 Year</td><td>365</td><td>Annual partner performance comparison</td></tr>
+    </tbody>
+  </table></div>
+  <p>The date range drives YoY comparison by shifting the window exactly <code>span</code> days back: <code>yoy_end = start − 1d, yoy_start = yoy_end − span_days</code>. This ensures the comparison period is always the same length as the current period, regardless of presets used.</p>
+</div>
+
+<!-- S4 -->
+<div class="sec">
+  <div class="sh"><div class="sn">04</div><h2>5-Signal Next-Order Prediction</h2><span class="sf">predict_next_order() in sales_analyzer_extras.py</span></div>
+  <p>The prediction engine uses the partner's complete transaction date history (no date filter) to compute a weighted next-order estimate. It uses 5 independent signals combined sequentially to account for recency bias, trend, and seasonality.</p>
+  <div class="formula"><span class="c">5-Signal Algorithm (applied sequentially):</span>
+
+<span class="v">Signal 1 — Weighted-Recency Median</span>
+  Weight gaps linearly: oldest gap = 1×, most recent gap = 2× (10→20 units)
+  <span class="g">w_median</span> = median(weighted_pool)
+  <span class="c">← Gives more importance to recent ordering cadence than historical average</span>
+
+<span class="v">Signal 2 — Trend Detection</span>
+  early_avg  = avg(gaps[:n//3])   <span class="c">← First third of gap history</span>
+  recent_avg = avg(gaps[-n//3:])  <span class="c">← Last third of gap history</span>
+  IF recent_avg &lt; early_avg × 0.85 → "accelerating" 📈
+  IF recent_avg &gt; early_avg × 1.15 → "decelerating" 📉
+  ELSE → "stable" ➡️
+
+<span class="v">Signal 3 — Trend-Adjusted Gap</span>
+  accelerating (n≥4): final_gap = w_median × 0.90  <span class="c">← Shorten prediction</span>
+  decelerating (n≥4): final_gap = w_median × 1.10  <span class="c">← Lengthen prediction</span>
+  stable: final_gap = w_median
+
+<span class="v">Signal 4 — Seasonal Adjustment</span>
+  same_month_gaps = gaps where dates[i].month == last_order.month
+  IF len(same_month_gaps) ≥ 2:
+    final_gap = final_gap × 0.6 + seasonal_median × 0.4
+
+<span class="v">Signal 5 — Confidence Tier</span>
+  cv = std(gaps) / w_median
+  cv &lt; 0.25 AND n ≥ 6 → <span class="g">High</span>
+  cv &lt; 0.50 AND n ≥ 3 → <span class="v">Medium</span>
+  else → <span class="r">Low</span></div>
+  <div class="call g2"><div class="ci">💡</div><div class="cb2"><strong>Why weighted median instead of mean?</strong>A partner who ordered every 30 days for 2 years, then changed to every 60 days over the last 6 months, would show a mean of ~35 days — misleading. The weighted median gives the 6-month pattern 2× weight, correctly predicting ~60 days. Mean would dramatically underestimate the gap.</div></div>
+</div>
+
+<!-- S5 -->
+<div class="sec">
+  <div class="sh"><div class="sn">05</div><h2>Repeat vs. New Product Classification</h2><span class="sf">fetch_repeat_new() in sales_analyzer_extras.py</span></div>
+  <p>Each product in the selected date window is classified as <strong>Repeat</strong> or <strong>New</strong> at the product level (not order level). The definition deliberately avoids the "all-New" problem that occurs when the window starts at a partner's very first order.</p>
+  <div class="formula"><span class="c">Classification logic (SQL CASE):</span>
+
+<span class="g">Repeat</span> IF:
+  → Product was bought by this partner in ANY transaction BEFORE current window
+    (t.date &lt; window_start)
+  OR
+  → Product was bought MORE THAN ONCE within the current window
+    (COUNT(DISTINCT t.id) &gt; 1 within window)
+
+<span class="r">New</span> IF:
+  → Product appears in current window for the FIRST TIME EVER
+    (no prior purchases, bought only once in this window)
+
+<span class="c">Why two Repeat conditions?</span>
+<span class="c">If window starts at first-ever order date: all products would be "New"</span>
+<span class="c">even if the partner has ordered them hundreds of times. The in-window</span>
+<span class="c">repeat condition catches this case.</span></div>
+</div>
+
+<!-- S6 -->
+<div class="sec">
+  <div class="sh"><div class="sn">06</div><h2>Multi-Partner Comparison View</h2><span class="sf">tab2 — Compare Partners</span></div>
+  <p>The Compare tab allows side-by-side analysis of up to 3 partners over the same date window. It produces KPI cards, an overlaid monthly revenue line chart, and a grouped category revenue bar chart.</p>
+  <div class="grid2">
+    <div class="card g"><div class="ct">KPI Cards</div><div class="cd2">Revenue, Orders, Total Qty, Unique Products side-by-side. Uses <code>fetch_multi_partner_kpis()</code> — one query per partner looped, joined on company_name.</div></div>
+    <div class="card b"><div class="ct">Monthly Revenue Chart</div><div class="cd2">Overlaid line chart using Plotly Express. All partners' monthly revenue on the same axes. Color sequence: green → indigo → amber.</div></div>
+    <div class="card a"><div class="ct">Category Revenue Comparison</div><div class="cd2">Grouped bar chart: X = product category, Y = revenue, grouped by partner. Shows which partner dominates which category.</div></div>
+    <div class="card p"><div class="ct">Deep-link from Kanban</div><div class="cd2"><code>st.session_state["sa_preselect_partner"]</code> — Kanban pipeline writes this key; Sales Analyzer reads and pops it to auto-select the partner on load.</div></div>
+  </div>
+</div>
+
+<!-- S7 -->
+<div class="sec">
+  <div class="sh"><div class="sn">07</div><h2>Excel Export — 3-Sheet Workbook</h2><span class="sf">export_excel() in sales_analyzer_extras.py</span></div>
+  <p>The Excel export generates a dark-themed 3-sheet workbook using openpyxl. No third-party template required — all styling is applied programmatically.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Sheet</th><th>Content</th><th>Styling</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Summary</strong></td><td>KPI cards: Revenue, Orders, Qty, Products, Last Order, YoY Revenue, YoY Orders. Period label in header.</td><td>Dark background (#0D0F1A), green accent (#34D399) header bar, merged A1:B1 title cell</td></tr>
+      <tr><td><strong>Products</strong></td><td>Product-level table: name, category, group, qty, avg rate, total amount, invoices, last purchased. Sorted by total_amount DESC.</td><td>Alternating row colours (#0D0F1A / #12141C), frozen header row, auto column width</td></tr>
+      <tr><td><strong>Monthly Revenue</strong></td><td>Month, Revenue, Orders — one row per calendar month in the selected window.</td><td>Same dark theme, green header, thin borders throughout</td></tr>
+    </tbody>
+  </table></div>
+  <div class="call i"><div class="ci">ℹ️</div><div class="cb2"><strong>avg_rate computation</strong>The rate column uses <code>ROUND(AVG(net_amt / NULLIF(qty, 0)), 2)</code> — not the raw <code>rate</code> column in the DB which contains NULLs. This ensures every product shows a meaningful unit price computed from actual transaction values.</div></div>
+</div>
+
+<!-- S8 -->
+<div class="sec">
+  <div class="sh"><div class="sn">08</div><h2>PDF Export &amp; INR Formatting</h2><span class="sf">export_pdf() · _fmt_inr()</span></div>
+  <p>The PDF export generates a landscape A4 dark-themed report using fpdf. Unicode characters (₹, →, etc.) are mapped to latin-1 equivalents via <code>_pdf_safe()</code> to avoid encoding errors with Helvetica.</p>
+  <div class="formula"><span class="c">PDF structure:</span>
+Header bar (accent green, 24mm) → Partner name + city/state/date range
+KPI block (6 cards at 44mm each across the page width)
+Product table (top 25 products, truncated at 38 chars, alternating rows)
+Footer: generated date
+
+<span class="c">_pdf_safe() character map (critical for fpdf Helvetica compatibility):</span>
+₹ → Rs    → → ->    • → -    — → -    … → ...    × → x</div>
+  <h3>INR Number Formatting — <code>_fmt_inr()</code></h3>
+  <div class="formula"><span class="c">Indian number format used across all displays:</span>
+val ≥ 1,00,00,000 → <span class="g">₹{val/1_00_00_000:.2f} Cr</span>  (crores)
+val ≥ 1,00,000    → <span class="g">₹{val/1_00_000:.2f} L</span>    (lakhs)
+val &lt; 1,00,000    → <span class="g">₹{val:,.0f}</span>              (exact with comma)</div>
+</div>
+
+</div><!-- /con -->
+
+<div class="footer">
+  <strong>Sales Analyzer — Technical Brief</strong> &nbsp;·&nbsp; May 2026 — v1.0<br/>
+  Files: sales_analyzer.py (693 lines) · sales_analyzer_extras.py (404 lines)<br/>
+  Data: view_sales_analyzer_partner_summary · transactions_dsr · due_payment · master_party/state/city/products/group/category<br/>
+  Key features: Approved-only revenue (3-layer filter) · 5-signal next-order prediction · Repeat/New product classification · 3-sheet Excel · PDF landscape · Multi-partner comparison · Kanban deep-link
+</div>
+</body>
+</html>
