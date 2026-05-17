@@ -138,10 +138,10 @@
     so your team can run targeted clearance campaigns directly from the dashboard.
   </p>
   <div class="cover-meta">
-    <div class="cover-meta-item"><strong>UI File</strong>inventory.py (218 lines)</div>
-    <div class="cover-meta-item"><strong>Engine</strong>monitoring_mixin.py → get_stock_details()</div>
-    <div class="cover-meta-item"><strong>Data Source</strong>df_stock_stats + df_dead_stock views</div>
-    <div class="cover-meta-item"><strong>April 2026</strong>Version 2.4</div>
+    <div class="cover-meta-item"><strong>UI File</strong>inventory.py (~860 lines)</div>
+    <div class="cover-meta-item"><strong>Engine</strong>monitoring_mixin.py + data_repository.py</div>
+    <div class="cover-meta-item"><strong>Data Source</strong>df_stock_stats + df_dead_stock views + df_partner_features</div>
+    <div class="cover-meta-item"><strong>May 2026</strong>Version 3.0 — 4-Signal Lookalike</div>
   </div>
 </div>
 
@@ -377,56 +377,97 @@ qty_col   = first found from: ["buyer_past_purchase_qty", "total_qty", "qty"]
   <div class="section">
     <div class="section-header">
       <div class="section-num">06</div>
-      <h2>Lookalike Audience Discovery — Cluster-Powered</h2>
-      <span class="section-file">inventory.py → lines 174–191</span>
+      <h2>Lookalike Audience Discovery — 4-Signal Composite Scoring</h2>
+      <span class="section-file">inventory.py → lines 321–480</span>
     </div>
-    <p>This is the feature that makes the Inventory module unique. After identifying past buyers, the system identifies which cluster(s) those buyers belong to — then surfaces other partners in the same cluster who have <em>not yet bought this product</em>. These are lookalike audiences: partners who behave like your past buyers, making them likely candidates for the same product.</p>
+    <p>The lookalike engine uses an industry-standard 4-signal composite scoring model. The previous algorithm sorted all cluster-matched partners by <code>recent_90_revenue</code> globally — causing the same top-revenue buyers (e.g. Tanishk InfoTech ₹67Cr) to appear as lookalikes for <em>every</em> dead-stock product regardless of category. The new engine scores each candidate by their product-specific behavioural affinity, ensuring unique and relevant recommendations per SKU.</p>
+
+    <div class="callout warn">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>Previous bug (now resolved)</strong>
+        Old algorithm sorted by <code>recent_90_revenue</code> globally → top-5 highest-revenue accounts appeared as lookalikes for every product. A CCTV camera dead-stock and a Synthetic Enamel dead-stock produced identical lookalike lists.
+      </div>
+    </div>
 
     <div class="audience-grid">
       <div class="audience-card past">
         <div class="audience-badge">Past Buyer</div>
         <div class="audience-title">Proven Demand — High Priority</div>
         <div class="audience-body">
-          Partners who specifically purchased this SKU before. Their historical purchase quantity is shown. These are your warmest leads — they know the product, they've bought it, and the conversation is "we have stock at a discount, are you interested?" Not an education sell.
+          Partners who specifically purchased this SKU before. Sorted by historical purchase quantity. Warmest leads — no education sell needed.
         </div>
       </div>
       <div class="audience-card lookalike">
-        <div class="audience-badge">Lookalike</div>
-        <div class="audience-title">Cluster-Derived — New Opportunity</div>
+        <div class="audience-badge">4-Signal Lookalike</div>
+        <div class="audience-title">Product-Affinity Scored — New Opportunity</div>
         <div class="audience-body">
-          Partners in the same cluster as past buyers who haven't bought this product. They share similar revenue profile, product category mix, and buying behaviour with the actual buyers. Sorted by <code>recent_90_revenue</code> (most active partners first) and capped at 10 per cluster.
+          Scored by product-category behaviour, not global revenue. Audience Type column shows affinity: <code>Lookalike (42% CCTV spend)</code> — immediately actionable for the sales rep.
         </div>
       </div>
     </div>
 
-    <div class="formula"><span class="comment">Lookalike discovery algorithm (step-by-step):</span>
+    <h3>The 4-Signal Composite Formula</h3>
+    <div class="formula"><span class="comment">lookalike_score = weighted sum of 4 independent behavioural signals</span>
 
-1. Extract cluster labels of all past buyers for this SKU:
-   <span class="var">buyer_clusters</span> = leads["cluster_label"].dropna().unique()
+<span class="var">lookalike_score</span> =
+  <span class="good">0.35</span> × <span class="var">category_proven</span>      <span class="comment">← Signal 1: Has partner bought ANY product in this group?  (binary 0/1)</span>
++ <span class="good">0.30</span> × <span class="var">group_affinity</span>        <span class="comment">← Signal 2: mix::rw::{group} wallet-share  (0.0 – 1.0)</span>
++ <span class="good">0.20</span> × <span class="var">geometric_similarity</span>   <span class="comment">← Signal 3: cosine_sim(candidate, past-buyer centroid)</span>
++ <span class="good">0.15</span> × <span class="var">recency_score</span>          <span class="comment">← Signal 4: 1 / (1 + recency_days / 30)</span></div>
 
-2. Filter the full partner features matrix:
-   <span class="var">lookalikes</span> = df_partner_features WHERE:
-       cluster_label IN buyer_clusters       <span class="comment">← same cluster as a real buyer</span>
-       AND company_name NOT IN past_buyers   <span class="comment">← hasn't already bought this SKU</span>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Signal</th><th>Weight</th><th>Source</th><th>What it measures</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Category-Proven Purchase</strong></td>
+            <td>35%</td>
+            <td><code>df_dead</code> (in-memory, zero extra DB query)</td>
+            <td>Has this partner bought <em>any</em> product from the same product group? Binary hard signal. A proven category buyer has the supply chain, storage, and customer base for this product class already established.</td>
+          </tr>
+          <tr>
+            <td><strong>Group Spend Affinity</strong></td>
+            <td>30%</td>
+            <td><code>mix::rw::{group_name}</code> cols in <code>df_partner_features</code></td>
+            <td>Recency-weighted wallet-share in this product group (0–1). A partner spending 60% of budget on CCTV equipment scores 0.60 for a CCTV dead-stock — regardless of total revenue size. Fixes the top-buyer bias.</td>
+          </tr>
+          <tr>
+            <td><strong>Geometric Buyer Similarity</strong></td>
+            <td>20%</td>
+            <td><code>mix::rw:: + scale::</code> vectors → <code>sklearn.cosine_similarity</code></td>
+            <td>Cosine similarity between the candidate's full feature vector and the <em>centroid</em> of all past buyers of this exact SKU in feature space. "Who looks most like the actual buyers of this specific product."
+</td>
+          </tr>
+          <tr>
+            <td><strong>Recency Score</strong></td>
+            <td>15%</td>
+            <td><code>recency_days</code> from <code>df_partner_features</code></td>
+            <td>Decay function ensures dormant partners rank last. A partner who bought yesterday scores ≈1.0; one who hasn't bought in 6 months scores ≈0.14.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
-3. Sort by recent_90_revenue descending — most active partners first
-4. Take top 10 lookalikes (prevents overwhelming the leads table)
+    <h3>Pool Filtering &amp; Output</h3>
+    <div class="formula"><span class="comment">Algorithm steps:</span>
+1. Build candidate pool: same clusters as past buyers, exclude past buyers
+2. Compute all 4 signals per candidate
+3. <span class="var">lookalike_score</span> = 0.35×proven + 0.30×affinity + 0.20×geo_sim + 0.15×recency
+4. Guard: if ≥ 5 candidates have proven=1 OR affinity > 1%:
+   → exclude zero-signal candidates (no category history at all)
+5. Sort DESC → top 10
+6. Audience Type label:
+   <span class="good">"Lookalike (42% CCTV spend)"</span>    when affinity &gt; 0
+   <span class="bad">"Lookalike (Cluster: VIP Stable)"</span> when affinity = 0 (fallback)
 
-5. Append to leads table with:
-   potential_buyer  = company_name
-   mobile_no        = "Lookalike"  (not in dead_stock view, shown as a label)
-   buyer_past_purchase_qty = 0     (no prior purchase of this SKU)
-   last_purchase_date = "Never"
-   Audience Type    = "Lookalike (Cluster: VIP Stable)" etc.
+<span class="comment">Mobile contacts are resolved from contact_lookup (partner master) — no longer shown as "Lookalike"</span></div>
 
-<span class="comment">Combined table: past buyers sorted first (high qty DESC), then lookalikes appended</span>
-<span class="comment">Sales team strategy: call past buyers first, then lookalikes as expansion targets</span></div>
-
-    <div class="callout info">
-      <div class="callout-icon">ℹ️</div>
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
       <div class="callout-body">
-        <strong>Why use cluster membership as the lookalike signal instead of product category overlap?</strong>
-        Category overlap tells you "this partner buys paints, therefore pitch Epoxy Primer" — which is too broad. Cluster membership tells you "this partner behaves like the three specific partners who actually bought this exact dead stock item." The clustering algorithm has already found multi-dimensional similarity covering revenue level, buying frequency, category mix, and recency. It's a richer, more specific signal than a single category match.
+        <strong>Why does Category-Proven carry 35% — the highest weight?</strong>
+        A partner who has previously bought from the same product group has demonstrated <em>actual purchase intent</em> — not just budget allocation. Their procurement process, storage capability, and customer base for that product class are already established. Affinity (30%) measures wallet allocation. Geometric similarity (20%) measures profile match. Proven purchase proves real-world capability. Together, all four signals eliminate the top-buyer bias entirely.
       </div>
     </div>
   </div>
@@ -565,11 +606,11 @@ e.g.: leads_Epoxy_Primer_1L.csv
             <td>A product sold this morning might still appear as "240 units dead stock" if the view refreshes nightly. A clearance campaign might launch for stock that's already sold.</td>
             <td>Trigger a view refresh on demand (a "Refresh Stock Data" button in the UI) or switch to a streaming view for warehouse data where real-time accuracy matters.</td>
           </tr>
-          <tr>
+          <tr style="opacity:0.55;">
             <td>3</td>
-            <td><strong>Lookalike mobile numbers not available</strong></td>
-            <td>Lookalike partners show "Lookalike" as their mobile number — the sales rep has to look up the contact number separately, adding friction to the outreach workflow.</td>
-            <td>Join the lookalike results back to the partner master table to include the mobile number. This is a straightforward data join that requires partner contact info to be in the system.</td>
+            <td><strong>Lookalike mobile numbers not available</strong> <span class="priority-low">✓ Resolved</span></td>
+            <td>Previously, lookalike rows showed "Lookalike" as mobile number — rep had to look up separately.</td>
+            <td>Resolved: mobile numbers now resolved from <code>contact_lookup</code> (partner master join) at render time. Lookalike rows show real contact numbers when available in the partner master.</td>
           </tr>
           <tr>
             <td>4</td>
@@ -591,10 +632,10 @@ e.g.: leads_Epoxy_Primer_1L.csv
 </div>
 
 <div class="footer">
-  <strong>Inventory Liquidation Engine — Technical Brief</strong> &nbsp;·&nbsp; Inventory Module &nbsp;·&nbsp; April 2026<br/>
-  Files: inventory.py (UI) · monitoring_mixin.py → get_stock_details(), get_dead_stock()<br/>
-  Data: view_stock_stats (df_stock_stats) · view_stock_liquidation_leads (df_dead_stock) · df_partner_features (cluster labels for lookalike engine)<br/>
-  Methods: Fault-tolerant age-bucket derivation · 4-component composite exposure score · cluster-based lookalike audience generation · capital-locked calculation with fallback chain
+  <strong>Inventory Liquidation Engine — Technical Brief</strong> &nbsp;·&nbsp; Inventory Module &nbsp;·&nbsp; May 2026 — v3.0<br/>
+  Files: inventory.py (UI ~860 lines) · monitoring_mixin.py → get_stock_details(), get_dead_stock() · data_repository.py → fetch_view_stock_liquidation_leads()<br/>
+  Data: view_stock_stats · view_stock_liquidation_leads · df_partner_features (mix::rw:: + scale:: feature vectors for lookalike engine)<br/>
+  Methods: Fault-tolerant age-bucket derivation · 4-component exposure score · 4-signal lookalike scoring (category-proven + group-affinity + cosine-geo-sim + recency) · capital-locked fallback chain
 </div>
 
 </body>

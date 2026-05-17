@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Recommendation Hub — Technical Brief</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root {
+    --primary:#ec4899; --primary-light:#fdf2f8; --primary-dark:#831843;
+    --green:#059669; --green-light:#d1fae5;
+    --blue:#2563eb; --blue-light:#dbeafe;
+    --amber:#f59e0b; --amber-light:#fffbeb;
+    --purple:#7c3aed; --purple-light:#ede9fe;
+    --text:#111827; --text-secondary:#4b5563; --text-muted:#9ca3af;
+    --border:#e5e7eb; --bg:#f9fafb; --card:#ffffff; --code-bg:#0f172a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Inter',sans-serif;font-size:15px;line-height:1.75;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased;}
+  .cover{background:linear-gradient(135deg,#1a0028 0%,#6b21a8 55%,#ec4899 100%);color:#fff;padding:72px 80px 60px;}
+  .cover-badge{display:inline-block;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:20px;padding:4px 14px;font-size:11px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:24px;}
+  .cover h1{font-size:42px;font-weight:700;letter-spacing:-0.5px;line-height:1.15;margin-bottom:14px;}
+  .cover h1 span{color:#fbcfe8;}
+  .cover .subtitle{font-size:16px;color:#fce7f3;max-width:640px;margin-bottom:40px;line-height:1.6;}
+  .cover-meta{display:flex;gap:32px;flex-wrap:wrap;border-top:1px solid rgba(255,255,255,0.15);padding-top:28px;}
+  .cover-meta-item{font-size:12px;color:#fbcfe8;}
+  .cover-meta-item strong{display:block;color:#fff;font-size:14px;font-weight:600;margin-bottom:2px;}
+  .container{max-width:900px;margin:0 auto;padding:56px 40px;}
+  .intro-box{background:var(--primary-light);border-left:4px solid var(--primary);border-radius:0 10px 10px 0;padding:20px 24px;margin-bottom:48px;font-size:14.5px;color:var(--primary-dark);line-height:1.7;}
+  .toc{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:28px 32px;margin-bottom:48px;}
+  .toc h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);font-weight:600;margin-bottom:16px;}
+  .toc-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 32px;}
+  .toc-item{font-size:13.5px;color:var(--primary-dark);font-weight:500;padding:4px 0;border-bottom:1px dashed var(--border);}
+  .toc-num{color:var(--text-muted);font-weight:400;margin-right:6px;font-size:12px;}
+  .section{margin-bottom:60px;}
+  .section-header{display:flex;align-items:center;gap:14px;margin-bottom:22px;padding-bottom:14px;border-bottom:2px solid var(--border);}
+  .section-num{background:var(--primary);color:#fff;font-size:11px;font-weight:700;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .section h2{font-size:21px;font-weight:700;color:var(--text);}
+  .section-file{font-family:'JetBrains Mono',monospace;font-size:11px;background:var(--code-bg);color:#f9a8d4;padding:2px 8px;border-radius:4px;margin-left:auto;white-space:nowrap;}
+  h3{font-size:15px;font-weight:600;color:var(--text);margin:26px 0 10px;}
+  p{margin-bottom:14px;color:var(--text-secondary);font-size:14.5px;}
+  .formula{background:var(--code-bg);border-radius:10px;padding:18px 22px;margin:16px 0;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#e2e8f0;line-height:1.9;overflow-x:auto;white-space:pre;}
+  .formula .comment{color:#475569;}
+  .formula .var{color:#fcd34d;}
+  .formula .good{color:#34d399;}
+  .formula .bad{color:#f87171;}
+  .callout{border-radius:10px;padding:16px 20px;margin:18px 0;font-size:14px;display:flex;gap:12px;align-items:flex-start;}
+  .callout-icon{font-size:18px;flex-shrink:0;line-height:1.5;}
+  .callout-body strong{display:block;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:5px;}
+  .callout.why{background:var(--primary-light);color:var(--primary-dark);}
+  .callout.tip{background:var(--green-light);color:#064e3b;}
+  .callout.info{background:var(--blue-light);color:#1e3a8a;}
+  .callout.warn{background:#fff7ed;color:#7c2d12;}
+  .table-wrap{overflow-x:auto;margin:18px 0;border-radius:10px;border:1px solid var(--border);}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  thead tr{background:var(--primary-light);}
+  th{padding:11px 16px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--primary-dark);border-bottom:2px solid #fbcfe8;}
+  td{padding:11px 16px;border-bottom:1px solid var(--border);color:var(--text-secondary);vertical-align:top;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:var(--primary-light);}
+  td code{font-family:'JetBrains Mono',monospace;font-size:11.5px;background:var(--primary-light);padding:1px 5px;border-radius:3px;color:var(--primary-dark);}
+  td strong{color:var(--text);font-weight:600;}
+  .tier-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:20px 0;}
+  .tier-card{border-radius:10px;padding:18px 20px;border:1px solid var(--border);}
+  .tier-card.t1{background:var(--blue-light);border-color:#93c5fd;}
+  .tier-card.t2{background:var(--amber-light);border-color:#fcd34d;}
+  .tier-card.t3{background:var(--purple-light);border-color:#c4b5fd;}
+  .tier-title{font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;}
+  .tier-badge{display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:2px 8px;border-radius:10px;margin-bottom:8px;}
+  .t1 .tier-badge{background:var(--blue);color:#fff;}
+  .t2 .tier-badge{background:var(--amber);color:#fff;}
+  .t3 .tier-badge{background:var(--purple);color:#fff;}
+  .tier-body{font-size:13px;color:var(--text-secondary);line-height:1.6;}
+  .flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:16px 0;}
+  .flow-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:12px;font-weight:600;color:var(--text);}
+  .flow-box.src{background:var(--primary-light);border-color:#fbcfe8;color:var(--primary-dark);}
+  .flow-box.out{background:var(--green-light);border-color:#86efac;color:#064e3b;}
+  .flow-arrow{font-size:14px;color:var(--primary);font-weight:700;}
+  .footer{text-align:center;padding:40px 20px;color:var(--text-muted);font-size:12px;border-top:1px solid var(--border);margin-top:16px;}
+  .footer strong{color:var(--text-secondary);}
+  @media(max-width:640px){.cover{padding:40px 24px;}.cover h1{font-size:28px;}.container{padding:32px 20px;}.toc-grid,.tier-grid{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-badge">Recommendation Hub — Internal Technical Brief</div>
+  <h1>Recommendation<br/><span>Hub Engine</span></h1>
+  <p class="subtitle">
+    How the system surfaces high-affinity partner prospects for every product using a 3-tier
+    behavioural intelligence engine — from basket-overlap co-purchase signals down to
+    cluster-based geometric lookalikes — so the tab never shows an empty state.
+  </p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><strong>UI File</strong>recommendation_hub.py (~874 lines)</div>
+    <div class="cover-meta-item"><strong>Engine</strong>associations_mixin.py · clustering_mixin.py</div>
+    <div class="cover-meta-item"><strong>Data Sources</strong>df_partner_features · partner_matrix · association rules</div>
+    <div class="cover-meta-item"><strong>May 2026</strong>Version 2.0 — 3-Tier Prospect Engine</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="intro-box">
+    The Recommendation Hub has two views: <strong>Partner → Product</strong> (what should we pitch to this specific account?) and <strong>Product → Partner</strong> (who should we target for this product?). The most critical tab within Product → Partner is <em>High-Affinity Prospects</em> — partners who have never bought the product but are likely to. Previously, products with no association rules showed an empty state. The new 3-tier engine ensures every product always surfaces a meaningful, behaviourally-relevant prospect list.
+  </div>
+
+  <div class="toc">
+    <h2>Contents</h2>
+    <div class="toc-grid">
+      <div class="toc-item"><span class="toc-num">01</span>Module Architecture &amp; Two Views</div>
+      <div class="toc-item"><span class="toc-num">05</span>Tier 2 — Category Match</div>
+      <div class="toc-item"><span class="toc-num">02</span>The Root Problem (Old Behaviour)</div>
+      <div class="toc-item"><span class="toc-num">06</span>Tier 3 — Cluster Lookalike (4-Signal)</div>
+      <div class="toc-item"><span class="toc-num">03</span>3-Tier Prospect Engine Overview</div>
+      <div class="toc-item"><span class="toc-num">07</span>Combining &amp; Deduplication</div>
+      <div class="toc-item"><span class="toc-num">04</span>Tier 1 — Co-Purchase Signal</div>
+      <div class="toc-item"><span class="toc-num">08</span>AI Outreach Scripts</div>
+    </div>
+  </div>
+
+  <!-- S1 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">01</div>
+      <h2>Module Architecture &amp; Two Views</h2>
+      <span class="section-file">recommendation_hub.py</span>
+    </div>
+    <p>The Recommendation Hub has two top-level tabs, each with a distinct intelligence purpose:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Tab</th><th>Question it answers</th><th>Primary output</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Partner → Product</strong></td><td>Given a selected partner, what products should we pitch them?</td><td>Ranked product recommendations with AI-generated WhatsApp/email scripts</td></tr>
+          <tr><td><strong>Product → Partner</strong></td><td>Given a selected product, which partners should we target?</td><td>3-tab view: Proven Buyers · High-Affinity Prospects · AI Scripts</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="flow">
+      <div class="flow-box src">Association Rules (MBA)</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box">Trigger Products</div>
+      <span class="flow-arrow">+</span>
+      <div class="flow-box src">Product Group (DB)</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box">Category Peers</div>
+      <span class="flow-arrow">+</span>
+      <div class="flow-box src">df_partner_features</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box out">3-Tier Prospect List</div>
+    </div>
+  </div>
+
+  <!-- S2 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">02</div>
+      <h2>The Root Problem — Old Behaviour</h2>
+    </div>
+    <p>The old High-Affinity Prospects tab used a single gate: if no association rules existed for the selected product, it immediately displayed an info banner and stopped — showing zero prospects. This happened silently for many products.</p>
+    <div class="callout warn">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>Old code gate (now removed)</strong>
+        <code>if not trigger_prods: st.info("No co-purchase signal available...")</code><br/>
+        Products like "CON:DEZIRE White Wireless Mouse" — sold as a standalone SKU with thin basket overlap — always hit this gate. The tab showed nothing despite there being dozens of category-matched partners in the DB.
+      </div>
+    </div>
+  </div>
+
+  <!-- S3 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">03</div>
+      <h2>3-Tier Prospect Engine — Overview</h2>
+      <span class="section-file">recommendation_hub.py → lines 457–598</span>
+    </div>
+    <p>The new engine always attempts all three tiers in order of signal strength. Each tier is deduplicated against prior tiers — a partner only appears once, in their highest-signal tier.</p>
+    <div class="tier-grid">
+      <div class="tier-card t1">
+        <div class="tier-badge">Tier 1</div>
+        <div class="tier-title">🔵 Co-Purchase Signal</div>
+        <div class="tier-body">Partners who buy association-rule trigger products but never bought this one. Strongest signal — proven basket overlap. Source: MBA rules from <code>get_associations()</code>.</div>
+      </div>
+      <div class="tier-card t2">
+        <div class="tier-badge">Tier 2</div>
+        <div class="tier-title">🟡 Category Match</div>
+        <div class="tier-body">Partners who buy OTHER products from the same product group. Critical fallback — category-proven buyers already have procurement, storage, and customers for this product class.</div>
+      </div>
+      <div class="tier-card t3">
+        <div class="tier-badge">Tier 3</div>
+        <div class="tier-title">⚪ Cluster Lookalike</div>
+        <div class="tier-body">Partners in the same behavioural clusters as existing buyers, scored by cosine similarity to the past-buyer centroid plus recency decay. Never shows generic top-revenue accounts.</div>
+      </div>
+    </div>
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div class="callout-body">
+        <strong>The tab never shows an empty state</strong>
+        As long as the product has at least one buyer and belongs to a product group in <code>master_group</code>, the engine will always surface Tier 2 (category match) partners at minimum. Only a truly new SKU with no category peers and no buyers can produce zero results — and that case shows a specific, informative empty state instead of a generic "no data" message.
+      </div>
+    </div>
+  </div>
+
+  <!-- S4 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">04</div>
+      <h2>Tier 1 — Co-Purchase Signal</h2>
+      <span class="section-file">_fetch_product_prospects()</span>
+    </div>
+    <p>Tier 1 uses the existing Market Basket Analysis association rules engine. It collects trigger products from both directions of the rule (A→product and product→A) to maximise coverage, then queries the DB for all partners who buy those trigger products but have never bought the selected product.</p>
+    <div class="formula"><span class="comment">Association rule directions (both collected):</span>
+t_from_b = rules WHERE product_b == sel_product → product_a list  <span class="comment">← sel_product is the consequent</span>
+t_from_a = rules WHERE product_a == sel_product → product_b list  <span class="comment">← sel_product is the antecedent</span>
+trigger_prods = union(t_from_b + t_from_a)
+
+<span class="comment">DB query: partners who buy trigger products but NOT the selected product</span>
+<span class="var">tier1_df</span> = _fetch_product_prospects(engine, sel_product, trigger_prods, existing_buyers)
+tier1_df["_signal"] = <span class="good">"🔵 Co-Purchase"</span>
+tier1_df["_tier"]   = 1</div>
+  </div>
+
+  <!-- S5 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">05</div>
+      <h2>Tier 2 — Category Match</h2>
+      <span class="section-file">_fetch_product_meta() · _fetch_category_prospects()</span>
+    </div>
+    <p>When Tier 1 is sparse or empty, Tier 2 queries the DB directly for partners who buy <em>any other product from the same product group</em> but have never bought this specific SKU. These are category-proven buyers — the highest-conversion cold pool because the product pitch is entirely natural to their existing business.</p>
+    <div class="formula"><span class="comment">Step 1: resolve the product's group_name</span>
+<span class="var">group_name, category_name</span> = _fetch_product_meta(engine, sel_product)
+<span class="comment">  → JOIN master_products → master_group → master_product_category</span>
+
+<span class="comment">Step 2: query category peers who haven't bought this SKU</span>
+SQL:
+  SELECT mp.company_name, mg.group_name, p.product_name AS trigger_product,
+         SUM(tp.qty) AS trigger_qty, MAX(t.date) AS last_purchase_date
+  FROM transactions_dsr t
+  JOIN ... WHERE mg.group_name = %(group_name)s
+            AND  p.product_name != %(product_name)s
+  GROUP BY company_name, product_name
+  ORDER BY trigger_qty DESC
+
+<span class="comment">Step 3: exclude existing_buyers + tier1 partners, dedup to best trigger per partner</span>
+<span class="var">tier2_df</span>["_signal"] = <span class="good">"🟡 Category Match"</span>
+tier2_df["_tier"]   = 2</div>
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <div class="callout-body">
+        <strong>Why is Category Match more valuable than a generic lookalike?</strong>
+        A partner who buys CON:DEZIRE Black Wireless Mouse already: stocks accessories, has storage, knows the customer demand, has payment terms established. Pitching them the White variant is a conversation of seconds — "we have the white version, want to add it?" vs. introducing an entirely new product category requiring proof of demand.
+      </div>
+    </div>
+  </div>
+
+  <!-- S6 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">06</div>
+      <h2>Tier 3 — Cluster Lookalike (Geometric Scoring)</h2>
+      <span class="section-file">recommendation_hub.py → lines 513–582</span>
+    </div>
+    <p>Tier 3 uses the same cluster membership approach as the Inventory Liquidation engine but scored geometrically. Partners in the same behavioural clusters as existing buyers are scored by cosine similarity to the past-buyer centroid — ensuring that the lookalikes actually <em>look like</em> the buyers, not just share a cluster.</p>
+    <div class="formula"><span class="comment">Tier 3 algorithm:</span>
+1. Find which clusters existing buyers belong to (top 2 clusters by count)
+2. Build candidate pool: same clusters, exclude all buyers + tier1 + tier2 partners
+
+<span class="comment">Geometric similarity (if df_partner_features available):</span>
+feature_cols  = [mix::rw::* cols] + [scale::* cols]
+buyer_centroid = mean(feature_vectors of all existing_buyers)
+geo_sim[i]    = cosine_similarity(candidate_i_vector, buyer_centroid)
+
+<span class="comment">Recency score:</span>
+rec_score[i] = 1 / (1 + recency_days[i] / 30)
+
+<span class="comment">Combined score:</span>
+<span class="var">lookalike_score</span> = 0.60 × geo_sim + 0.40 × rec_score
+
+sort DESC → top 15 candidates
+<span class="var">tier3_df</span>["_signal"] = <span class="good">"⚪ Lookalike"</span>
+tier3_df["_tier"]   = 3</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Signal</th><th>Weight</th><th>Source column</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Geometric Similarity</strong></td><td>60%</td><td><code>mix::rw:: + scale::</code> via cosine</td><td>How close is this partner's behaviour profile to the centroid of actual past buyers?</td></tr>
+          <tr><td><strong>Recency Score</strong></td><td>40%</td><td><code>recency_days</code></td><td>Decay function — dormant partners rank last regardless of cluster similarity.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- S7 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">07</div>
+      <h2>Combining, Deduplication &amp; Display</h2>
+    </div>
+    <div class="formula"><span class="comment">Combine all tiers:</span>
+prospects_df = concat([tier1_df, tier2_df, tier3_df])
+             .drop_duplicates(subset=["company_name"], keep="first")  <span class="comment">← highest tier wins</span>
+             .sort_values(["_tier", "trigger_qty"], ascending=[True, False])
+
+<span class="comment">UI display columns:</span>
+["rank", "company_name", "mobile_no", "state_name",
+ "_signal",          <span class="good">← "🔵 Co-Purchase" / "🟡 Category Match" / "⚪ Lookalike"</span>
+ "trigger_product",  <span class="good">← "Why Recommended" — the specific product they buy</span>
+ "trigger_qty", "trigger_orders", "days_since"]
+
+<span class="comment">Signal breakdown caption shown below table:</span>
+<span class="good">"📊 Signal breakdown — 🔵 Co-Purchase: 12 | 🟡 Category Match: 34 | ⚪ Lookalike: 8"</span></div>
+    <div class="callout why">
+      <div class="callout-icon">📌</div>
+      <div class="callout-body">
+        <strong>"Why Recommended" column</strong>
+        Every prospect row shows the specific trigger product — e.g. "CON:DEZIRE Black Wireless Mouse" for a category match, or "⚪ Cluster lookalike (VIP Stable)" for a tier 3 result. Sales reps immediately understand the pitch context without needing to run any additional queries.
+      </div>
+    </div>
+  </div>
+
+  <!-- S8 -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">08</div>
+      <h2>AI Outreach Scripts (Partner → Product Tab)</h2>
+      <span class="section-file">_build_personalized_scripts()</span>
+    </div>
+    <p>For the Partner → Product recommendation tab, the system generates personalised WhatsApp and email outreach scripts for each recommended product. Scripts reference the partner's actual purchase history, cluster label, and health segment — avoiding generic discount language.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Script element</th><th>Data source</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Last product reference</strong></td><td><code>partner_ctx["last_product"]</code></td><td>Opens with a real product name the partner knows — builds trust immediately</td></tr>
+          <tr><td><strong>Trigger products</strong></td><td>Association rules → <code>trigger_products</code></td><td>Explains WHY the recommendation is relevant ("partners who buy X also buy Y")</td></tr>
+          <tr><td><strong>Cluster label</strong></td><td><code>cluster_label</code> from df_partner_features</td><td>Tailors tone — "VIP Stable" partners get a premium pitch; "At Risk" partners get urgency</td></tr>
+          <tr><td><strong>Health segment</strong></td><td>Churn/credit score → health bucket</td><td>Scripts are awareness-only for Critical partners; full pitch for Champion partners</td></tr>
+          <tr><td><strong>Deterministic seed</strong></td><td><code>md5(partner+product)</code></td><td>Same partner+product always generates the same script (reproducible, not random)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <strong>Recommendation Hub — Technical Brief</strong> &nbsp;·&nbsp; Module 10 &nbsp;·&nbsp; May 2026 — v2.0<br/>
+  Files: recommendation_hub.py (UI ~874 lines) · associations_mixin.py (get_associations) · clustering_mixin.py (cluster labels + df_partner_features)<br/>
+  New functions: _fetch_product_meta() · _fetch_category_prospects() · 3-tier prospect builder<br/>
+  Methods: MBA co-purchase (Tier 1) · Category-group DB query (Tier 2) · Cosine centroid lookalike (Tier 3) · Signal-type column + breakdown caption
+</div>
+
+</body>
+</html>

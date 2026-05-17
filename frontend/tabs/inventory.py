@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -319,6 +320,12 @@ def _render_live_view(ai):
         state_lookup = dict(zip(_sl["potential_buyer"], _sl["state_name"]))
 
     # ── Find lookalike audiences from cluster data ───────────────────────────
+    # Determine the product group of the selected dead-stock item.
+    # Used below for product-category affinity scoring.
+    _item_group = None
+    if "product_group" in leads.columns and not leads.empty:
+        _item_group = str(leads["product_group"].iloc[0]).strip()
+
     pf = getattr(ai, "df_partner_features", None)
     if not leads.empty and pf is not None:
         pf_reset = pf.reset_index()
@@ -332,7 +339,7 @@ def _render_live_view(ai):
                 right_on="company_name",
                 how="left",
             )
-            # Drop any duplicate columns created by the merge (e.g. company_name_x / company_name_y)
+            # Drop any duplicate columns created by the merge
             leads = leads.loc[:, ~leads.columns.duplicated()]
             leads["Audience Type"] = "Past Buyer"
 
@@ -346,11 +353,131 @@ def _render_live_view(ai):
                 ].copy()
 
                 if not lookalike_pool.empty:
-                    if "recent_90_revenue" in lookalike_pool.columns:
-                        lookalike_pool = lookalike_pool.sort_values(
-                            "recent_90_revenue", ascending=False
+                    import numpy as _np
+                    from sklearn.metrics.pairwise import cosine_similarity as _cos_sim
+
+                    # ══════════════════════════════════════════════════════════════
+                    # 4-SIGNAL LOOKALIKE SCORING  (Industry Best Practice)
+                    # ══════════════════════════════════════════════════════════════
+                    # Signal 1 – Category-Proven Purchase (35%)
+                    #   Has this partner bought ANY product from the SAME product
+                    #   group before (across all dead-stock items in df_dead)?
+                    #   This is a HARD behavioural signal — proven category demand.
+                    #   Source: df_dead (already in memory, zero extra DB query).
+                    #
+                    # Signal 2 – Group Spend Affinity (30%)
+                    #   Recency-weighted wallet-share in this product group.
+                    #   Source: mix::rw::{group} columns in df_partner_features.
+                    #
+                    # Signal 3 – Geometric Buyer Similarity (20%)
+                    #   Cosine similarity between each candidate's full feature
+                    #   vector and the CENTROID of past buyers of this specific
+                    #   product in feature space. "Looks most like actual buyers."
+                    #   Source: mix::rw:: + scale:: columns in df_partner_features.
+                    #
+                    # Signal 4 – Recency (15%)
+                    #   How recently is this partner actively purchasing anything.
+                    # ══════════════════════════════════════════════════════════════
+
+                    # ── Signal 1: Category-Proven Purchase ───────────────────────
+                    # Identify partners who bought ANY item from the same product
+                    # group (using df_dead which covers all dead-stock products).
+                    category_buyers: set = set()
+                    if _item_group and "product_group" in df_dead.columns:
+                        _same_grp = df_dead[
+                            df_dead["product_group"].str.strip() == _item_group.strip()
+                        ]
+                        if not _same_grp.empty and "potential_buyer" in _same_grp.columns:
+                            category_buyers = set(
+                                _same_grp["potential_buyer"].dropna().str.lower()
+                            )
+                    lookalike_pool["_cat_proven"] = (
+                        lookalike_pool["company_name"].str.lower()
+                        .isin(category_buyers).astype(float)
+                    )
+
+                    # ── Signal 2: Group Spend Affinity ───────────────────────────
+                    affinity_col = None
+                    if _item_group:
+                        exact = f"mix::rw::{_item_group}"
+                        if exact in lookalike_pool.columns:
+                            affinity_col = exact
+                        else:
+                            mix_cols = [c for c in lookalike_pool.columns
+                                        if c.startswith("mix::rw::")]
+                            best_col, best_score = None, 0
+                            for mc in mix_cols:
+                                suffix = mc.replace("mix::rw::", "").lower()
+                                overlap = sum(1 for w in _item_group.lower().split()
+                                              if w in suffix)
+                                if overlap > best_score:
+                                    best_score, best_col = overlap, mc
+                            if best_score > 0:
+                                affinity_col = best_col
+
+                    lookalike_pool["_affinity"] = (
+                        lookalike_pool[affinity_col].fillna(0.0).astype(float)
+                        if affinity_col else 0.0
+                    )
+
+                    # ── Signal 3: Geometric Buyer Similarity (cosine to centroid) ─
+                    # Build the centroid of past buyers' feature vectors, then
+                    # score every candidate by cosine similarity to that centroid.
+                    lookalike_pool["_geo_sim"] = 0.0
+                    feat_cols = [c for c in pf_reset.columns
+                                 if c.startswith("mix::rw::") or c.startswith("scale::")]
+                    if feat_cols:
+                        past_buyer_names = set(
+                            leads["potential_buyer"].dropna().str.lower()
                         )
-                    lookalike_pool = lookalike_pool.head(10)
+                        past_feat = pf_reset[
+                            pf_reset["company_name"].str.lower().isin(past_buyer_names)
+                        ][feat_cols].fillna(0.0)
+
+                        if not past_feat.empty:
+                            centroid = past_feat.values.mean(axis=0, keepdims=True)
+                            cand_feat = (
+                                lookalike_pool.set_index("company_name")[feat_cols]
+                                .reindex(lookalike_pool["company_name"])
+                                .fillna(0.0)
+                                .values
+                            )
+                            try:
+                                sims = _cos_sim(cand_feat, centroid).flatten()
+                                # Clip to [0, 1] — cosine can be slightly negative
+                                lookalike_pool["_geo_sim"] = _np.clip(sims, 0.0, 1.0)
+                            except Exception:
+                                pass
+
+                    # ── Signal 4: Recency ────────────────────────────────────────
+                    if "recency_days" in lookalike_pool.columns:
+                        rec = (lookalike_pool["recency_days"]
+                               .fillna(999).astype(float).clip(lower=0))
+                        lookalike_pool["_recency_score"] = 1.0 / (1.0 + rec / 30.0)
+                    else:
+                        lookalike_pool["_recency_score"] = 0.5
+
+                    # ── Composite Score ──────────────────────────────────────────
+                    lookalike_pool["_lookalike_score"] = (
+                        0.35 * lookalike_pool["_cat_proven"]
+                        + 0.30 * lookalike_pool["_affinity"]
+                        + 0.20 * lookalike_pool["_geo_sim"]
+                        + 0.15 * lookalike_pool["_recency_score"]
+                    )
+
+                    # Prefer affinity/proven buyers when the pool is rich enough
+                    has_signal = lookalike_pool[
+                        (lookalike_pool["_cat_proven"] > 0)
+                        | (lookalike_pool["_affinity"] > 0.01)
+                    ]
+                    if len(has_signal) >= 5:
+                        lookalike_pool = has_signal
+
+                    lookalike_pool = (
+                        lookalike_pool
+                        .sort_values("_lookalike_score", ascending=False)
+                        .head(10)
+                    )
 
                     lookalike_rows = []
                     for _, row in lookalike_pool.iterrows():
@@ -358,17 +485,24 @@ def _render_live_view(ai):
                         cluster_lbl = str(row.get("cluster_label", "Unknown"))
                         if len(cluster_lbl) > 25:
                             cluster_lbl = cluster_lbl[:22] + "..."
-                        mobile = contact_lookup.get(company, "—")
-                        state  = state_lookup.get(company, "Unknown")
+                        mobile   = contact_lookup.get(company, "—")
+                        state    = state_lookup.get(company, "Unknown")
+                        aff_pct  = round(float(row.get("_affinity", 0)) * 100, 1)
+                        if aff_pct > 0 and _item_group:
+                            grp_short = (_item_group[:14] + "…"
+                                         if len(_item_group) > 14 else _item_group)
+                            audience_lbl = f"Lookalike ({aff_pct}% {grp_short})"
+                        else:
+                            audience_lbl = f"Lookalike ({cluster_lbl})"
                         lookalike_rows.append({
-                            "potential_buyer":        company,
-                            "mobile_no":              mobile,
+                            "potential_buyer":         company,
+                            "mobile_no":               mobile,
                             "buyer_past_purchase_qty": 0,
-                            "purchase_txn_count":     0,
-                            "last_purchase_date":     pd.NaT,
-                            "state_name":             state,
-                            "Audience Type":          f"Lookalike ({cluster_lbl})",
-                            "cluster_label":          row.get("cluster_label", "Unknown"),
+                            "purchase_txn_count":      0,
+                            "last_purchase_date":      pd.NaT,
+                            "state_name":              state,
+                            "Audience Type":           audience_lbl,
+                            "cluster_label":           row.get("cluster_label", "Unknown"),
                         })
 
                     if lookalike_rows:

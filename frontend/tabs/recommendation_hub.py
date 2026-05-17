@@ -228,6 +228,71 @@ def _fetch_product_prospects(_engine, product_name: str,
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_product_meta(_engine, product_name: str):
+    """Return (group_name, category_name) for a product — used for Tier-2 prospect lookup."""
+    try:
+        df = pd.read_sql(
+            """SELECT mg.group_name,
+                      COALESCE(mpc.category_name, mg.group_name) AS category_name
+               FROM master_products p
+               LEFT JOIN master_group mg ON mg.id = p.group_id
+               LEFT JOIN master_product_category mpc ON mpc.id = mg.category_id_id
+               WHERE p.product_name = %(name)s LIMIT 1""",
+            _engine, params={"name": product_name},
+        )
+        if df.empty:
+            return None, None
+        return str(df.iloc[0]["group_name"]), str(df.iloc[0]["category_name"])
+    except Exception:
+        return None, None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_category_prospects(_engine, product_name: str,
+                               group_name: str, existing_buyers: tuple):
+    """
+    Tier-2 prospects: partners who buy OTHER products from the SAME product
+    group but have never bought this specific SKU.
+    Critical fallback when association rules are sparse — category-proven
+    buyers are the highest-conversion cold pool.
+    """
+    if not group_name:
+        return pd.DataFrame()
+    try:
+        sql = """
+            SELECT mp.company_name,
+                   COALESCE(mp.mobile_no::text, '—')   AS mobile_no,
+                   COALESCE(mp.state_name, 'Unknown')   AS state_name,
+                   p.product_name                       AS trigger_product,
+                   COUNT(DISTINCT t.id)                 AS trigger_orders,
+                   SUM(tp.qty)                          AS trigger_qty,
+                   MAX(t.date)::date                    AS last_purchase_date
+            FROM transactions_dsr t
+            JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+            JOIN master_products p            ON p.id = tp.product_id
+            JOIN master_party mp              ON mp.id = t.party_id
+            JOIN master_group mg              ON mg.id = p.group_id
+            WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+              AND mg.group_name = %(group_name)s
+              AND p.product_name != %(product_name)s
+            GROUP BY mp.company_name, mp.mobile_no, mp.state_name, p.product_name
+            ORDER BY trigger_qty DESC
+        """
+        df = pd.read_sql(sql, _engine,
+                         params={"group_name": group_name, "product_name": product_name})
+        if df.empty:
+            return pd.DataFrame()
+        df["last_purchase_date"] = pd.to_datetime(df["last_purchase_date"])
+        excl = {b.lower() for b in existing_buyers}
+        df = df[~df["company_name"].str.lower().isin(excl)]
+        return (df.sort_values("trigger_qty", ascending=False)
+                  .drop_duplicates("company_name")
+                  .reset_index(drop=True))
+    except Exception:
+        return pd.DataFrame()
+
+
 def _build_personalized_scripts(partner_name, rec_product, trigger_products,
                                  partner_ctx, cluster_label, health_segment):
     """
@@ -397,69 +462,137 @@ def render(ai):
                 )
                 trigger_prods: tuple = ()
                 if not _assoc_prod.empty:
-                    # Collect triggers from BOTH directions: A→product and product→A
-                    # Using product_b == sel_product gives rules where sel_product is recommended
-                    # Using product_a == sel_product gives rules where sel_product is the trigger
-                    # Both sides surface partners likely to be interested
                     t_from_b = _assoc_prod[
                         _assoc_prod["product_b"] == sel_product
                     ]["product_a"].tolist()
                     t_from_a = _assoc_prod[
                         _assoc_prod["product_a"] == sel_product
                     ]["product_b"].tolist()
-                    # No arbitrary cap — use all triggers, sorted by frequency descending
-                    # (the DB prospect query caps rows anyway)
                     trigger_prods = tuple(set(t_from_b + t_from_a))
 
-                existing_names: tuple = tuple(buyers_df["company_name"].tolist()) if not buyers_df.empty else ()
-                prospects_df = (
+                existing_names: tuple = (
+                    tuple(buyers_df["company_name"].tolist())
+                    if not buyers_df.empty else ()
+                )
+
+                # Get product group for Tier-2 category matching
+                _prod_group, _prod_cat = (
+                    _fetch_product_meta(engine, sel_product)
+                    if engine else (None, None)
+                )
+
+                # ─── TIER 1: Co-Purchase Signal ───────────────────────────────
+                # Partners who buy association-rule trigger products but NOT
+                # this product. Strongest signal — proven basket overlap.
+                tier1_df = (
                     _fetch_product_prospects(engine, sel_product, trigger_prods, existing_names)
                     if (engine and trigger_prods) else pd.DataFrame()
                 )
+                if not tier1_df.empty:
+                    tier1_df["_signal"] = "🔵 Co-Purchase"
+                    tier1_df["_tier"]   = 1
 
-                if engine and not buyers_df.empty and hasattr(ai, "matrix") and ai.matrix is not None and "cluster_label" in ai.matrix.columns:
-                    buyer_clusters = ai.matrix.loc[
+                # ─── TIER 2: Category Match ────────────────────────────────────
+                # Partners who buy OTHER products from the SAME product group.
+                # Critical for products with no/few association rules.
+                _t1_names = (
+                    {n.lower() for n in tier1_df["company_name"]}
+                    if not tier1_df.empty else set()
+                )
+                tier2_df = (
+                    _fetch_category_prospects(
+                        engine, sel_product, _prod_group,
+                        existing_names + tuple(_t1_names),
+                    )
+                    if (engine and _prod_group) else pd.DataFrame()
+                )
+                if not tier2_df.empty:
+                    tier2_df["_signal"] = "🟡 Category Match"
+                    tier2_df["_tier"]   = 2
+
+                # ─── TIER 3: Cluster Lookalike (4-signal scored) ──────────────
+                # Buyers in the same behavioural clusters as existing buyers,
+                # scored by geometric similarity to the buyer centroid.
+                tier3_df = pd.DataFrame()
+                _pf = getattr(ai, "df_partner_features", None)
+                if (engine and not buyers_df.empty
+                        and hasattr(ai, "matrix") and ai.matrix is not None
+                        and "cluster_label" in ai.matrix.columns):
+                    _buyer_clusters = ai.matrix.loc[
                         ai.matrix.index.intersection(existing_names), "cluster_label"
                     ]
-                    if not buyer_clusters.empty:
-                        top_clusters = buyer_clusters.value_counts().head(2).index.tolist()
-                        cluster_prospects = ai.matrix[
-                            ai.matrix["cluster_label"].isin(top_clusters)
-                            & (~ai.matrix.index.isin(existing_names))
+                    if not _buyer_clusters.empty:
+                        _top_clusters = _buyer_clusters.value_counts().head(2).index.tolist()
+                        _already = (
+                            set(existing_names)
+                            | (set(tier1_df["company_name"]) if not tier1_df.empty else set())
+                            | (set(tier2_df["company_name"]) if not tier2_df.empty else set())
+                        )
+                        _cp = ai.matrix[
+                            ai.matrix["cluster_label"].isin(_top_clusters)
+                            & (~ai.matrix.index.isin(_already))
                         ].copy()
-                        if not cluster_prospects.empty:
-                            cluster_prospects["company_name"]   = cluster_prospects.index
-                            cluster_prospects["mobile_no"]      = "—"
-                            cluster_prospects["state_name"]     = cluster_prospects.get("state", "Unknown")
-                            cluster_prospects["trigger_product"] = "🎯 Lookalike (" + cluster_prospects["cluster_label"].astype(str) + ")"
-                            cluster_prospects["trigger_qty"]    = 0
-                            cluster_prospects["trigger_orders"] = 0
-                            cluster_prospects["last_purchase_date"] = pd.NaT
-                            cluster_df = cluster_prospects[[
-                                "company_name", "mobile_no", "state_name",
-                                "trigger_product", "trigger_qty", "trigger_orders",
-                                "last_purchase_date",
-                            ]]
-                            # Lookalikes always go to the bottom — real co-purchase signals rank higher
-                            if prospects_df.empty:
-                                prospects_df = cluster_df.reset_index(drop=True)
+                        if not _cp.empty:
+                            import numpy as _np
+                            # Geometric similarity: cosine to past-buyer centroid
+                            _cp["_geo_sim"] = 0.0
+                            if _pf is not None:
+                                _pf_r = _pf.reset_index()
+                                if "company_name" not in _pf_r.columns and "index" in _pf_r.columns:
+                                    _pf_r = _pf_r.rename(columns={"index": "company_name"})
+                                _fcols = [c for c in _pf_r.columns
+                                          if c.startswith("mix::rw::") or c.startswith("scale::")]
+                                if _fcols:
+                                    from sklearn.metrics.pairwise import cosine_similarity as _cs
+                                    _pb_feat = _pf_r[
+                                        _pf_r["company_name"].isin(set(existing_names))
+                                    ][_fcols].fillna(0.0)
+                                    if not _pb_feat.empty:
+                                        _centroid = _pb_feat.values.mean(axis=0, keepdims=True)
+                                        _cand_feat = (
+                                            _pf_r.set_index("company_name")[_fcols]
+                                            .reindex(_cp.index).fillna(0.0).values
+                                        )
+                                        try:
+                                            _sims = _cs(_cand_feat, _centroid).flatten()
+                                            _cp["_geo_sim"] = _np.clip(_sims, 0.0, 1.0)
+                                        except Exception:
+                                            pass
+                            # Recency score
+                            if "recency_days" in _cp.columns:
+                                _rec = _cp["recency_days"].fillna(999).astype(float).clip(lower=0)
+                                _cp["_rec_score"] = 1.0 / (1.0 + _rec / 30.0)
                             else:
-                                # Combine: real prospects first (already sorted by trigger_qty),
-                                # then lookalikes appended after
-                                prospects_df = pd.concat(
-                                    [prospects_df, cluster_df], ignore_index=True
-                                ).drop_duplicates(subset=["company_name"])
-                                # Sort: real triggers first (trigger_qty > 0), lookalikes last
-                                prospects_df["_is_lookalike"] = prospects_df["trigger_qty"] == 0
-                                prospects_df = (
-                                    prospects_df
-                                    .sort_values(
-                                        ["_is_lookalike", "trigger_qty", "trigger_orders"],
-                                        ascending=[True, False, False],
-                                    )
-                                    .drop(columns=["_is_lookalike"])
-                                    .reset_index(drop=True)
-                                )
+                                _cp["_rec_score"] = 0.5
+                            _cp["_lookalike_score"] = (
+                                0.60 * _cp["_geo_sim"]
+                                + 0.40 * _cp["_rec_score"]
+                            )
+                            _cp = _cp.sort_values("_lookalike_score", ascending=False).head(15)
+                            tier3_df = pd.DataFrame({
+                                "company_name":       _cp.index,
+                                "mobile_no":          "—",
+                                "state_name":         _cp.get("state", "Unknown"),
+                                "trigger_product":    "⚪ Cluster lookalike (" + _cp["cluster_label"].astype(str) + ")",
+                                "trigger_qty":        0,
+                                "trigger_orders":     0,
+                                "last_purchase_date": pd.NaT,
+                                "_signal":            "⚪ Lookalike",
+                                "_tier":              3,
+                            })
+
+                # ─── Combine all tiers ─────────────────────────────────────────
+                prospects_df = pd.concat(
+                    [t for t in [tier1_df, tier2_df, tier3_df] if not t.empty],
+                    ignore_index=True,
+                )
+                if not prospects_df.empty:
+                    prospects_df = (
+                        prospects_df
+                        .drop_duplicates(subset=["company_name"], keep="first")
+                        .sort_values(["_tier", "trigger_qty"], ascending=[True, False])
+                        .reset_index(drop=True)
+                    )
 
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Proven Buyers", f"{len(buyers_df)}")
@@ -515,47 +648,48 @@ def render(ai):
 
             with prospect_tab:
                 st.caption(
-                    f"Partners who regularly buy products **co-purchased with** "
-                    f"**{sel_product}** but have never ordered it themselves. "
-                    "Highest-conversion new opportunities."
+                    "Partners ranked by purchase signal strength: "
+                    "**Co-Purchase** (basket overlap) → **Category Match** (same product group) → **Lookalike** (cluster similarity)."
                 )
-                if not trigger_prods:
-                    st.info("No co-purchase signal available — not enough basket overlap in transaction history.")
-                elif prospects_df.empty:
-                    st.info("No prospects found. Product may already be widely distributed.")
+                if prospects_df.empty:
+                    st.info(
+                        f"No prospects found for **{sel_product}**. "
+                        "This may be a new SKU or one with no close category peers yet."
+                    )
                 else:
-                    prospects_df = prospects_df.copy()
-                    prospects_df["rank"] = range(1, len(prospects_df) + 1)
-                    prospects_df["days_since"] = prospects_df["last_purchase_date"].apply(
+                    _disp = prospects_df.copy()
+                    _disp["rank"] = range(1, len(_disp) + 1)
+                    _disp["days_since"] = _disp["last_purchase_date"].apply(
                         lambda d: (datetime.date.today() - pd.Timestamp(d).date()).days
                         if pd.notna(d) else 999
                     )
+                    _show_cols = ["rank", "company_name", "mobile_no", "state_name",
+                                  "_signal", "trigger_product", "trigger_qty",
+                                  "trigger_orders", "days_since"]
+                    _show_cols = [c for c in _show_cols if c in _disp.columns]
                     st.dataframe(
-                        prospects_df[[
-                            "rank", "company_name", "mobile_no", "state_name",
-                            "trigger_product", "trigger_qty", "trigger_orders", "days_since",
-                        ]],
+                        _disp[_show_cols],
                         column_config={
-                            "rank":            st.column_config.NumberColumn("#"),
-                            "company_name":    "Partner",
-                            "mobile_no":       "Contact",
-                            "state_name":      "State",
-                            "trigger_product": "Because They Buy…",
-                            "trigger_qty":     st.column_config.NumberColumn("Trigger Units"),
-                            "trigger_orders":  st.column_config.NumberColumn("Trigger Orders"),
-                            "days_since":      st.column_config.NumberColumn("Days Since Trigger", format="%d d"),
+                            "rank":           st.column_config.NumberColumn("#"),
+                            "company_name":   "Partner",
+                            "mobile_no":      "Contact",
+                            "state_name":     "State",
+                            "_signal":        "Signal Type",
+                            "trigger_product": "Why Recommended",
+                            "trigger_qty":    st.column_config.NumberColumn("Units"),
+                            "trigger_orders": st.column_config.NumberColumn("Orders"),
+                            "days_since":     st.column_config.NumberColumn("Days Since", format="%d d"),
                         },
                         use_container_width=True, hide_index=True,
                     )
-                    if trigger_prods:
-                        st.caption(
-                            f"📌 Co-purchase triggers: "
-                            + ", ".join(trigger_prods[:5])
-                            + (f" + {len(trigger_prods)-5} more" if len(trigger_prods) > 5 else "")
-                        )
+                    # Signal breakdown legend
+                    _sig_counts = _disp["_signal"].value_counts() if "_signal" in _disp.columns else {}
+                    if len(_sig_counts) > 0:
+                        parts = [f"{sig}: {cnt}" for sig, cnt in _sig_counts.items()]
+                        st.caption("📊 Signal breakdown — " + " | ".join(parts))
                     st.download_button(
                         "⬇️ Export Prospect List",
-                        prospects_df.to_csv(index=False),
+                        _disp.drop(columns=["_tier"], errors="ignore").to_csv(index=False),
                         f"prospects_{sel_product[:30].replace(' ', '_')}.csv",
                         "text/csv",
                     )
