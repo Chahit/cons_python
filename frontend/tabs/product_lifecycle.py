@@ -73,15 +73,41 @@ def render(ai):
     ai.ensure_product_lifecycle()
     skel.empty()
 
-    summary = ai.get_product_velocity_summary()
-    if summary.get("status") != "ok":
-        st.warning("No product lifecycle data available. Ensure transaction data is loaded.")
-        return
-
-    # ── Calendar date-range picker ────────────────────────────────────────────
+    # ── Calendar date-range picker (LOAD FIRST for Pitfall 1) ─────────────────
     sel_start, sel_end, date_label, span_days = _render_lifecycle_date_picker()
     ts_start = pd.Timestamp(sel_start)
     ts_end   = pd.Timestamp(sel_end)
+
+    # ── Slice in-memory monthly data to the selected date window ──────────────
+    def _slice_monthly(df):
+        """Return only rows within [sel_start, sel_end]."""
+        if df is None or df.empty or "sale_month" not in df.columns:
+            return df
+        months = pd.to_datetime(df["sale_month"])
+        return df[(months >= ts_start) & (months <= ts_end)].copy()
+
+    df_pm_sliced  = _slice_monthly(getattr(ai, "df_product_monthly", None))
+    df_ind_sliced = _slice_monthly(getattr(ai, "df_individual_product_monthly", None))
+
+    # Dynamically re-compute growth velocity on the date-sliced history (Pitfall 1)
+    if df_pm_sliced is not None and not df_pm_sliced.empty:
+        velocity_df = ai._compute_velocity_for_df(df_pm_sliced)
+    else:
+        velocity_df = pd.DataFrame()
+
+    if velocity_df.empty:
+        st.warning("No product lifecycle data available in the selected date range.")
+        return
+
+    # Dynamically compile the summary metrics dictionary
+    summary = {
+        "total_products": len(velocity_df),
+        "growing": int((velocity_df["lifecycle_stage"] == "Growing").sum()),
+        "mature": int((velocity_df["lifecycle_stage"] == "Mature").sum()),
+        "plateauing": int((velocity_df["lifecycle_stage"] == "Plateauing").sum()),
+        "declining": int((velocity_df["lifecycle_stage"] == "Declining").sum()),
+        "end_of_life": int((velocity_df["lifecycle_stage"] == "End-of-Life").sum())
+    }
 
     # ── Category / Product filters ────────────────────────────────────────────
     gf2, gf3 = st.columns([1, 2])
@@ -103,17 +129,6 @@ def render(ai):
     api_cat  = None if selected_category == "All" else selected_category
     api_prod = None if selected_product == "All" else selected_product
     use_individual = (api_prod is not None) or (api_cat is not None)
-
-    # ── Slice in-memory monthly data to the selected date window ──────────────
-    def _slice_monthly(df):
-        """Return only rows within [sel_start, sel_end]."""
-        if df is None or df.empty or "sale_month" not in df.columns:
-            return df
-        months = pd.to_datetime(df["sale_month"])
-        return df[(months >= ts_start) & (months <= ts_end)].copy()
-
-    df_pm_sliced  = _slice_monthly(getattr(ai, "df_product_monthly", None))
-    df_ind_sliced = _slice_monthly(getattr(ai, "df_individual_product_monthly", None))
 
     # api_period no longer used — date range is now exact
     api_period = None
@@ -140,7 +155,6 @@ def render(ai):
     # Lifecycle stage distribution
     # ------------------------------------------------------------------
     st.markdown("---")
-    velocity_df = ai.get_velocity_data()   # unfiltered for overview charts
 
     color_map = {
         "Growing": "#27ae60",
@@ -161,34 +175,69 @@ def render(ai):
                 color="Stage", color_discrete_map=color_map,
                 hole=0.35,
             )
-            fig_pie.update_layout(height=350)
+            fig_pie.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#94a3b8'),
+                height=350,
+                margin=dict(l=10, r=10, t=40, b=10)
+            )
             st.plotly_chart(fig_pie, use_container_width=True)
 
         with ch2:
-            st.markdown("<p style='text-align:center; font-weight:600; margin-bottom:0;'>Revenue vs Growth Quadrant</p>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align:center; font-weight:600; margin-bottom:0; color:#e2e8f0;'>BCG Growth-Share Portfolio Matrix</p>", unsafe_allow_html=True)
             quad_df = velocity_df.copy()
             quad_df["avg_monthly_revenue"] = quad_df["avg_monthly_revenue"].fillna(0)
             quad_df["growth_3m_pct"] = quad_df["growth_3m_pct"].fillna(0)
+            
             med_rev    = quad_df["avg_monthly_revenue"].median()
             med_growth = quad_df["growth_3m_pct"].median()
+            
+            # Map size based on total_revenue for the bubble plot
+            quad_df["bubble_size"] = quad_df["total_revenue"].clip(lower=1000)
+
+            # BCG Growth-Share Bubble Matrix (Wow Factor 1)
             fig_quad = px.scatter(
                 quad_df,
                 x="avg_monthly_revenue",
                 y="growth_3m_pct",
+                size="bubble_size",
                 color="lifecycle_stage",
                 color_discrete_map=color_map,
                 hover_name="product_name",
-                hover_data=["velocity_score"],
+                hover_data=["velocity_score", "avg_monthly_revenue", "growth_3m_pct"],
                 labels={
-                    "avg_monthly_revenue": "Avg Monthly Revenue (Rs)",
-                    "growth_3m_pct": "3M Growth (%)",
+                    "avg_monthly_revenue": "Volume Share (Avg Monthly Rev, Rs)",
+                    "growth_3m_pct": "3M Market Growth Rate (%)",
+                    "lifecycle_stage": "Stage"
                 },
+                size_max=32,
             )
-            fig_quad.add_hline(y=med_growth, line_dash="dash", line_color="gray",
-                               annotation_text="Median Growth", annotation_position="top right")
-            fig_quad.add_vline(x=med_rev, line_dash="dash", line_color="gray",
-                               annotation_text="Median Revenue", annotation_position="top left")
-            fig_quad.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0))
+            
+            # Draw quadrant boundaries
+            fig_quad.add_hline(y=med_growth, line_dash="dash", line_color="#475569", line_width=1.5)
+            fig_quad.add_vline(x=med_rev, line_dash="dash", line_color="#475569", line_width=1.5)
+            
+            # Add BCG Quadrant Text Labels
+            min_y = float(quad_df["growth_3m_pct"].min()) - 10.0
+            max_y = float(quad_df["growth_3m_pct"].max()) + 15.0
+            min_x = float(quad_df["avg_monthly_revenue"].min())
+            max_x = float(quad_df["avg_monthly_revenue"].max())
+
+            fig_quad.add_annotation(x=med_rev * 1.5, y=med_growth + (max_y - med_growth)*0.7, text="🌟 Stars", showarrow=False, font=dict(color="#22c55e", size=13, weight="bold"))
+            fig_quad.add_annotation(x=med_rev * 1.5, y=med_growth - (med_growth - min_y)*0.7, text="🐄 Cash Cows", showarrow=False, font=dict(color="#3b82f6", size=13, weight="bold"))
+            fig_quad.add_annotation(x=min_x + (med_rev - min_x)*0.3, y=med_growth + (max_y - med_growth)*0.7, text="❓ Question Marks", showarrow=False, font=dict(color="#f59e0b", size=12, weight="bold"))
+            fig_quad.add_annotation(x=min_x + (med_rev - min_x)*0.3, y=med_growth - (med_growth - min_y)*0.7, text="🐕 Dogs", showarrow=False, font=dict(color="#ef4444", size=13, weight="bold"))
+
+            fig_quad.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#94a3b8'),
+                height=350, 
+                margin=dict(l=10, r=10, t=30, b=10),
+                xaxis=dict(gridcolor='#1e293b', zerolinecolor='#334155'),
+                yaxis=dict(gridcolor='#1e293b', zerolinecolor='#334155')
+            )
             st.plotly_chart(fig_quad, use_container_width=True)
 
     # ------------------------------------------------------------------

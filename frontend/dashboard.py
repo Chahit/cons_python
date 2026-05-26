@@ -206,6 +206,14 @@ section[data-testid="stSidebar"] {
 # ── REFRESH BUTTON ─────────────────────────────────────────────────────────────
 st.sidebar.markdown('<div class="nav-refresh">', unsafe_allow_html=True)
 if st.sidebar.button("⟳  Refresh Data", key="nav_refresh"):
+    # 1. Flush the in-memory DataRepository query cache so the next
+    #    database call fetches live data instead of stale cached rows.
+    try:
+        ai.repo.invalidate_cache()
+    except Exception:
+        pass
+    # 2. Clear Streamlit's resource cache so get_engine() rebuilds the
+    #    SalesIntelligenceEngine on the next run.
     st.cache_resource.clear()
     st.rerun()
 st.sidebar.markdown('</div>', unsafe_allow_html=True)

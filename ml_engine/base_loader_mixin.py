@@ -662,90 +662,111 @@ class BaseLoaderMixin:
             & (_path_a | _path_b)
         )
 
-        # ── Five-segment classification (evaluation order is critical) ──────
-        segments = []
-        statuses  = []
-        for row in f.itertuples():
-            cp      = float(churn_p.get(row.Index, 0) or 0)
-            ltv     = float(_lifetime_rev.get(row.Index, 0) or 0)
-            lrev_r  = float(_lrev_rank.get(row.Index, 0) or 0)
-            dfp     = float(_days_first.get(row.Index, 9999) or 9999)  # days since first purchase
-            is_top10_ltv = ltv >= ltv_p90 and ltv_p90 > 0
-            # Partners who joined < 6 months ago have no track record long enough
-            # to justify Champion status — cap them at Emerging regardless of score.
-            is_too_new_for_champion = dfp < 180
+        # ── Five-segment classification — fully vectorized (BUG-03 fix) ─────
+        # Previous code used itertuples() which is a Python for-loop over every
+        # row — O(n) sequential Python overhead.  np.select evaluates all
+        # conditions at once using numpy broadcasting: effectively O(1) overhead.
+        # Evaluation order is preserved; np.select picks the FIRST matching condition.
 
-            # ① Hard override: revenue stopped after buying previously
-            if row.recent_90_revenue <= 0 and row.prev_90_revenue > 0:
-                segments.append("Critical")
-                statuses.append("Churned (Revenue Stopped)")
+        cp_arr       = churn_p.reindex(f.index).fillna(0.0)
+        ltv_arr      = _lifetime_rev.reindex(f.index).fillna(0.0)
+        lrev_arr     = _lrev_rank.reindex(f.index).fillna(0.0)
+        dfp_arr      = _days_first.reindex(f.index).fillna(9999)
 
-            # ② Lifetime Revenue Champion Shield:
-            #    Top-10% lifetime value + still active + not severely churning
-            #    + no revenue freefall → unconditionally Champion.
-            #    These accounts define the business; they cannot be At Risk
-            #    solely because their YoY growth rate plateaued at scale.
-            #    Exception: partners < 6 months old are redirected to Emerging.
-            elif (
-                is_top10_ltv
-                and row.recent_90_revenue > 0
-                and cp < 0.50
-                and row.revenue_drop_pct < 30.0
-            ):
-                if is_too_new_for_champion:
-                    segments.append("Emerging")
-                    statuses.append("Emerging (New Partner — High Potential)")
-                else:
-                    segments.append("Champion")
-                    statuses.append("Champion (Elite Account — Top-10% LTV)")
+        is_top10_ltv       = (ltv_arr >= ltv_p90) & (ltv_p90 > 0)
+        is_too_new         = dfp_arr < 180
 
-            # ③ Champion: score path — high composite + growing + low churn
-            elif row.health_score >= 0.72 and row.revenue_drop_pct < 10 and cp < 0.35:
-                if is_too_new_for_champion:
-                    segments.append("Emerging")
-                    statuses.append("Emerging (New Partner — High Potential)")
-                else:
-                    segments.append("Champion")
-                    statuses.append("Champion (High Performer)")
+        # ① Revenue stopped after buying previously
+        cond_critical_stopped = (f["recent_90_revenue"] <= 0) & (f["prev_90_revenue"] > 0)
 
-            # ④ Champion: revenue-tier path — top-20% recent rev + not truly churning
-            elif (
-                row.recent_90_revenue >= max(rev_p80, 1.0)
-                and cp < 0.45
-                and row.revenue_drop_pct < 25.0
-                and row.health_score >= 0.40
-            ):
-                if is_too_new_for_champion:
-                    segments.append("Emerging")
-                    statuses.append("Emerging (New Partner — High Potential)")
-                else:
-                    segments.append("Champion")
-                    statuses.append("Champion (Volume Leader)")
+        # ② LTV Champion Shield (top-10% lifetime revenue, still active, not hard-churning)
+        cond_ltv_shield = (
+            is_top10_ltv
+            & (f["recent_90_revenue"] > 0)
+            & (cp_arr < 0.50)
+            & (f["revenue_drop_pct"] < 30.0)
+        )
+        # Partners < 6 months old redirect to Emerging even under the shield
+        cond_ltv_emerging  = cond_ltv_shield & is_too_new
+        cond_ltv_champion  = cond_ltv_shield & ~is_too_new
 
-            # ⑤ Emerging: acceleration signals on a smaller base
-            elif f.at[row.Index, "_emerging_flag"]:
-                segments.append("Emerging")
-                statuses.append("Emerging (Rising Star)")
+        # ③ Champion: composite score path
+        cond_score_champion_base = (
+            (f["health_score"] >= 0.72)
+            & (f["revenue_drop_pct"] < 10)
+            & (cp_arr < 0.35)
+        )
+        cond_score_emerging = cond_score_champion_base & is_too_new
+        cond_score_champion = cond_score_champion_base & ~is_too_new
 
-            # ⑥ Healthy: solid mid-tier, no significant decline
-            elif row.health_score >= 0.50 and row.revenue_drop_pct < row.degrowth_threshold_pct:
-                segments.append("Healthy")
-                statuses.append("Healthy (Stable)")
+        # ④ Champion: revenue-tier path (top-20% recent revenue)
+        cond_rev_champion_base = (
+            (f["recent_90_revenue"] >= max(rev_p80, 1.0))
+            & (cp_arr < 0.45)
+            & (f["revenue_drop_pct"] < 25.0)
+            & (f["health_score"] >= 0.40)
+        )
+        cond_rev_emerging = cond_rev_champion_base & is_too_new
+        cond_rev_champion = cond_rev_champion_base & ~is_too_new
 
-            # ⑦ At Risk: score deteriorating but not yet critical
-            elif row.health_score >= 0.30:
-                segments.append("At Risk")
-                statuses.append("At Risk (Degrowth)")
+        # ⑤ Emerging: acceleration signals
+        cond_emerging = f["_emerging_flag"].astype(bool)
 
-            # ⑧ Critical: weak score + churn signals
-            else:
-                segments.append("Critical")
-                statuses.append("Critical (Immediate Action)")
+        # ⑥ Healthy: solid mid-tier
+        cond_healthy = (
+            (f["health_score"] >= 0.50)
+            & (f["revenue_drop_pct"] < f["degrowth_threshold_pct"])
+        )
 
-        f["health_segment"] = segments
-        f["health_status"]  = statuses
+        # ⑦ At Risk: score deteriorating
+        cond_at_risk = f["health_score"] >= 0.30
+
+        # ⑧ Critical: everything else (default)
+
+        segment_conditions = [
+            cond_critical_stopped,   # ①
+            cond_ltv_emerging,       # ② a
+            cond_ltv_champion,       # ② b
+            cond_score_emerging,     # ③ a
+            cond_score_champion,     # ③ b
+            cond_rev_emerging,       # ④ a
+            cond_rev_champion,       # ④ b
+            cond_emerging,           # ⑤
+            cond_healthy,            # ⑥
+            cond_at_risk,            # ⑦
+        ]
+        segment_choices = [
+            "Critical",   # ①
+            "Emerging",   # ② a
+            "Champion",   # ② b
+            "Emerging",   # ③ a
+            "Champion",   # ③ b
+            "Emerging",   # ④ a
+            "Champion",   # ④ b
+            "Emerging",   # ⑤
+            "Healthy",    # ⑥
+            "At Risk",    # ⑦
+        ]
+        status_conditions = segment_conditions  # same ordering
+        status_choices = [
+            "Churned (Revenue Stopped)",              # ①
+            "Emerging (New Partner — High Potential)", # ② a
+            "Champion (Elite Account — Top-10% LTV)", # ② b
+            "Emerging (New Partner — High Potential)", # ③ a
+            "Champion (High Performer)",               # ③ b
+            "Emerging (New Partner — High Potential)", # ④ a
+            "Champion (Volume Leader)",                # ④ b
+            "Emerging (Rising Star)",                  # ⑤
+            "Healthy (Stable)",                        # ⑥
+            "At Risk (Degrowth)",                      # ⑦
+        ]
+
+        f["health_segment"] = np.select(segment_conditions, segment_choices, default="Critical")
+        f["health_status"]  = np.select(status_conditions,  status_choices,  default="Critical (Immediate Action)")
         f.drop(columns=["_emerging_flag"], inplace=True)
         return f
+
+
 
     def _load_monthly_revenue_history(self):
         query = """

@@ -107,7 +107,7 @@
     <div class="cover-meta-item"><strong>External APIs</strong>OpenAI GPT-4o · SerpAPI Google Shopping</div>
     <div class="cover-meta-item"><strong>Storage</strong>SQLite (market_prices.db)</div>
     <div class="cover-meta-item"><strong>Cache</strong>News: 4h · Prices: 6h</div>
-    <div class="cover-meta-item"><strong>Updated</strong>April 2026</div>
+    <div class="cover-meta-item"><strong>Updated</strong>May 2026</div>
   </div>
 </div>
 
@@ -128,14 +128,15 @@
     <div class="toc-grid">
       <div class="toc-item"><span class="toc-num">1.</span>Module Overview &amp; Architecture</div>
       <div class="toc-item"><span class="toc-num">2.</span>Configuration &amp; API Keys</div>
-      <div class="toc-item"><span class="toc-num">3.</span>Tab 1: News Briefing</div>
-      <div class="toc-item"><span class="toc-num">4.</span>Tab 2: Price Tracker</div>
+      <div class="toc-item"><span class="toc-num">3.</span>Tab 1: News Briefing &amp; Archive</div>
+      <div class="toc-item"><span class="toc-num">4.</span>Tab 2: Price Tracker &amp; Competitors</div>
       <div class="toc-item"><span class="toc-num">5.</span>Tab 3: Partner Alerts</div>
-      <div class="toc-item"><span class="toc-num">6.</span>SQLite Persistence Layer</div>
-      <div class="toc-item"><span class="toc-num">7.</span>Urgency Score Formula</div>
-      <div class="toc-item"><span class="toc-num">8.</span>GPT-4o Integration Points</div>
-      <div class="toc-item"><span class="toc-num">9.</span>Caching Strategy</div>
-      <div class="toc-item"><span class="toc-num">10.</span>Known Limitations &amp; Roadmap</div>
+      <div class="toc-item"><span class="toc-num">6.</span>Tab 4: Heat Map Matrix</div>
+      <div class="toc-item"><span class="toc-num">7.</span>SQLite Persistence Layer</div>
+      <div class="toc-item"><span class="toc-num">8.</span>Urgency Score Formula</div>
+      <div class="toc-item"><span class="toc-num">9.</span>GPT-4o Integration Points</div>
+      <div class="toc-item"><span class="toc-num">10.</span>Caching Strategy</div>
+      <div class="toc-item"><span class="toc-num">11.</span>Known Limitations &amp; Roadmap</div>
     </div>
   </div>
 
@@ -147,24 +148,29 @@
       <span class="section-file">market_intelligence.py</span>
     </div>
     <p>
-      The module is a <strong>3-tab interface</strong>, each tab operating independently with its own
+      The module is a <strong>4-tab interface</strong>, each tab operating independently with its own
       data sources, caching, and AI integration:
     </p>
     <div class="tab-row">
       <div class="tab-chip">
         <div class="tab-icon">📰</div>
         <div class="tab-name">News Briefing</div>
-        <div class="tab-desc">5 RSS feeds → GPT-4o analysis → impact cards per product category</div>
+        <div class="tab-desc">5 RSS feeds → GPT-4o analysis → impact cards and historical archive</div>
       </div>
       <div class="tab-chip">
         <div class="tab-icon">📊</div>
         <div class="tab-name">Price Tracker</div>
-        <div class="tab-desc">SerpAPI Google Shopping → price comparison → 30-day trend chart</div>
+        <div class="tab-desc">SerpAPI Google Shopping → competitor tracking &amp; 30-day multi-line chart</div>
       </div>
       <div class="tab-chip">
         <div class="tab-icon">⚡</div>
         <div class="tab-name">Partner Alerts</div>
-        <div class="tab-desc">Category selection → partner risk scoring → urgency-sorted outreach list</div>
+        <div class="tab-desc">Category selection → partner risk scoring → urgency-sorted outreach with cached GPT coach</div>
+      </div>
+      <div class="tab-chip">
+        <div class="tab-icon">🗺️</div>
+        <div class="tab-name">Heat Map</div>
+        <div class="tab-desc">Partner vs Category spend matrix → logarithmic cross-sell opportunity tracker</div>
       </div>
     </div>
     <h3>High-Level Architecture</h3>
@@ -185,6 +191,12 @@
       <div class="flow-step">df_recent_group_spend filter</div><div class="flow-arrow">→</div>
       <div class="flow-step">Urgency Score</div><div class="flow-arrow">→</div>
       <div class="flow-step">Partner Table</div>
+    </div>
+    <div class="flow">
+      <div class="flow-step">Partner × Category Spend</div><div class="flow-arrow">→</div>
+      <div class="flow-step">Logarithmic Scale option</div><div class="flow-arrow">→</div>
+      <div class="flow-step">Plotly Heatmap</div><div class="flow-arrow">→</div>
+      <div class="flow-step">Cross-sell Gaps</div>
     </div>
   </div>
 
@@ -297,6 +309,23 @@
         The 4-hour cache means a team of 10 users incurs at most 6 API calls per day.
       </div>
     </div>
+
+    <h3>Interactive Category &amp; Impact Level Filtering</h3>
+    <p>
+      Users can dynamically filter the active stories shown using two multi-select filter inputs in the UI:
+      <br/>· <strong>Filter by Product Category</strong>: Restricts stories to the selected category tags mapped by GPT-4o.
+      <br/>· <strong>Filter by Impact Level</strong>: Restricts stories to High, Medium, or Low impact levels.
+    </p>
+
+    <h3>Past Briefings Archive</h3>
+    <p>
+      To prevent old news briefings from being lost, every generated briefing is serialized and saved to the SQLite table <code>news_briefing_archive</code> along with the overall market mood and timestamp. The UI renders a collapsible expander showing saved briefings from the last 14 days. Clicking "View" pre-views the archived briefing details instantly without any API cost.
+    </p>
+
+    <h3>Article Link Matching</h3>
+    <p>
+      The system implements a best-effort text-matching algorithm (<code>_attach_links_to_stories()</code>) that compares words between GPT's summarized headlines and the original RSS feed articles. When a high word-coincidence match is found, a <code>🔗 Read Article</code> link is rendered directly on the impact card, directing the user to the original full-text source page.
+    </p>
   </div>
 
   <!-- §4 Price Tracker -->
@@ -362,6 +391,24 @@
       A collapsible expander at the bottom of the tab shows all searches from the last 30 days:
       query, category, date, and average price.
     </p>
+
+    <h3>Product Catalog Suggestions</h3>
+    <p>
+      To make searching 100% friction-free, selecting a Category dynamically queries the master B2B product catalog for actual stocked product SKUs (matching keywords via case-insensitive SQL query) and presents them in a dropdown suggestion box. Clicking a suggestion auto-populates the SerpAPI search input.
+    </p>
+
+    <h3>Interquartile Range (IQR) Outlier Filter</h3>
+    <p>
+      To protect average price benchmarking from deceptive extreme pricing (such as replacement accessory screws for ₹150 or bulk trade containers for ₹50,000 skewing a ₹5,000 RAM search), the price tracker applies an IQR rule on fetched results to strictly drop outliers outside the standard distribution:
+    </p>
+    <div class="formula">q25, q75 = percentile(prices, 25), percentile(prices, 75)
+iqr = q75 - q25
+cleaned = prices[ (prices >= q25 - 2.5*iqr) &amp; (prices &lt;= q75 + 2.5*iqr) ]</div>
+
+    <h3>Competitor Watch List</h3>
+    <p>
+      Users can bookmark specific competitor product queries to a watch list saved in SQLite. Clicking <code>🔄 Refresh All Prices</code> updates all watched items in one click. The tracker displays a dynamically generated **Plotly Multi-Line Historical Price Chart** plotting their concurrent price trajectories over the last 30 days.
+    </p>
   </div>
 
   <!-- §5 Partner Alerts -->
@@ -407,12 +454,61 @@ cat_partners.merge(df_partner_features[enrich_cols], on="company_name", how="lef
 <span class="var">Rising ↑</span>  : trend_pct &gt; 5%   <span class="comment"># Call partners now to lock in orders before price rise</span>
 <span class="var">Falling ↓</span> : trend_pct &lt; -5%  <span class="comment"># Alert partners to buying opportunity</span>
 <span class="var">Stable →</span>  : otherwise</div>
+
+    <h3>Resilience &amp; Advanced B2B Upgrades</h3>
+    <p>
+      The partner alerts tab incorporates several high-level engineering upgrades to maintain extreme stability:
+      <br/>· <strong>Hardened Trend Check</strong>: To avoid wild swings based on single-day searches, price trends require at least 3 searches distributed over at least 3 days before triggering.
+      <br/>· <strong>Exact-First String Mapping</strong>: Matches categories using exact matches first, falling back to substrings only if no exact match is found. This prevents "ACER RAM" from matching unrelated product fields.
+      <br/>· <strong>Streamlit Pagination Slider</strong>: Renders a slider limiting selection lists (10 to 100 rows) to prevent browser timeouts or sluggishness when customer databases contain hundreds of entries.
+      <br/>· <strong>Session-State GPT Talking Points Caching</strong>: Generates customized B2B outreach talking points via GPT-4o but caches them in the Streamlit session state, preventing repeated, expensive API calls on expander reopen actions.
+    </p>
   </div>
 
-  <!-- §6 SQLite -->
+  <!-- §6 Tab 4: Heat Map -->
   <div class="section">
     <div class="section-header">
       <div class="section-num">6</div>
+      <h2>Tab 4: Heat Map Matrix</h2>
+      <span class="section-file">market_intelligence.py → Tab 4 Heat Map</span>
+    </div>
+    <p>
+      The <strong>Heat Map</strong> sub-tab provides a visual overview of category spend across your customer database, making it extremely easy to spot cross-selling opportunities and low-penetration accounts at a single glance.
+    </p>
+    
+    <h3>Interactive Spend Grid</h3>
+    <p>
+      Using a high-performance Plotly Heatmap component, the page renders a pivot matrix mapping the **Top N Partners** (10 to 50, adjustable via Streamlit slider) on the Y-axis against the **Top N Categories** (5 to 30, adjustable via slider) on the X-axis:
+    </p>
+    <div class="formula">pivot = hm_filtered.pivot_table(
+    index="company_name", columns="group_name",
+    values="total_spend", aggfunc="sum", fill_value=0
+)</div>
+    
+    <h3>Logarithmic Scaling &amp; Color Coding</h3>
+    <p>
+      B2B spend is highly skewed (e.g., a few VIP accounts spending in Crores while standard accounts spend in Thousands). A standard linear color scale would display only the top VIPs and leave the rest black. To solve this, the Heat Map implements a **Logarithmic color scale** toggle:
+    </p>
+    <div class="formula">z_disp = np.log1p(z_raw) if "Log" in hm_scale else z_raw</div>
+    <p>
+      This applies a smooth gradient color mapping:
+      <br/>· 🟢 **Vibrant Green**: High-volume buyers (active core accounts)
+      <br/>· 🔵 **Indigo / Purple**: Moderate spenders (medium exposure)
+      <br/>· ⬛ **Slate / Dark Grey**: Zero spend (untapped cross-sell opportunities!)
+    </p>
+    
+    <h3>Summary Statistics</h3>
+    <p>
+      The Heat Map dynamically calculates and showcases three critical coverage metrics directly below the chart:
+      <br/>· <strong>Partners &amp; Categories Shown</strong>: The dimensions of the rendered grid.
+      <br/>· <strong>Coverage Percentage</strong>: The proportion of non-zero active cells relative to the total grid cells, indicating how well distributed your category offerings are across top B2B accounts.
+    </p>
+  </div>
+
+  <!-- §7 SQLite -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-num">7</div>
       <h2>SQLite Persistence Layer</h2>
     </div>
     <p>All price data is stored in <code>market_prices.db</code> at the project root.</p>
@@ -439,10 +535,10 @@ cat_partners.merge(df_partner_features[enrich_cols], on="company_name", how="lef
     </div>
   </div>
 
-  <!-- §7 Urgency Score -->
+  <!-- §8 Urgency Score -->
   <div class="section">
     <div class="section-header">
-      <div class="section-num">7</div>
+      <div class="section-num">8</div>
       <h2>Urgency Score Formula</h2>
     </div>
     <p>
@@ -475,10 +571,10 @@ cat_partners.merge(df_partner_features[enrich_cols], on="company_name", how="lef
     </div>
   </div>
 
-  <!-- §8 GPT Integration Points -->
+  <!-- §9 GPT Integration Points -->
   <div class="section">
     <div class="section-header">
-      <div class="section-num">8</div>
+      <div class="section-num">9</div>
       <h2>GPT-4o Integration Points</h2>
     </div>
     <p>The module uses GPT at three places, all routed through the <code>_gpt(system, user, model, max_tokens)</code> helper:</p>
@@ -505,10 +601,10 @@ cat_partners.merge(df_partner_features[enrich_cols], on="company_name", how="lef
     </div>
   </div>
 
-  <!-- §9 Caching Strategy -->
+  <!-- §10 Caching Strategy -->
   <div class="section">
     <div class="section-header">
-      <div class="section-num">9</div>
+      <div class="section-num">10</div>
       <h2>Caching Strategy</h2>
     </div>
     <div class="table-wrap">
@@ -533,10 +629,10 @@ cat_partners.merge(df_partner_features[enrich_cols], on="company_name", how="lef
     </div>
   </div>
 
-  <!-- §10 Known Limitations -->
+  <!-- §11 Known Limitations -->
   <div class="section">
     <div class="section-header">
-      <div class="section-num">10</div>
+      <div class="section-num">11</div>
       <h2>Known Limitations &amp; Roadmap</h2>
     </div>
     <div class="table-wrap">
@@ -566,7 +662,7 @@ cat_partners.merge(df_partner_features[enrich_cols], on="company_name", how="lef
 </div><!-- /container -->
 
 <div style="background:#1e1b4b;color:#c7d2fe;padding:28px 80px;font-size:12px;text-align:center;line-height:1.9;">
-  <strong style="color:#fff;">Consistent AI — Sales Intelligence Platform</strong> &nbsp;·&nbsp; Module 10: Market Intelligence &nbsp;·&nbsp; April 2026<br/>
+  <strong style="color:#fff;">Consistent AI — Sales Intelligence Platform</strong> &nbsp;·&nbsp; Module 10: Market Intelligence &nbsp;·&nbsp; May 2026<br/>
   Part of the Sales Intelligence Suite · See INDEX.html for all module documentation
 </div>
 

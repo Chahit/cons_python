@@ -1,12 +1,43 @@
+import os
+import time
+import threading
 import pandas as pd
 from sqlalchemy import text
+
+
+_ASSIGNMENTS_TTL = int(os.environ.get("CLUSTER_ASSIGNMENTS_TTL_SEC", "300"))
 
 
 class ClusterGovernanceRepository:
     def __init__(self, engine):
         self.engine = engine
+        self._cache: dict[str, tuple[float, object]] = {}
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Internal cache helpers
+    # ------------------------------------------------------------------
+
+    def _cache_get(self, key: str, ttl: int):
+        entry = self._cache.get(key)
+        if entry is not None:
+            ts, val = entry
+            if time.monotonic() - ts < ttl:
+                return val, True
+        return None, False
+
+    def _cache_set(self, key: str, value) -> None:
+        with self._lock:
+            self._cache[key] = (time.monotonic(), value)
+
+    def _cache_invalidate(self, *keys: str) -> None:
+        with self._lock:
+            for k in keys:
+                self._cache.pop(k, None)
 
     def save_run(self, payload):
+        # Invalidate assignments cache — a new approved run will change the data.
+        self._cache_invalidate("last_approved_assignments")
         query = text(
             """
             INSERT INTO cluster_model_runs (
@@ -34,6 +65,8 @@ class ClusterGovernanceRepository:
             return None
 
     def save_assignments(self, run_id, assignments_df):
+        # Invalidate assignments cache — new assignments have just been written.
+        self._cache_invalidate("last_approved_assignments")
         if run_id is None or assignments_df is None or assignments_df.empty:
             return 0
         rows = assignments_df.reset_index().rename(columns={"index": "company_name"})
@@ -69,6 +102,9 @@ class ClusterGovernanceRepository:
         return inserted
 
     def load_last_approved_assignments(self):
+        cached, hit = self._cache_get("last_approved_assignments", _ASSIGNMENTS_TTL)
+        if hit:
+            return cached.copy() if isinstance(cached, pd.DataFrame) else cached
         query = """
         WITH last_ok AS (
             SELECT id
@@ -89,8 +125,11 @@ class ClusterGovernanceRepository:
         try:
             df = pd.read_sql(query, self.engine)
             if df.empty:
-                return df
-            return df.set_index("company_name")
+                result = df
+            else:
+                result = df.set_index("company_name")
         except Exception:
-            return pd.DataFrame()
+            result = pd.DataFrame()
+        self._cache_set("last_approved_assignments", result)
+        return result.copy() if isinstance(result, pd.DataFrame) else result
 

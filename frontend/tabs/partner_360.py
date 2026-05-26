@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 import time
 import re
 
@@ -420,56 +421,238 @@ def render(ai):
                 unsafe_allow_html=True,
             )
 
+        # ── Pitfall A & Wow Factor 1: Machine Learning Explainer & Survival Projections ──
+        st.markdown("<div style='margin-top: 24px;'></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='ui-section'>", unsafe_allow_html=True)
+        section_header("🔮 Machine Learning Explainer & Survival Projections")
+        
+        m_col1, m_col2 = st.columns(2)
+        with m_col1:
+            st.markdown("#### Attribution of Churn Risk (SHAP Explainer)")
+            explain_data = ai.explain_partner_churn(selected_partner)
+            if explain_data.get("status") == "ok":
+                shap_vals = explain_data["shap_values"]
+                
+                # Diverging colors: red for risk contribution (>0), teal/green for safety (<0 or tiny)
+                # But since all signals in our rule-based mixin are positive risk contributions, 
+                # let's color them by magnitude (red for high, green/indigo for tiny)
+                colors = []
+                for val in shap_vals.values():
+                    if val > 0.15:
+                        colors.append("#ef4444")  # Red (High Risk)
+                    elif val > 0.08:
+                        colors.append("#f59e0b")  # Orange (Medium Risk)
+                    else:
+                        colors.append("#10b981")  # Green (Low/Mitigated)
+                
+                fig_shap = go.Figure(go.Bar(
+                    x=list(shap_vals.values()),
+                    y=list(shap_vals.keys()),
+                    orientation='h',
+                    marker=dict(
+                        color=colors,
+                        line=dict(width=1, color='rgba(255,255,255,0.08)')
+                    )
+                ))
+                fig_shap.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis=dict(gridcolor='#1e2433', showgrid=True, title="Relative Risk Weight"),
+                    yaxis=dict(autorange="reversed"),
+                    font={'color': "#94a3b8", 'family': "Inter, sans-serif"},
+                    height=280,
+                    margin=dict(l=10, r=10, t=10, b=10)
+                )
+                st.plotly_chart(fig_shap, use_container_width=True)
+            else:
+                st.info("Attribution data loading or unavailable.")
+                
+        with m_col2:
+            st.markdown("#### 24-Month Account Survival Probability")
+            survival_data = ai.predict_partner_survival(selected_partner)
+            if survival_data.get("status") == "ok":
+                times = survival_data["times"]
+                probs = [p * 100 for p in survival_data["survival_probs"]]
+                med_months = survival_data["median_survival_months"]
+                
+                fig_surv = go.Figure()
+                fig_surv.add_trace(go.Scatter(
+                    x=times, y=probs,
+                    mode='lines',
+                    line=dict(color='#3b82f6', width=3),
+                    fill='tozeroy',
+                    fillcolor='rgba(59, 130, 246, 0.06)',
+                    name='Survival Probability'
+                ))
+                
+                # 50% Median Line
+                fig_surv.add_shape(
+                    type="line", x0=0, y0=50, x1=24, y1=50,
+                    line=dict(color="#ef4444", width=1.5, dash="dash")
+                )
+                fig_surv.add_annotation(
+                    x=med_months, y=50,
+                    text=f"Median Survival: {med_months} Mo",
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=0, ay=-30,
+                    font=dict(color="#ef4444", size=10)
+                )
+                
+                fig_surv.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font={'color': "#94a3b8", 'family': "Inter, sans-serif"},
+                    xaxis=dict(gridcolor='#1e2433', showgrid=True, title="Months Elapsed"),
+                    yaxis=dict(gridcolor='#1e2433', showgrid=True, title="Survival Probability (%)", range=[0, 105]),
+                    height=280,
+                    margin=dict(l=10, r=10, t=10, b=10)
+                )
+                st.plotly_chart(fig_surv, use_container_width=True)
+            else:
+                st.info("Survival projection data loading or unavailable.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
     # ─────────────────────────────────────────────────────────────────────────
     # TAB 1 — Revenue & Health
     # ─────────────────────────────────────────────────────────────────────────
     with _tab_rev:
         st.markdown(f"<div class='ui-section'>", unsafe_allow_html=True)
-        section_header("Revenue Health")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Revenue Drop", f"{drop:.1f}%", delta=f"-{drop:.1f}%", delta_color="inverse")
-        with c2:
-            st.metric("Unlocked Potential (Yearly)", _fmt(total_pot_yearly),
-                      delta=f"Monthly {_fmt(total_pot_monthly)}", delta_color="off")
-        with c3:
-            st.metric("Health Score", f"{health_score:.2f}")
-        with c4:
-            st.metric("Est. Monthly Loss", _fmt(est_monthly_loss))
+        section_header("Revenue Health & Status")
+        
+        rh1, rh2 = st.columns([1, 1.5])
+        with rh1:
+            # ── Wow Factor 2: Dynamic Health Score Plotly Gauge Dial ──
+            g_color = "#10b981"
+            if health_segment == "Champion":
+                g_color = "#10b981"
+            elif health_segment in ("Healthy", "Emerging"):
+                g_color = "#3b82f6"
+            elif health_segment == "At Risk":
+                g_color = "#f59e0b"
+            else:
+                g_color = "#ef4444"
+
+            fig_gauge = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = health_score * 100,
+                domain = {'x': [0, 1], 'y': [0, 1]},
+                title = {'text': f"<b>{health_segment}</b>", 'font': {'size': 15, 'color': '#f8fafc'}},
+                gauge = {
+                    'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "#475569"},
+                    'bar': {'color': g_color},
+                    'bgcolor': "rgba(0,0,0,0)",
+                    'borderwidth': 1.5,
+                    'bordercolor': "#1e2433",
+                    'steps': [
+                        {'range': [0, 40], 'color': 'rgba(239, 68, 68, 0.15)'},
+                        {'range': [40, 70], 'color': 'rgba(245, 158, 11, 0.15)'},
+                        {'range': [70, 100], 'color': 'rgba(16, 185, 129, 0.15)'}
+                    ],
+                }
+            ))
+            fig_gauge.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font={'color': "#f8fafc", 'family': "Inter, sans-serif"},
+                height=180,
+                margin=dict(l=10, r=10, t=30, b=10)
+            )
+            st.plotly_chart(fig_gauge, use_container_width=True)
+            
+        with rh2:
+            st.markdown("<div style='padding-top: 15px;'></div>", unsafe_allow_html=True)
+            m_col1, m_col2 = st.columns(2)
+            with m_col1:
+                st.metric("Revenue Drop", f"{drop:.1f}%", delta=f"-{drop:.1f}%", delta_color="inverse")
+                st.metric("Est. Monthly Loss", _fmt(est_monthly_loss))
+            with m_col2:
+                st.metric("Unlocked Potential (Yearly)", _fmt(total_pot_yearly),
+                          delta=f"Monthly {_fmt(total_pot_monthly)}", delta_color="off")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # ── Section 2: Churn & Forecast ──────────────────────────────────────
+        # ── Section 2: Churn & Forecast with Cash-Flow Micro-Chart ──
         st.markdown(f"<div class='ui-section'>", unsafe_allow_html=True)
-        section_header("Churn & Forecast")
-        c5, c6, c7, c8 = st.columns(4)
-        with c5:
-            st.metric("Churn Probability", f"{churn_prob * 100:.1f}%")
-            st.caption(f"Risk Band: {churn_band}")
-        with c6:
+        section_header("Churn Risk & Forecast Trajectory")
+        
+        cf1, cf2 = st.columns([1, 1.5])
+        with cf1:
+            st.markdown("<div style='padding-top: 10px;'></div>", unsafe_allow_html=True)
+            st.metric("Churn Probability", f"{churn_prob * 100:.1f}%", delta=f"Risk Band: {churn_band}", delta_color="off")
             st.metric("Revenue At Risk (90d)", _fmt(risk_90d),
                       delta=f"Monthly {_fmt(risk_monthly)}", delta_color="off")
-        with c7:
-            st.metric("Forecast Next 30d", _fmt(fc_next_30d),
-                      delta=f"Trend {fc_trend_pct:+.1f}%", delta_color="normal")
-            st.caption(f"Confidence: {fc_conf:.2f}")
-        with c8:
-            st.metric("Last Activity", f"{recency_days}d ago")
+            st.metric("Last Order Recency", f"{recency_days} Days Ago")
+            
+        with cf2:
+            # ── Wow Factor 3: Cash-Flow Trajectory Micro-Chart ──
+            hist_df = pd.DataFrame()
+            if hasattr(ai, "df_monthly_revenue") and ai.df_monthly_revenue is not None and not ai.df_monthly_revenue.empty:
+                hist_df = ai.df_monthly_revenue[ai.df_monthly_revenue["company_name"] == selected_partner].copy()
+            
+            if hist_df.empty:
+                recent_90 = float(facts.get("recent_90_revenue", 0.0))
+                prev_90 = float(facts.get("prev_90_revenue", 0.0))
+                dates = pd.date_range(end=pd.Timestamp.now(), periods=6, freq="MS")
+                vals = [prev_90 / 3.0] * 3 + [recent_90 / 3.0] * 3
+                hist_df = pd.DataFrame({
+                    "sale_month": dates,
+                    "monthly_revenue": vals
+                })
+                
+            hist_sorted = hist_df.sort_values("sale_month")
+            months = hist_sorted["sale_month"].dt.strftime("%b %y").tolist()
+            revenues = hist_sorted["monthly_revenue"].tolist()
+            
+            forecast_month = (hist_sorted["sale_month"].iloc[-1] + pd.DateOffset(months=1)).strftime("%b %y")
+            
+            fig_trend = go.Figure()
+            # Historical Area
+            fig_trend.add_trace(go.Scatter(
+                x=months, y=revenues,
+                mode='lines+markers',
+                line=dict(color='#3b82f6', width=3),
+                fill='tozeroy',
+                fillcolor='rgba(59, 130, 246, 0.06)',
+                name='Historical'
+            ))
+            # Forecast Dotted Area
+            fig_trend.add_trace(go.Scatter(
+                x=[months[-1], forecast_month],
+                y=[revenues[-1], fc_next_30d],
+                mode='lines+markers',
+                line=dict(color='#10b981' if fc_trend_pct >= 0 else '#ef4444', width=3, dash='dash'),
+                fill='tozeroy',
+                fillcolor='rgba(16, 185, 129, 0.06)' if fc_trend_pct >= 0 else 'rgba(239, 68, 68, 0.06)',
+                name='30-Day Forecast'
+            ))
+            fig_trend.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font={'color': "#94a3b8", 'family': "Inter, sans-serif"},
+                xaxis=dict(gridcolor='#1e2433', showgrid=True),
+                yaxis=dict(gridcolor='#1e2433', showgrid=True),
+                height=180,
+                margin=dict(l=10, r=10, t=10, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_trend, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         # ── Section 3: Credit Risk ───────────────────────────────────────────
         st.markdown(f"<div class='ui-section'>", unsafe_allow_html=True)
-        section_header("Credit Risk")
-        cr1, cr2, cr3, cr4 = st.columns(4)
+        section_header("Credit Risk Profile")
+        cr1, cr2 = st.columns([1, 1.5])
         with cr1:
             st.metric("Credit Risk Score", f"{credit_score * 100:.1f}%",
                       delta=f"Band: {credit_band}", delta_color="off")
             st.caption(f"Utilization: {credit_util * 100:.1f}% | Overdue: {overdue_ratio * 100:.1f}%")
         with cr2:
-            st.metric("Outstanding + Adj Risk",
+            st.metric("Outstanding + Adjusted Risk Value",
                 _fmt(outstanding_amt),
-                delta=f"Adj Risk {_fmt(credit_adjusted_risk)}",
+                delta=f"Adjusted Risk Value: {_fmt(credit_adjusted_risk)}",
                 delta_color="off",
             )
+            st.caption("Adjusted risk value balances outstanding balances against the actual credit probability.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────────────────

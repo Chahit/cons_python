@@ -143,10 +143,10 @@
     combining data from six operational tables into a single, ranked leaderboard with per-rep revenue forecasting.
   </p>
   <div class="cover-meta">
-    <div class="cover-meta-item"><strong>Engine File</strong>sales_rep_mixin.py (258 lines)</div>
+    <div class="cover-meta-item"><strong>Engine File</strong>sales_rep_mixin.py (219 lines)</div>
     <div class="cover-meta-item"><strong>UI File</strong>sales_rep_performance.py</div>
     <div class="cover-meta-item"><strong>Data Sources</strong>6 operational tables</div>
-    <div class="cover-meta-item"><strong>May 2026</strong>Version 2.4</div>
+    <div class="cover-meta-item"><strong>May 2026</strong>Version 2.5 (Upgraded)</div>
   </div>
 </div>
 
@@ -162,12 +162,12 @@
       <div class="toc-item"><span class="toc-num">01</span>Data Architecture — Six Source Tables</div>
       <div class="toc-item"><span class="toc-num">06</span>Revenue Efficiency Ratios</div>
       <div class="toc-item"><span class="toc-num">02</span>Active Employee Filter</div>
-      <div class="toc-item"><span class="toc-num">07</span>Per-Rep Forecast — Prophet + Fallback</div>
+      <div class="toc-item"><span class="toc-num">07</span>Per-Rep Forecast — Hardened Fallback</div>
       <div class="toc-item"><span class="toc-num">03</span>Revenue Attribution</div>
-      <div class="toc-item"><span class="toc-num">08</span>Individual Drilldown View</div>
+      <div class="toc-item"><span class="toc-num">08</span>Comparative Cards &amp; Territory View</div>
       <div class="toc-item"><span class="toc-num">04</span>True ROI Calculation</div>
       <div class="toc-item"><span class="toc-num">09</span>Issue Management Analysis</div>
-      <div class="toc-item"><span class="toc-num">05</span>The Leaderboard — What's Ranked</div>
+      <div class="toc-item"><span class="toc-num">05</span>The Leaderboard &amp; Badges</div>
       <div class="toc-item"><span class="toc-num">10</span>Limitations &amp; Improvements</div>
     </div>
   </div>
@@ -322,7 +322,21 @@ rep_sales = tx_merged.groupby("user_id").agg(
       <div class="section-num">05</div>
       <h2>The Leaderboard — What's Ranked and Why</h2>
     </div>
-    <p>The leaderboard default sort is by <strong>total revenue descending</strong>. This is the primary business KPI — the number that appears in management P&amp;L reports. The leaderboard table exposes seven columns for every rep:</p>
+    <p>The leaderboard displays the active rep rankings for the selected date window, sorted by <strong>period revenue descending</strong>. It exposes their period metrics alongside a dynamically computed **Achievement Tier Badge** to highlight top performers across different operational areas. The leaderboard exposes these core columns:</p>
+    
+    <h3>Gamified B2B Achievement Badges</h3>
+    <p>Rather than relying solely on absolute revenue, the system dynamically calculates standard B2B performance tiers based on the entire sales rep roster's active percentiles:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Badge Name</th><th>Trigger Condition</th><th>Business Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>👑 Revenue Champion</code></td><td>Top 10% of total all-time revenue</td><td>High-volume revenue drivers securing major client portfolios.</td></tr>
+          <tr><td><code>⚡ High ROI Leader</code></td><td>Top 15% of expense-to-revenue ROI</td><td>Exceptional capital efficiency — extracts high margins with low operational travel claims.</td></tr>
+          <tr><td><code>🛡️ Partner Guardian</code></td><td>Top 20% of unique customers served</td><td>Outstanding market penetration and relationship breadth across the sales territory.</td></tr>
+          <tr><td><code>⭐ Field Specialist</code></td><td>Otherwise (baseline)</td><td>Dedicated field rep managing localized territory accounts.</td></tr>
+        </tbody>
+      </table>
+    </div>
 
     <div class="kpi-row">
       <div class="kpi">
@@ -419,29 +433,34 @@ rep_sales = tx_merged.groupby("user_id").agg(
   <div class="section">
     <div class="section-header">
       <div class="section-num">07</div>
-      <h2>Per-Rep Revenue Forecast — Prophet + Linear Fallback</h2>
+      <h2>Per-Rep Revenue Forecast — WMA-Hardened Linear Regression</h2>
       <span class="section-file">sales_rep_mixin.py → get_sales_rep_monthly_revenue()</span>
     </div>
-    <p>When drilling into an individual rep, the system generates a forward revenue forecast using the same Prophet → linear regression fallback strategy used for Product Lifecycle forecasting.</p>
+    <p>When drilling into an individual rep, the system generates a forward revenue forecast using a robust, hardened extrapolation engine designed to survive volatile monthly field variations.</p>
 
     <div class="formula"><span class="comment">Data preparation:</span>
 rep_tx = all transactions attributed to rep (user_id match)
 monthly = rep_tx.groupby(YYYY-MM period).sum(net_amt)
 
-<span class="comment">Forecast method selection:</span>
-IF len(monthly) ≥ 4 months of history:
-    → Attempt Prophet forecast (min threshold lowered from 6 to 4 for reps)
-    → yearly_seasonality = True ONLY if ≥ 12 months of history
-       (prevents overfitting seasonality on a short window)
-    → changepoint_prior_scale = 0.15 (slightly higher than 0.10 for products,
-       because rep performance can change more abruptly — promotions, personal events)
-    → interval_width = 0.80 (80% confidence interval)
+<span class="comment">Forecast &amp; Fallback Selection:</span>
+IF len(monthly) &lt; 3:
+    → Return actual data (insufficient history to forecast)
 
-IF Prophet fails OR len < 4 months:
-    → Linear regression fallback (np.polyfit deg=1)
-    → Uncertainty band: ±15% of predicted value (fixed)
+IF len(monthly) ≥ 3:
+    → Fit linear regression trend (np.polyfit deg=1)
+    → Calculate first predicted month value
+    
+    <span class="comment">Slope Hardening Check:</span>
+    IF slope &lt; 0 AND (first predicted month is &lt;= 0 OR drops &gt; 50% MoM from last actual):
+        → **WMA Fallback Triggered** (detects unrealistic cliff-drops)
+        → Compute **3-Month Weighted Moving Average (WMA)**:
+          <span class="var">wma_base</span> = (3 × y[-1] + 2 × y[-2] + 1 × y[-3]) / 6
+        → Extrapolate using a conservative monthly damping decay of -1.5% MoM:
+          <span class="var">pred(i)</span> = wma_base × (0.985^i)
+    ELSE:
+        → Accept standard linear trend prediction
 
-<span class="comment">Output: DataFrame with columns [month, revenue, yhat_lower, yhat_upper, type]</span>
+<span class="comment">Output: DataFrame with columns [month, revenue, type]</span>
 <span class="comment">type = "Actual" (history) or "Forecast" (future periods)</span>
 <span class="comment">Default forecast_months = 3</span></div>
 
@@ -469,15 +488,34 @@ IF Prophet fails OR len < 4 months:
   <div class="section">
     <div class="section-header">
       <div class="section-num">08</div>
-      <h2>Individual Rep Drilldown View</h2>
+      <h2>Individual Rep Drilldown View &amp; Geographic Yield</h2>
     </div>
-    <p>Selecting a specific rep from the dropdown switches the entire page from leaderboard mode to a single-rep performance dashboard. This view shows all six KPI metrics at the top, then the monthly revenue chart with forecast, then the month-over-month delta table.</p>
+    <p>Selecting a specific rep from the dropdown triggers a comprehensive performance deep-dive, exposing active date-window results compared against their historical baselines, their dynamic tier badge, and their geographic sales distribution.</p>
 
+    <h3>1. Comparative Metric Card Redesign</h3>
+    <p>To avoid displaying deceptive ₹0 metrics due to narrow date filters (BUG-01 resolved), the KPI cards retrieve all-time baselines from <code>df_all</code> and contrast them side-by-side with the active period window metrics:</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>KPI Card</th><th>Formula</th><th>What to look for</th></tr></thead>
+        <thead><tr><th>KPI Card</th><th>Value Shown (Bold)</th><th>Historical Baseline (Sub-text)</th><th>Business Use</th></tr></thead>
         <tbody>
-          <tr><td><strong>Total Revenue</strong></td><td>sum(net_amt) — all time</td><td>Overall contribution to business. Does it match their seniority and territory size?</td></tr>
+          <tr><td><strong>Revenue</strong></td><td>Active Window Revenue</td><td>All-Time Total Revenue</td><td>Detects immediate sales momentum compared to historical lifetime contribution.</td></tr>
+          <tr><td><strong>Orders Closed</strong></td><td>Active Window Order Count</td><td>All-Time Total Orders</td><td>Checks transaction volume in the active date selection.</td></tr>
+          <tr><td><strong>Partners Served</strong></td><td>Active Window Unique Partners</td><td>All-Time Unique Partners</td><td>Measures active account penetration vs total active relationship pool.</td></tr>
+          <tr><td><strong>True ROI</strong></td><td>All-Time Revenue/Expense Ratio</td><td>Total Expenses Claimed</td><td>Assesses margin efficiency per rupee of travel claim. Capped at 9999x.</td></tr>
+          <tr><td><strong>Field Issues Logged</strong></td><td>All-Time Issues Count</td><td>All-Time Issue Status</td><td>Proactive service check. Highlights after-sales maintenance follow-up.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>2. Interactive Territory Performance Chart</h3>
+    <p>The individual view also integrates an SQL-backed regional database helper <code>_fetch_rep_territory_stats(engine, user_id)</code>. This helper dynamically groups and sums line-item DSR product sales filtered by approved transactions and maps them to states/cities:
+    <div class="formula">SELECT s.name as state, c.name as city, SUM(tp.net_amt) as revenue 
+FROM transactions_dsr t 
+JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+JOIN due_payment dp ON dp.dsr_id = t.id AND dp.is_active = TRUE
+LEFT JOIN master_party p ON p.id = t.party_id
+... WHERE t.user_id = :uid GROUP BY s.name, c.name ORDER BY revenue DESC LIMIT 15</div>
+    This is rendered as an interactive, beautifully colored Plotly horizontal bar chart displaying their geographic revenue yield across states and cities, enabling instant geographic territory coaching.</p>
           <tr><td><strong>Orders Closed</strong></td><td>nunique(dsr_id) — all transactions</td><td>Volume of selling events. Low orders but high revenue = large-deal rep. High orders, low revenue = small-basket rep.</td></tr>
           <tr><td><strong>True ROI</strong></td><td>total_revenue ÷ total_expenses</td><td>Efficiency. Capped at 9999x for reps with zero expenses. Healthy range: 20x–200x depending on territory cost.</td></tr>
           <tr><td><strong>Partners Served</strong></td><td>nunique(party_id)</td><td>Coverage breadth. Low coverage = concentrated on few large accounts. Risk: losing one partner has outsized impact.</td></tr>
@@ -578,7 +616,7 @@ IF Prophet fails OR len < 4 months:
   <strong>Sales Rep Performance Engine — Technical Brief</strong> &nbsp;·&nbsp; Module 07 of 11 &nbsp;·&nbsp; May 2026<br/>
   Files: sales_rep_mixin.py · sales_rep_performance.py (UI)<br/>
   Data: auth_user · transactions_dsr · transactions_dsr_products · apps_tour_tourplan · apps_tours_expense · primary_dashboard_issue<br/>
-  Methods: Multi-table join · Active employee filter · True ROI scoring · Prophet + linear revenue forecasting · Revenue efficiency ratios
+  Methods: Multi-table join · Active employee filter · True ROI scoring · WMA-hardened Prophet forecasting · Dynamic badges · Territory distribution
 </div>
 
 </body>

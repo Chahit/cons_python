@@ -166,26 +166,50 @@ class SalesRepMixin:
         monthly["month"] = monthly["month"].astype(str)
         monthly["type"] = "Actual"
 
-        # ── Linear Regression Forecast ────────────────────────────────────────
+        # ── Linear Regression Forecast with WMA Fallback ──
         if len(monthly) >= 3 and forecast_months > 0:
             try:
                 x = np.arange(len(monthly)).reshape(-1, 1)
-                y = monthly["revenue"].values
+                y = monthly["revenue"].astype(float).values
 
                 # numpy polyfit (degree 1 = linear) - no sklearn dependency needed
                 coeffs = np.polyfit(x.flatten(), y, deg=1)
                 slope, intercept = coeffs[0], coeffs[1]
 
+                # Check if linear slope creates an unrealistic cliff-drop > 50% MoM
+                last_actual = y[-1]
+                first_pred = slope * len(monthly) + intercept
+                
+                use_wma_fallback = False
+                if slope < 0 and (last_actual > 0 and (last_actual - max(0.0, first_pred)) / last_actual > 0.50):
+                    use_wma_fallback = True
+                elif first_pred <= 0:
+                    use_wma_fallback = True
+
                 last_month = pd.Period(monthly["month"].iloc[-1], freq="M")
                 forecast_rows = []
-                for i in range(1, forecast_months + 1):
-                    next_period = last_month + i
-                    pred_revenue = max(0, slope * (len(monthly) + i - 1) + intercept)
-                    forecast_rows.append({
-                        "month": str(next_period),
-                        "revenue": round(pred_revenue, 2),
-                        "type": "Forecast"
-                    })
+                
+                if use_wma_fallback:
+                    # 3-Month Weighted Moving Average (WMA) baseline
+                    wma_base = (3.0 * y[-1] + 2.0 * y[-2] + 1.0 * y[-3]) / 6.0
+                    for i in range(1, forecast_months + 1):
+                        next_period = last_month + i
+                        # Project stable sales with conservative damped trend (-1.5% per month)
+                        pred_revenue = max(0.0, wma_base * (0.985 ** i))
+                        forecast_rows.append({
+                            "month": str(next_period),
+                            "revenue": round(pred_revenue, 2),
+                            "type": "Forecast"
+                        })
+                else:
+                    for i in range(1, forecast_months + 1):
+                        next_period = last_month + i
+                        pred_revenue = max(0.0, slope * (len(monthly) + i - 1) + intercept)
+                        forecast_rows.append({
+                            "month": str(next_period),
+                            "revenue": round(pred_revenue, 2),
+                            "type": "Forecast"
+                        })
                 
                 monthly = pd.concat([monthly, pd.DataFrame(forecast_rows)], ignore_index=True)
             except Exception:

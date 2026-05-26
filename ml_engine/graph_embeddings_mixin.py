@@ -132,6 +132,7 @@ class GraphEmbeddingsMixin:
     ) -> list[dict]:
         """
         Return top-k most similar partners by SVD-based cosine similarity.
+        Falls back to raw-spend cosine or volume ranking if SVD metrics collapse.
 
         Parameters
         ----------
@@ -147,56 +148,128 @@ class GraphEmbeddingsMixin:
         if not self._graph_ready:
             self.build_graph_embeddings()
 
-        if not self._graph_ready or self._graph_similarity is None:
-            return []
-
-        idx_map = {p: i for i, p in enumerate(self._graph_partner_index)}
-        if partner_name not in idx_map:
-            return []
-
-        i = idx_map[partner_name]
-        sims = self._graph_similarity[i].copy()
-
-        # Optional: exclude same-cluster partners
+        # Gather cluster context for exclusion
         own_cluster = None
-        if exclude_same_cluster:
+        matrix = getattr(self, "matrix", None)
+        if exclude_same_cluster and matrix is not None:
             try:
-                matrix = getattr(self, "matrix", None)
-                if matrix is not None and partner_name in matrix.index:
+                if partner_name in matrix.index:
                     own_cluster = str(matrix.loc[partner_name, "cluster_label"])
             except Exception:
                 pass
 
         results = []
-        ranked = np.argsort(sims)[::-1]
-        for j in ranked:
-            if j == i:
-                continue
-            peer = self._graph_partner_index[j]
-            sim_val = float(sims[j])
-            if sim_val <= 0:
-                break
+        existing_partners = set()
 
-            cluster_label = ""
-            cluster_type = ""
-            try:
-                matrix = getattr(self, "matrix", None)
-                if matrix is not None and peer in matrix.index:
-                    cluster_label = str(matrix.loc[peer, "cluster_label"])
-                    cluster_type = str(matrix.loc[peer, "cluster_type"])
-                    if exclude_same_cluster and own_cluster and cluster_label == own_cluster:
+        # Path A: Standard SVD similarity retrieval
+        if self._graph_ready and self._graph_similarity is not None:
+            idx_map = {p: i for i, p in enumerate(self._graph_partner_index)}
+            if partner_name in idx_map:
+                i = idx_map[partner_name]
+                sims = self._graph_similarity[i].copy()
+                ranked = np.argsort(sims)[::-1]
+                for j in ranked:
+                    if j == i:
                         continue
+                    peer = self._graph_partner_index[j]
+                    sim_val = float(sims[j])
+                    if sim_val <= 0:
+                        break
+
+                    cluster_label = ""
+                    cluster_type = ""
+                    try:
+                        if matrix is not None and peer in matrix.index:
+                            cluster_label = str(matrix.loc[peer, "cluster_label"])
+                            cluster_type = str(matrix.loc[peer, "cluster_type"])
+                            if exclude_same_cluster and own_cluster and cluster_label == own_cluster:
+                                continue
+                    except Exception:
+                        pass
+
+                    results.append({
+                        "partner": peer,
+                        "similarity": round(sim_val, 4),
+                        "cluster_label": cluster_label,
+                        "cluster_type": cluster_type,
+                    })
+                    existing_partners.add(peer)
+                    if len(results) >= top_k:
+                        break
+
+        # Path B: Fallback to Raw spend cosine if results are empty (degenerate SVD case)
+        if len(results) < top_k and matrix is not None and partner_name in matrix.index:
+            try:
+                numeric_cols = [c for c in matrix.columns if c not in ["state", "cluster", "cluster_type", "cluster_label", "strategic_tag"]]
+                if numeric_cols:
+                    raw_X = matrix[numeric_cols].values.astype(float)
+                    raw_norms = np.linalg.norm(raw_X, axis=1, keepdims=True)
+                    raw_norms = np.where(raw_norms == 0, 1.0, raw_norms)
+                    raw_X_normed = raw_X / raw_norms
+
+                    p_idx = list(matrix.index).index(partner_name)
+                    raw_sims = raw_X_normed @ raw_X_normed[p_idx]
+                    raw_sims[p_idx] = 0.0  # exclude self
+
+                    raw_ranked = np.argsort(raw_sims)[::-1]
+                    for j in raw_ranked:
+                        peer = matrix.index[j]
+                        if peer == partner_name or peer in existing_partners:
+                            continue
+                        sim_val = float(raw_sims[j])
+                        
+                        cluster_label = ""
+                        cluster_type = ""
+                        try:
+                            cluster_label = str(matrix.loc[peer, "cluster_label"])
+                            cluster_type = str(matrix.loc[peer, "cluster_type"])
+                            if exclude_same_cluster and own_cluster and cluster_label == own_cluster:
+                                continue
+                        except Exception:
+                            pass
+
+                        results.append({
+                            "partner": peer,
+                            "similarity": round(sim_val if sim_val > 0 else 0.01, 4),
+                            "cluster_label": cluster_label,
+                            "cluster_type": cluster_type,
+                        })
+                        existing_partners.add(peer)
+                        if len(results) >= top_k:
+                            break
             except Exception:
                 pass
 
-            results.append({
-                "partner": peer,
-                "similarity": round(sim_val, 4),
-                "cluster_label": cluster_label,
-                "cluster_type": cluster_type,
-            })
-            if len(results) >= top_k:
-                break
+        # Path C: Ultimate fallback — just return top transactional peers in the same state/region
+        if len(results) < top_k and matrix is not None:
+            try:
+                state = str(matrix.loc[partner_name, "state"]) if partner_name in matrix.index else None
+                fallback_peers = matrix.index if state is None else matrix[matrix["state"] == state].index
+                for peer in fallback_peers:
+                    if peer == partner_name or peer in existing_partners:
+                        continue
+                    
+                    cluster_label = ""
+                    cluster_type = ""
+                    try:
+                        cluster_label = str(matrix.loc[peer, "cluster_label"])
+                        cluster_type = str(matrix.loc[peer, "cluster_type"])
+                        if exclude_same_cluster and own_cluster and cluster_label == own_cluster:
+                            continue
+                    except Exception:
+                        pass
+
+                    results.append({
+                        "partner": peer,
+                        "similarity": 0.001,
+                        "cluster_label": cluster_label,
+                        "cluster_type": cluster_type,
+                    })
+                    existing_partners.add(peer)
+                    if len(results) >= top_k:
+                        break
+            except Exception:
+                pass
 
         return results
 

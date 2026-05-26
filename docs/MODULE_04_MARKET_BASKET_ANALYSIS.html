@@ -403,19 +403,23 @@ sparsity > 0.30  →  min_support = 0.02
 <span class="var">expected_margin_gain</span>  = times_bought_together × avg_line_margin(Product B)
 <span class="var">margin_rate</span>           = avg_line_margin(B) ÷ avg_line_revenue(B)  (clipped 2%–60%)
 
-<span class="comment">Where avg_line_margin = avg(net_amt - transfer_price × qty) over lookback period</span>
+<span class="comment">Where avg_line_margin = avg(net_amt - transfer_price × qty) over lookback period</span></div>
 
-<span class="comment">Weekly / Monthly / Yearly projections (Python-side post-processing):</span>
-<span class="var">expected_gain_weekly</span>  = expected_revenue_gain × (7  ÷ lookback_days)
-<span class="var">expected_gain_monthly</span> = expected_revenue_gain × (30 ÷ lookback_days)
-<span class="var">expected_gain_yearly</span>  = expected_revenue_gain × (365 ÷ lookback_days)
-<span class="comment">(Same formula applied to margin columns)</span></div>
-
-    <div class="callout alt">
-      <div class="callout-icon">⚠️</div>
+    <div class="callout tip">
+      <div class="callout-icon">🛡️</div>
       <div class="callout-body">
-        <strong>Important limitation on gain estimates</strong>
-        The gain estimate is based on how often the pair was bought together historically — not on how many new sales could be made. If Product A and B were bought together 87 times in 12 months, the gain is estimated as if those 87 co-purchases all had an incremental B sale. In reality, some partners would have bought B anyway (no rep influence needed). The actual incremental gain is some fraction of this number — likely 30–60% if the cross-sell is well-targeted. The estimates are a ceiling, useful for prioritisation but not for P&amp;L forecasting.
+        <strong>Precomputed View Fallback (BUG-04)</strong>
+        If the database precomputed view lacks the `expected_revenue_gain` column, the engine does not fall back to a hardcoded placeholder (like flat ₹1,000). Instead, it dynamically calculates the true average product line pricing using the in-memory dataframe (<code>df_ml</code>), protecting recommendation sort orders from distortion.
+      </div>
+    </div>
+
+    <div class="callout info">
+      <div class="callout-icon">📐</div>
+      <div class="callout-body">
+        <strong>Unified Lookback Annualization (FORMULA-03)</strong>
+        To prevent formula drift across methods, the annualization scaling factor is unified via a single `@property`:
+        <code style="display:block;margin-top:6px;font-family:'JetBrains Mono',monospace;">_mba_annualization = 12.0 / float(self.mba_lookback_months)</code>
+        This property unifies all weekly, monthly, and yearly cross-sell opportunity projections.
       </div>
     </div>
   </div>

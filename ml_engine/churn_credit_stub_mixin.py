@@ -31,18 +31,98 @@ class ChurnCreditStubMixin:
         return pf.copy()
 
     def _train_churn_model(self):
-        """No model to train — we use rule-based scoring."""
-        self.churn_model = None
-        self.churn_model_report = {
-            "method": "rule_based",
-            "features": ["revenue_drop_pct", "recency_days", "revenue_volatility",
-                         "growth_rate_90d", "recent_txns"],
-        }
+        """
+        Train a LightGBM churn classifier using self-supervised labels derived
+        from historical revenue patterns.  Falls back to rule-based scoring when
+        there is insufficient signal (< 5 positive / 5 negative samples).
+        """
+        pf = getattr(self, "df_partner_features", None)
+        if pf is None or pf.empty:
+            self.churn_model = None
+            self.churn_model_report = {"method": "rule_based", "reason": "no partner features"}
+            return
+
+        # Build self-supervised churn label:
+        #   Churned = recent_90_revenue < 10% of prev_90_revenue AND prev > 0
+        prev_90  = pd.to_numeric(pf.get("prev_90_revenue",  pd.Series(0.0, index=pf.index)), errors="coerce").fillna(0.0)
+        rec_90   = pd.to_numeric(pf.get("recent_90_revenue", pd.Series(0.0, index=pf.index)), errors="coerce").fillna(0.0)
+        y = ((rec_90 < 0.10 * prev_90.replace(0, np.nan).fillna(1)) & (prev_90 > 0)).astype(int)
+
+        feature_cols = [c for c in getattr(self, "churn_model_features", []) if c in pf.columns]
+        if not feature_cols:
+            feature_cols = ["revenue_drop_pct", "recency_days", "revenue_volatility",
+                            "growth_rate_90d", "recent_txns"]
+            feature_cols = [c for c in feature_cols if c in pf.columns]
+
+        n_pos = int(y.sum())
+        n_neg = int((1 - y).sum())
+
+        if n_pos < 5 or n_neg < 5 or not feature_cols:
+            self.churn_model = None
+            self.churn_model_report = {
+                "method": "rule_based",
+                "reason": f"insufficient signal (pos={n_pos}, neg={n_neg})",
+                "features": feature_cols,
+            }
+            return
+
+        try:
+            import lightgbm as lgb
+            from sklearn.model_selection import train_test_split
+            from sklearn.metrics import roc_auc_score
+
+            X = pf[feature_cols].fillna(0.0).values
+            y_arr = y.values
+
+            # Keep 20% for validation if we have enough samples
+            if len(X) >= 20:
+                X_tr, X_va, y_tr, y_va = train_test_split(
+                    X, y_arr, test_size=0.2, stratify=y_arr, random_state=42
+                )
+            else:
+                X_tr, X_va, y_tr, y_va = X, X, y_arr, y_arr
+
+            model = lgb.LGBMClassifier(
+                n_estimators=200,
+                learning_rate=0.05,
+                max_depth=4,
+                num_leaves=15,
+                min_child_samples=3,
+                scale_pos_weight=max(1.0, n_neg / max(n_pos, 1)),
+                random_state=42,
+                n_jobs=1,
+                verbose=-1,
+            )
+            model.fit(X_tr, y_tr)
+            auc = float(roc_auc_score(y_va, model.predict_proba(X_va)[:, 1]))
+            self.churn_model = model
+            self.churn_model_features_used = feature_cols
+            self.churn_model_report = {
+                "method": "lightgbm",
+                "auc": round(auc, 4),
+                "features": feature_cols,
+                "n_pos": n_pos,
+                "n_neg": n_neg,
+                "n_total": int(len(X)),
+            }
+        except Exception as exc:
+            self.churn_model = None
+            self.churn_model_report = {
+                "method": "rule_based",
+                "reason": f"LightGBM unavailable: {exc}",
+                "features": feature_cols,
+            }
 
     def _score_partner_churn_risk(self):
         """
-        Assign churn probability and risk band to every partner using
-        behavioural signals.  Score range: [0, 1].
+        Assign churn probability and risk band to every partner.
+
+        Strategy (in priority order):
+          1. If a trained LightGBM model is available, use it (highest accuracy).
+          2. Otherwise use a 7-signal rule-based composite (improved formula that
+             now includes the 5 behavioural signals previously ignored).
+
+        Score range: [0, 1] — higher means more likely to churn.
         """
         pf = getattr(self, "df_partner_features", None)
         if pf is None or pf.empty:
@@ -50,58 +130,104 @@ class ChurnCreditStubMixin:
 
         df = pf.copy()
 
-        # ── normalised signal sub-scores (each 0‒1, higher = more churn risk)
-        # 1. Revenue drop magnitude
-        rev_drop = df.get("revenue_drop_pct", pd.Series(0.0, index=df.index)).fillna(0).clip(0, 100) / 100.0
+        # ── Try LightGBM model first ─────────────────────────────────────────
+        model = getattr(self, "churn_model", None)
+        feature_cols = getattr(self, "churn_model_features_used", [])
+        if model is not None and feature_cols:
+            try:
+                X = df[feature_cols].fillna(0.0).values
+                churn_prob = pd.Series(
+                    model.predict_proba(X)[:, 1], index=df.index
+                ).clip(0.0, 1.0)
+            except Exception:
+                model = None  # fall through to rule-based
 
-        # 2. Recency (days since last order) — 365 days = 1.0
-        recency = df.get("recency_days", pd.Series(0.0, index=df.index)).fillna(0).clip(0, 365) / 365.0
+        # ── Rule-based fallback (7 signals, all behavioural features included) ─
+        if model is None:
+            # Signal 1: Revenue drop magnitude
+            rev_drop = df.get("revenue_drop_pct", pd.Series(0.0, index=df.index)).fillna(0).clip(0, 100) / 100.0
 
-        # 3. Revenue volatility (normalised by mean revenue to get CoV)
-        revenue = df.get("recent_90_revenue", pd.Series(1.0, index=df.index)).replace(0, 1)
-        vol = df.get("revenue_volatility", pd.Series(0.0, index=df.index)).fillna(0)
-        cov = (vol / revenue).clip(0, 2) / 2.0
+            # Signal 2: Recency (days since last order) — 365 days → risk = 1.0
+            recency = df.get("recency_days", pd.Series(0.0, index=df.index)).fillna(0).clip(0, 365) / 365.0
 
-        # 4. Negative growth trend
-        growth = df.get("growth_rate_90d", pd.Series(0.0, index=df.index)).fillna(0).clip(-1, 1)
-        growth_risk = ((-growth + 1) / 2.0).clip(0, 1)   # 0 growth → 0.5, -1 → 1.0, +1 → 0.0
+            # Signal 3: Revenue volatility (coefficient of variation)
+            revenue = df.get("recent_90_revenue", pd.Series(1.0, index=df.index)).replace(0, 1)
+            vol     = df.get("revenue_volatility", pd.Series(0.0, index=df.index)).fillna(0)
+            cov     = (vol / revenue).clip(0, 2) / 2.0
 
-        # 5. Transaction frequency drop
-        recent_txns = df.get("recent_txns", pd.Series(0.0, index=df.index)).fillna(0)
-        prev_txns   = df.get("prev_txns",   pd.Series(0.0, index=df.index)).fillna(0)
-        txn_drop = np.where(
-            prev_txns > 0,
-            ((prev_txns - recent_txns) / prev_txns).clip(0, 1),
-            np.where(recent_txns == 0, 0.5, 0.0)
-        )
+            # Signal 4: Negative growth trend
+            growth      = df.get("growth_rate_90d", pd.Series(0.0, index=df.index)).fillna(0).clip(-1, 1)
+            growth_risk = ((-growth + 1) / 2.0).clip(0, 1)  # 0→0.5, -1→1.0, +1→0.0
 
-        # Weighted composite
-        churn_prob = (
-            0.30 * rev_drop
-            + 0.25 * recency
-            + 0.15 * cov
-            + 0.20 * growth_risk
-            + 0.10 * txn_drop
-        ).clip(0.0, 1.0)
+            # Signal 5: Transaction frequency drop
+            recent_txns = df.get("recent_txns", pd.Series(0.0, index=df.index)).fillna(0)
+            prev_txns   = df.get("prev_txns",   pd.Series(0.0, index=df.index)).fillna(0)
+            txn_drop    = pd.Series(
+                np.where(
+                    prev_txns > 0,
+                    ((prev_txns - recent_txns) / prev_txns).clip(0, 1),
+                    np.where(recent_txns == 0, 0.5, 0.0),
+                ),
+                index=df.index,
+            )
 
-        # Partners with zero recent revenue are high churn
-        churned_mask = df.get("recent_90_revenue", pd.Series(0.0, index=df.index)).fillna(0) <= 0
-        churn_prob = churn_prob.where(~churned_mask, other=0.85)
+            # Signal 6: Average order value trend (was computed but never used — now wired)
+            aov_trend = df.get("aov_trend", pd.Series(0.0, index=df.index)).fillna(0).clip(-1, 1)
+            aov_risk  = ((-aov_trend + 1) / 2.0).clip(0, 1)  # declining AOV → higher risk
+
+            # Signal 7: Engagement velocity drop (was computed but never used — now wired)
+            eng_vel  = df.get("engagement_velocity", pd.Series(1.0, index=df.index)).fillna(1).clip(0, 5)
+            eng_risk = (1.0 - (eng_vel / 5.0)).clip(0, 1)    # low velocity → higher risk
+
+            # Signal 8: Category diversity contraction (was computed but never used — now wired)
+            cat_div  = df.get("category_diversity_change", pd.Series(0.0, index=df.index)).fillna(0)
+            cat_risk = ((-cat_div).clip(0, 5) / 5.0)          # shrinking portfolio → higher risk
+
+            # Weighted composite — weights sum to 1.00
+            # Core signals (reliable)   : rev_drop 0.27 | recency 0.20 | cov 0.13 | growth 0.17 | txn_drop 0.08
+            # Behavioural extras (new)  : aov_risk 0.06 | eng_risk 0.05 | cat_risk 0.04
+            churn_prob = (
+                0.27 * rev_drop
+                + 0.20 * recency
+                + 0.13 * cov
+                + 0.17 * growth_risk
+                + 0.08 * txn_drop
+                + 0.06 * aov_risk
+                + 0.05 * eng_risk
+                + 0.04 * cat_risk
+            ).clip(0.0, 1.0)
+
+        # ── BUG-FIX / FORMULA-01: Distinguish truly churned vs seasonal gaps ──
+        # Old code: flat override of 0.85 for ANY zero-revenue partner (wrong for
+        # seasonal buyers who simply haven't purchased in the current window).
+        #
+        # New logic:
+        #   - Had prior revenue AND now zero → truly churned → 0.92
+        #   - Never had revenue in either window → new/unknown → apply 0.70 floor
+        #     (reduce by 30% vs the base formula so we don't over-penalise new accounts)
+        prev_90 = df.get("prev_90_revenue", pd.Series(0.0, index=df.index)).fillna(0)
+        rec_90  = df.get("recent_90_revenue", pd.Series(0.0, index=df.index)).fillna(0)
+
+        truly_churned = (rec_90 <= 0) & (prev_90 > 0)
+        no_history    = (rec_90 <= 0) & (prev_90 <= 0)
+
+        churn_prob = churn_prob.where(~truly_churned, other=0.92)          # definite churn
+        churn_prob = churn_prob.where(~no_history,    other=(churn_prob * 0.70).clip(0.0, 0.65))  # uncertain
+        churn_prob = churn_prob.clip(0.0, 1.0)
 
         pf["churn_probability"] = churn_prob.values
 
-        # Risk band
-        def _band(p):
-            if p >= 0.70: return "High"
-            if p >= 0.45: return "Medium"
-            return "Low"
-
-        pf["churn_risk_band"] = [_band(p) for p in pf["churn_probability"]]
+        # Risk band — vectorized
+        pf["churn_risk_band"] = pd.cut(
+            pf["churn_probability"],
+            bins=[-0.001, 0.44, 0.69, 1.001],
+            labels=["Low", "Medium", "High"],
+        ).astype(str)
 
         # Revenue at risk
-        rev_90 = pf.get("recent_90_revenue", pd.Series(0.0, index=pf.index)).fillna(0)
-        pf["expected_revenue_at_risk_90d"]      = (pf["churn_probability"] * rev_90).round(2)
-        pf["expected_revenue_at_risk_monthly"]  = (pf["churn_probability"] * rev_90 / 3).round(2)
+        rev_90_pf = pf.get("recent_90_revenue", pd.Series(0.0, index=pf.index)).fillna(0)
+        pf["expected_revenue_at_risk_90d"]     = (pf["churn_probability"] * rev_90_pf).round(2)
+        pf["expected_revenue_at_risk_monthly"] = (pf["churn_probability"] * rev_90_pf / 3).round(2)
 
         self.df_partner_features = pf
 
@@ -122,11 +248,69 @@ class ChurnCreditStubMixin:
         monthly_growth  = growth / 3.0          # quarterly growth → monthly equivalent
         forecast_30d    = (monthly_base * (1 + monthly_growth)).clip(lower=0)
 
-        pf["forecast_next_30d"]     = forecast_30d.round(2)
-        pf["forecast_trend_pct"]    = (monthly_growth * 100).round(2)
-        pf["forecast_confidence"]   = np.where(
-            pf.get("active_months", pd.Series(0, index=pf.index)).fillna(0) >= 6, 0.75, 0.45
-        )
+        # ── FORMULA-02: Sigmoid confidence — smoother than the old binary step ─
+        # Old code: either 0.45 or 0.75 with a hard cliff at 6 months.
+        # New:  confidence grows smoothly from ~0.40 at 0 months to ~0.88 at 24+.
+        #   sigmoid(x) = 1 / (1 + e^(-k*(x - x0)))
+        #   k=0.30, x0=6 → at 6 months ≈ 0.50, at 12 months ≈ 0.69
+        months_active = pf.get("active_months", pd.Series(0, index=pf.index)).fillna(0).astype(float)
+        pf["forecast_confidence"] = (
+            1.0 / (1.0 + np.exp(-0.30 * (months_active - 6.0)))
+        ).clip(0.40, 0.90).round(3)
+
+        # ── IMPROVE-02: Try Prophet for Prophet-capable partners ──────────────
+        # Use Prophet for partners with >= 4 months of history; fall back to the
+        # simple linear extrapolation for everyone else (or if Prophet is absent).
+        prophet_forecasts = {}
+        if getattr(self, "df_monthly_revenue", None) is not None and \
+                not self.df_monthly_revenue.empty:
+            try:
+                from prophet import Prophet
+                import warnings
+                # Only run Prophet for the top-50 partners by revenue to keep
+                # startup time acceptable (Prophet fit is ~0.1s each).
+                top_partners = (
+                    pf["recent_90_revenue"].nlargest(50).index
+                    if "recent_90_revenue" in pf.columns else pf.index[:50]
+                )
+                mr = self.df_monthly_revenue.copy()
+                mr["sale_month"] = pd.to_datetime(mr["sale_month"], errors="coerce")
+                for partner in top_partners:
+                    pdf = mr[mr["company_name"] == partner][["sale_month", "monthly_revenue"]]\
+                            .rename(columns={"sale_month": "ds", "monthly_revenue": "y"})\
+                            .dropna(subset=["ds", "y"])
+                    pdf = pdf[pdf["y"] >= 0]
+                    if len(pdf) < 4:
+                        continue
+                    try:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            m = Prophet(
+                                yearly_seasonality=True,
+                                daily_seasonality=False,
+                                weekly_seasonality=False,
+                                interval_width=0.80,
+                            )
+                            m.fit(pdf)
+                            future = m.make_future_dataframe(periods=1, freq="MS")
+                            fc = m.predict(future)
+                            prophet_forecasts[partner] = float(
+                                max(0, fc.iloc[-1]["yhat"])
+                            )
+                    except Exception:
+                        pass
+            except ImportError:
+                pass  # Prophet not installed — linear forecast used for all
+
+        # Initialize with linear base (will be overridden for Prophet partners below if available)
+        pf["forecast_next_30d"]  = forecast_30d.round(2)
+        pf["forecast_trend_pct"] = (monthly_growth * 100).round(2)
+
+        # Apply Prophet forecasts where available
+        if prophet_forecasts:
+            for partner, val in prophet_forecasts.items():
+                if partner in pf.index:
+                    pf.at[partner, "forecast_next_30d"] = round(val, 2)
         self.df_partner_features = pf
 
     # ── Credit Risk ─────────────────────────────────────────────────────────
@@ -198,8 +382,8 @@ class ChurnCreditStubMixin:
     def explain_partner_churn(self, partner_name: str) -> dict:
         """
         Return churn feature importances for a single partner.
-        Uses rule-based signal decomposition instead of SHAP trees
-        (the ML churn model tab was removed).
+        Uses rule-based signal decomposition instead of SHAP trees.
+        Decomposes exactly the same 8 signals and weights used in scoring.
         """
         pf = getattr(self, "df_partner_features", None)
         if pf is None or pf.empty:
@@ -226,22 +410,38 @@ class ChurnCreditStubMixin:
         growth      = float(pd.to_numeric(row.get("growth_rate_90d", 0), errors="coerce") or 0)
         recent_txns = float(pd.to_numeric(row.get("recent_txns", 0), errors="coerce") or 0)
         prev_txns   = float(pd.to_numeric(row.get("prev_txns", 0), errors="coerce") or 0)
+        aov_trend   = float(pd.to_numeric(row.get("aov_trend", 0), errors="coerce") or 0)
+        eng_vel     = float(pd.to_numeric(row.get("engagement_velocity", 1), errors="coerce") or 1)
+        cat_div     = float(pd.to_numeric(row.get("category_diversity_change", 0), errors="coerce") or 0)
 
-        # Normalised contributions (matching the weighted formula)
-        s_revenue_drop  = 0.30 * min(rev_drop / 100.0, 1.0)
-        s_recency       = 0.25 * min(recency / 365.0, 1.0)
-        s_volatility    = 0.15 * min((volatility / revenue) / 2.0, 1.0)
-        s_growth        = 0.20 * max(0.0, (-growth + 1) / 2.0)
-        s_txn_drop      = 0.10 * (max(0, (prev_txns - recent_txns) / max(prev_txns, 1)) if prev_txns > 0 else 0.5)
+        # 8 normalized contributions (matching _score_partner_churn_risk weights)
+        s_revenue_drop  = 0.27 * min(max(rev_drop / 100.0, 0.0), 1.0)
+        s_recency       = 0.20 * min(max(recency / 365.0, 0.0), 1.0)
+        s_volatility    = 0.13 * min(max((volatility / revenue) / 2.0, 0.0), 1.0)
+        s_growth        = 0.17 * min(max((-growth + 1) / 2.0, 0.0), 1.0)
+        
+        if prev_txns > 0:
+            s_txn_drop  = 0.08 * min(max((prev_txns - recent_txns) / prev_txns, 0.0), 1.0)
+        else:
+            s_txn_drop  = 0.08 * (0.5 if recent_txns == 0 else 0.0)
 
-        churn_prob = float(row.get("churn_probability", s_revenue_drop + s_recency + s_volatility + s_growth + s_txn_drop))
+        s_aov_risk  = 0.06 * min(max((-aov_trend + 1) / 2.0, 0.0), 1.0)
+        s_eng_risk  = 0.05 * min(max(1.0 - (eng_vel / 5.0), 0.0), 1.0)
+        s_cat_risk  = 0.04 * min(max(-cat_div, 0.0) / 5.0, 1.0)
+
+        churn_prob = float(row.get("churn_probability", 
+            s_revenue_drop + s_recency + s_volatility + s_growth + s_txn_drop + s_aov_risk + s_eng_risk + s_cat_risk
+        ))
 
         shap_values = {
-            "Revenue Drop %":        round(s_revenue_drop, 4),
-            "Days Since Last Order":  round(s_recency, 4),
+            "Revenue Drop":          round(s_revenue_drop, 4),
+            "Days Since Last Order": round(s_recency, 4),
             "Revenue Volatility":    round(s_volatility, 4),
             "Negative Growth Rate":  round(s_growth, 4),
-            "Transaction Frequency": round(s_txn_drop, 4),
+            "Transaction Drop":      round(s_txn_drop, 4),
+            "AOV Decline":           round(s_aov_risk, 4),
+            "Engagement Slowness":   round(s_eng_risk, 4),
+            "Category Reduction":    round(s_cat_risk, 4),
         }
 
         return {

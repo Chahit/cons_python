@@ -747,26 +747,44 @@ class ClusteringMixin:
         Build a co-association consensus matrix from multiple clustering runs.
         C[i,j] = fraction of runs where partners i and j share a cluster.
         Outlier labels (-1) are excluded from co-assignment.
+
+        FORMULA-04 — vectorized rewrite:
+        The old implementation used three nested Python for-loops:
+            for labels in label_sets:          # O(runs)
+                for i in range(n):             # O(n)
+                    for j in range(i, n):      # O(n)
+        giving O(runs × n²) Python iterations.
+
+        The new implementation iterates only over unique cluster labels per run
+        and uses numpy block-indexing (np.ix_) to update entire cluster blocks
+        at once.  For k clusters each of size n/k, the inner work is
+        O(k × (n/k)²) = O(n²/k) per run — approximately k× faster, with no
+        Python-level element loop.
         """
-        C = np.zeros((n, n), dtype=float)
-        count = np.zeros((n, n), dtype=float)
+        C     = np.zeros((n, n), dtype=np.float64)
+        count = np.zeros((n, n), dtype=np.float64)
+
         for labels in label_sets:
-            for i in range(n):
-                if labels[i] == -1:
-                    continue
-                for j in range(i, n):
-                    if labels[j] == -1:
-                        continue
-                    count[i, j] += 1
-                    count[j, i] += 1
-                    if labels[i] == labels[j]:
-                        C[i, j] += 1
-                        C[j, i] += 1
-        # Normalize: fraction of times i,j were together when both were non-outliers
+            labels = np.asarray(labels, dtype=int)
+            valid_mask = labels != -1
+
+            # Count how many runs each pair of non-outlier partners co-appeared
+            outer_valid = np.outer(valid_mask.astype(np.float64),
+                                   valid_mask.astype(np.float64))
+            count += outer_valid
+
+            # For each cluster, mark all within-cluster pairs as co-assigned
+            for c in np.unique(labels[valid_mask]):
+                idx = np.where(labels == c)[0]
+                C[np.ix_(idx, idx)] += 1.0
+
+        # Normalize: fraction of times i,j were together when both were non-outlier
         with np.errstate(divide="ignore", invalid="ignore"):
             C = np.where(count > 0, C / count, 0.0)
         np.fill_diagonal(C, 1.0)
         return C
+
+
 
     @staticmethod
     def _consensus_labels(consensus_matrix, n_clusters):
@@ -1423,6 +1441,7 @@ Respond ONLY with a JSON object mapping original label to new label. Example:
         """
         Generate descriptive labels without LLM, using centroid features.
         Fallback when Gemini API key is not available.
+        Formats beautifully with dynamic category name in brackets and HSL emojis.
         """
         if not profiles:
             return {}
@@ -1473,13 +1492,21 @@ Respond ONLY with a JSON object mapping original label to new label. Example:
 
             # Build descriptive base label
             descriptors = [d for d in [spend_level, breadth or concentration] if d]
-            if top_cat and len(top_cat) < 25:
-                descriptors.append(f"{top_cat}")
+            
+            # Formulate dominant category and emoji prefix
+            emoji = "👑" if tier == "VIP" else "⚡" if "High-Value" in descriptors or "High" in profile else "🛡️"
+            
+            clean_cat = "General"
+            if top_cat:
+                clean_cat = top_cat.replace("mix::rw::", "").replace("mix::", "").replace("_", " ").title()
+                # strip if too long
+                if len(clean_cat) > 20:
+                    clean_cat = clean_cat[:17] + "..."
 
             if descriptors:
-                base_label = f"{tier} — {' · '.join(descriptors[:2])}"
+                base_label = f"{emoji} [{clean_cat}] {tier} — {' · '.join(descriptors[:2])}"
             else:
-                base_label = f"{tier} — Segment {cluster_num}"
+                base_label = f"{emoji} [{clean_cat}] {tier} — Segment {cluster_num}"
 
             # Deduplicate: if this base_label was already used, append cluster number
             if base_label in seen_labels:

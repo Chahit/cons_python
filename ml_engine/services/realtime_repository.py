@@ -1,18 +1,53 @@
+import os
+import time
+import threading
 import pandas as pd
 from sqlalchemy import text
+
+
+_LIVE_SCORES_TTL  = int(os.environ.get("REALTIME_LIVE_SCORES_TTL_SEC",  "60"))
+_QUEUE_STATUS_TTL = int(os.environ.get("REALTIME_QUEUE_STATUS_TTL_SEC", "30"))
 
 
 class RealtimeRepository:
     def __init__(self, engine):
         self.engine = engine
+        self._cache: dict[str, tuple[float, object]] = {}
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Internal cache helpers
+    # ------------------------------------------------------------------
+
+    def _cache_get(self, key: str, ttl: int):
+        """Return cached value if still fresh, else None."""
+        entry = self._cache.get(key)
+        if entry is not None:
+            ts, val = entry
+            if time.monotonic() - ts < ttl:
+                return val, True
+        return None, False
+
+    def _cache_set(self, key: str, value) -> None:
+        with self._lock:
+            self._cache[key] = (time.monotonic(), value)
+
+    def _cache_invalidate(self, key: str) -> None:
+        with self._lock:
+            self._cache.pop(key, None)
 
     def fetch_live_scores(self):
+        cached, hit = self._cache_get("live_scores", _LIVE_SCORES_TTL)
+        if hit:
+            return cached.copy() if isinstance(cached, pd.DataFrame) else cached
         try:
-            return pd.read_sql("SELECT * FROM partner_live_scores", self.engine).set_index(
+            result = pd.read_sql("SELECT * FROM partner_live_scores", self.engine).set_index(
                 "partner_name"
             )
         except Exception:
-            return pd.DataFrame()
+            result = pd.DataFrame()
+        self._cache_set("live_scores", result)
+        return result.copy() if isinstance(result, pd.DataFrame) else result
 
     def queue_job(self, partner_name=None, reason="manual"):
         query = text(
@@ -107,6 +142,8 @@ class RealtimeRepository:
             )
 
     def upsert_live_score(self, partner_name, payload):
+        # Invalidate live-scores cache after a write so next read is always fresh.
+        self._cache_invalidate("live_scores")
         with self.engine.begin() as conn:
             conn.execute(
                 text(
@@ -187,6 +224,9 @@ class RealtimeRepository:
             )
 
     def get_queue_status(self):
+        cached, hit = self._cache_get("queue_status", _QUEUE_STATUS_TTL)
+        if hit:
+            return cached
         try:
             q = pd.read_sql(
                 """
@@ -207,15 +247,16 @@ class RealtimeRepository:
                 data.update(q.iloc[0].fillna(0).to_dict())
             if not ls.empty:
                 data.update(ls.iloc[0].to_dict())
-            return data
         except Exception:
-            return {
+            data = {
                 "pending_jobs": 0,
                 "running_jobs": 0,
                 "failed_jobs": 0,
                 "last_live_update": None,
                 "scored_partners": 0,
             }
+        self._cache_set("queue_status", data)
+        return data
 
     def get_job_status(self, job_id):
         query = text("SELECT status, error_message FROM score_recompute_jobs WHERE id = :job_id")

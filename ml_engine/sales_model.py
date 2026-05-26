@@ -111,6 +111,8 @@ class SalesIntelligenceEngine(
             self.db_url,
             pool_pre_ping=True,
             pool_recycle=1800,
+            pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+            max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
             connect_args={"connect_timeout": int(os.getenv("SALES_DB_CONNECT_TIMEOUT", "5"))},
         )
         self.repo = DataRepository(self.engine)

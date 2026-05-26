@@ -20,6 +20,62 @@ def _fmt_inr(val):
     return f"₹{int(v)}"
 
 
+def _fetch_rep_territory_stats(engine, user_id: int) -> pd.DataFrame:
+    """Fetches the state/city distribution of revenue for a specific rep."""
+    if engine is None:
+        return pd.DataFrame()
+    try:
+        return pd.read_sql(
+            """
+            SELECT 
+                COALESCE(s.name, 'Unknown State')              AS state_name,
+                COALESCE(c.name, 'Unknown City')               AS city_name,
+                COALESCE(SUM(tp.net_amt), 0)                   AS revenue
+            FROM transactions_dsr t
+            JOIN transactions_dsr_products tp ON tp.dsr_id = t.id
+            JOIN due_payment dp ON dp.dsr_id = t.id
+                 AND dp.is_active = TRUE AND dp.deleted_at IS NULL
+            LEFT JOIN master_party p ON p.id = t.party_id
+            LEFT JOIN master_area_state mas ON mas.id = p.state_id
+            LEFT JOIN master_state s ON s.id = mas.state_id
+            LEFT JOIN master_area_city mac ON mac.id = p.city_id
+            LEFT JOIN master_city c ON c.id = mac.city_id
+            WHERE LOWER(CAST(t.is_approved AS TEXT)) = 'true'
+              AND t.user_id = %(uid)s
+            GROUP BY s.name, c.name
+            ORDER BY revenue DESC
+            LIMIT 15
+            """,
+            engine,
+            params={"uid": user_id}
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+def _get_rep_badge(row, df_all) -> str:
+    """Dynamic B2B achievement badging based on dynamic percentile metrics."""
+    if df_all is None or df_all.empty or row.get("user_id") not in df_all["user_id"].values:
+        return "⭐ Field Specialist"
+    all_row = df_all[df_all["user_id"] == row["user_id"]].iloc[0]
+    
+    rev_90  = df_all["total_revenue"].quantile(0.90)
+    roi_85  = df_all["revenue_roi"].quantile(0.85)
+    cust_80 = df_all["unique_customers"].quantile(0.80)
+    
+    rev = all_row["total_revenue"]
+    roi = all_row["revenue_roi"]
+    cust = all_row["unique_customers"]
+    
+    if rev >= rev_90 and rev > 0:
+        return "👑 Revenue Champion"
+    if roi >= roi_85 and roi > 0:
+        return "⚡ High ROI Leader"
+    if cust >= cust_80 and cust > 0:
+        return "🛡️ Partner Guardian"
+    return "⭐ Field Specialist"
+
+
 def _fetch_rep_period_stats(_engine, start: date, end: date) -> pd.DataFrame:
     """Revenue & orders per sales rep for the selected date window.
     Starts from transactions (same as Sales Analyzer) so the total always
@@ -198,16 +254,68 @@ def render(engine):
 
         st.subheader(f"👤 {selected_rep} — Performance Dashboard")
 
-        # ── Individual KPI cards ─────────────────────────────────────────────
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
-        k1.metric("Total Revenue", _fmt_inr(rep_row.get("total_revenue", 0)))
-        k2.metric("Orders Closed", f"{int(rep_row.get('total_orders', 0)):,}")
-        k3.metric("True ROI", f"{min(int(rep_row.get('revenue_roi', 0)), 9999):,}x")
-        k4.metric("Partners Served", f"{int(rep_row.get('unique_customers', 0)):,}")
-        k5.metric("Expenses Claimed", _fmt_inr(rep_row.get("total_expenses", 0)))
-        k6.metric("Issues Logged", f"{int(rep_row.get('issues_logged', 0)):,}")
+        # ── BUG-01 & Wow Factor 2: Comparative KPI Cards & Badging ──
+        all_time_row = None
+        if df_all is not None and not df_all.empty and rep_uid in df_all["user_id"].values:
+            all_time_row = df_all[df_all["user_id"] == rep_uid].iloc[0]
 
-        st.markdown("")
+        tot_rev = all_time_row["total_revenue"] if all_time_row is not None else 0
+        tot_ord = all_time_row["total_orders"] if all_time_row is not None else 0
+        tot_roi = all_time_row["revenue_roi"] if all_time_row is not None else 0
+        tot_cust = all_time_row["unique_customers"] if all_time_row is not None else 0
+        tot_exp = all_time_row["total_expenses"] if all_time_row is not None else 0
+        tot_iss = all_time_row["issues_logged"] if all_time_row is not None else 0
+
+        per_rev = rep_row.get("period_revenue", 0)
+        per_ord = rep_row.get("period_orders", 0)
+        per_cust = rep_row.get("period_partners", 0)
+        
+        rep_badge = _get_rep_badge(rep_row, df_all)
+
+        st.markdown("### 📊 Performance Baselines")
+        k1, k2, k3 = st.columns(3)
+        k1.metric(
+            label="Revenue (Active Window / All-Time)",
+            value=_fmt_inr(per_rev),
+            delta=f"All-Time: {_fmt_inr(tot_rev)}",
+            delta_color="off"
+        )
+        k2.metric(
+            label="Orders Closed (Active Window / All-Time)",
+            value=f"{int(per_ord):,}",
+            delta=f"All-Time: {int(tot_ord):,}",
+            delta_color="off"
+        )
+        k3.metric(
+            label="Partners Served (Active Window / All-Time)",
+            value=f"{int(per_cust):,}",
+            delta=f"All-Time: {int(tot_cust):,}",
+            delta_color="off"
+        )
+
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+        k4, k5, k6 = st.columns(3)
+        k4.metric(
+            label="True ROI (Revenue/Expenses)",
+            value=f"{min(int(tot_roi), 9999):,}x" if tot_roi > 0 else "0x",
+            delta=f"Total Expenses: {_fmt_inr(tot_exp)}",
+            delta_color="inverse"
+        )
+        k5.metric(
+            label="Field Issues Logged",
+            value=f"{int(tot_iss):,}",
+            delta="All-Time Count",
+            delta_color="off"
+        )
+        st.markdown(
+            f"<div style='background:#161b2a;border-radius:8px;padding:10px 14px;border:1px solid #1e2433;height:84px;'>"
+            f"<div style='font-size:11px;color:#64748b;font-weight:700;'>EMPLOYEE ACHIEVEMENT TIER</div>"
+            f"<div style='font-size:18px;font-weight:800;color:#10b981;margin-top:4px;'>{rep_badge}</div>"
+            f"<div style='font-size:10px;color:#475569;'>Calculated dynamically against regional standards</div>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+        st.markdown("<div style='margin-top: 16px;'></div>", unsafe_allow_html=True)
 
         # ── Monthly Revenue + Forecast chart ────────────────────────────────
         with st.spinner("Loading monthly revenue data & forecast…"):
@@ -274,6 +382,30 @@ def render(engine):
                     hide_index=True, use_container_width=True
                 )
 
+            # ── Wow Factor 3: Territory Performance ──
+            st.markdown("<div style='margin-top: 16px;'></div>", unsafe_allow_html=True)
+            with st.spinner("Analyzing regional sales distribution…"):
+                territory_df = _fetch_rep_territory_stats(_db_engine, rep_uid)
+            if not territory_df.empty:
+                st.subheader("🗺️ Geographic Revenue Yield — State & City Drill-Down")
+                fig_terr = px.bar(
+                    territory_df, x="revenue", y="city_name",
+                    orientation="h", color="state_name",
+                    labels={"revenue": "Revenue (Rs)", "city_name": "City", "state_name": "State"},
+                    color_discrete_sequence=px.colors.qualitative.Safe,
+                    text="revenue",
+                )
+                fig_terr.update_traces(texttemplate="₹%{text:,.0f}", textposition="outside")
+                fig_terr.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    height=max(240, len(territory_df) * 36),
+                    xaxis=dict(title="Revenue (Rs)", tickformat=",.0f", showgrid=True,
+                               gridcolor="rgba(255,255,255,0.07)"),
+                    yaxis=dict(title="", showgrid=False, autorange="reversed"),
+                    margin=dict(l=0, r=80, t=10, b=0),
+                )
+                st.plotly_chart(fig_terr, use_container_width=True)
+
         return
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -281,9 +413,9 @@ def render(engine):
     # ═══════════════════════════════════════════════════════════════════════════
     total_reps        = len(df)
     period_rev_total  = float(df["period_revenue"].sum()) if "period_revenue" in df.columns else 0
-    total_tours       = df["total_tours"].sum() if "total_tours" in df.columns else 0
-    total_expenses    = df["total_expenses"].sum() if "total_expenses" in df.columns else 0
-    avg_roi           = df["revenue_roi"].replace([np.inf, -np.inf], np.nan).mean() if "revenue_roi" in df.columns else 0
+    total_tours       = df_all["total_tours"].sum() if "total_tours" in df_all.columns else 0
+    total_expenses    = df_all["total_expenses"].sum() if "total_expenses" in df_all.columns else 0
+    avg_roi           = df_all["revenue_roi"].replace([np.inf, -np.inf], np.nan).mean() if "revenue_roi" in df_all.columns else 0
     period_orders_tot = int(df["period_orders"].sum()) if "period_orders" in df.columns else 0
     period_parts_tot  = int(df["period_partners"].sum()) if "period_partners" in df.columns else 0
 
@@ -299,7 +431,15 @@ def render(engine):
     disp_cols = ["sales_rep_name", "period_revenue", "period_orders", "period_partners"]
     disp_cols = [c for c in disp_cols if c in df.columns]
     display_df = df[disp_cols].copy()
-    display_df = display_df.sort_values("period_revenue", ascending=False)
+    
+    # Calculate performance achievement tiers
+    display_df["Tier"] = df.apply(lambda r: _get_rep_badge(r, df_all), axis=1)
+    
+    # Order columns beautifully
+    ordered_cols = ["sales_rep_name", "Tier"] + [c for c in disp_cols if c != "sales_rep_name"]
+    display_df = display_df[ordered_cols]
+    display_df = display_df.sort_values(f"Revenue ({date_label})" if f"Revenue ({date_label})" in display_df.columns else "sales_rep_name", ascending=False)
+    
     display_df.rename(columns={
         "sales_rep_name":  "Sales Rep",
         "period_revenue":  f"Revenue ({date_label})",
@@ -311,6 +451,8 @@ def render(engine):
         display_df,
         column_config={
             f"Revenue ({date_label})": st.column_config.NumberColumn(format="₹%d"),
+            f"Orders ({date_label})": st.column_config.NumberColumn(format="%d"),
+            f"Partners ({date_label})": st.column_config.NumberColumn(format="%d"),
         },
         hide_index=True, use_container_width=True, height=450
     )
@@ -321,9 +463,9 @@ def render(engine):
     colA, colB = st.columns(2)
     with colA:
         st.subheader("💸 Expense vs Revenue Yield")
-        if df["total_expenses"].sum() > 0:
+        if not df_all.empty and "total_expenses" in df_all.columns and df_all["total_expenses"].sum() > 0:
             fig = px.scatter(
-                df, x="total_expenses", y="total_revenue",
+                df_all, x="total_expenses", y="total_revenue",
                 size="unique_customers",
                 hover_name="sales_rep_name", text="sales_rep_name",
                 labels={
@@ -342,60 +484,67 @@ def render(engine):
 
     with colB:
         st.subheader("📦 Partner Coverage per Rep")
-        coverage_df = df.sort_values("unique_customers", ascending=False)
-        fig_cov = px.bar(
-            coverage_df, x="sales_rep_name", y="unique_customers",
-            color="unique_customers",
-            color_continuous_scale=["#1e40af", "#3b82f6", "#10b981"],
-            labels={"unique_customers": "Partners Served", "sales_rep_name": "Rep"},
-            text="unique_customers",
-        )
-        fig_cov.update_traces(texttemplate="%{text}", textposition="outside")
-        fig_cov.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0),
-        )
-        st.plotly_chart(fig_cov, use_container_width=True)
+        if not df_all.empty and "unique_customers" in df_all.columns:
+            coverage_df = df_all.sort_values("unique_customers", ascending=False)
+            fig_cov = px.bar(
+                coverage_df, x="sales_rep_name", y="unique_customers",
+                color="unique_customers",
+                color_continuous_scale=["#1e40af", "#3b82f6", "#10b981"],
+                labels={"unique_customers": "Partners Served", "sales_rep_name": "Rep"},
+                text="unique_customers",
+            )
+            fig_cov.update_traces(texttemplate="%{text}", textposition="outside")
+            fig_cov.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0),
+            )
+            st.plotly_chart(fig_cov, use_container_width=True)
+        else:
+            st.info("No partner coverage data available.")
 
     # ── Service & Issue Management ────────────────────────────────────────────
     st.markdown("---")
     st.subheader("⚠️ Partner Issue Management by Rep")
     st.caption("High orders with 0 issues may indicate gaps in after-sales follow-up.")
 
-    issue_df = df.sort_values("issues_logged", ascending=False).head(10)
-    if issue_df["issues_logged"].sum() > 0:
-        fig_issues = px.bar(
-            issue_df, x="sales_rep_name",
-            y=["issues_logged", "total_orders"],
-            barmode="group",
-            labels={"sales_rep_name": "Sales Rep", "value": "Count", "variable": "Metric"},
-            color_discrete_map={"issues_logged": "#f59e0b", "total_orders": "#3b82f6"},
-        )
-        fig_issues.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=0, r=0, t=10, b=0)
-        )
-        st.plotly_chart(fig_issues, use_container_width=True)
+    if not df_all.empty and "issues_logged" in df_all.columns:
+        issue_df = df_all.sort_values("issues_logged", ascending=False).head(10)
+        if issue_df["issues_logged"].sum() > 0:
+            fig_issues = px.bar(
+                issue_df, x="sales_rep_name",
+                y=["issues_logged", "total_orders"],
+                barmode="group",
+                labels={"sales_rep_name": "Sales Rep", "value": "Count", "variable": "Metric"},
+                color_discrete_map={"issues_logged": "#f59e0b", "total_orders": "#3b82f6"},
+            )
+            fig_issues.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=0, r=0, t=10, b=0)
+            )
+            st.plotly_chart(fig_issues, use_container_width=True)
+        else:
+            st.info("No partner issues logged by reps yet.")
     else:
-        st.info("No partner issues logged by reps yet.")
+        st.info("No issues data available.")
 
     # ── Revenue Efficiency Table ──────────────────────────────────────────────
     st.markdown("---")
     st.subheader("📐 Revenue Efficiency Analysis")
-    eff_df = df[["sales_rep_name", "total_revenue", "total_orders", "total_expenses",
-                 "unique_customers"]].copy()
-    eff_df["Rev per Order"] = (eff_df["total_revenue"] / eff_df["total_orders"].replace(0, np.nan)).fillna(0).round(0).astype(int)
-    eff_df["Rev per Partner"] = (eff_df["total_revenue"] / eff_df["unique_customers"].replace(0, np.nan)).fillna(0).round(0).astype(int)
-    eff_df["Cost per Order"] = (eff_df["total_expenses"] / eff_df["total_orders"].replace(0, np.nan)).fillna(0).round(0).astype(int)
-    eff_df = eff_df[["sales_rep_name", "Rev per Order", "Rev per Partner", "Cost per Order"]].rename(
-        columns={"sales_rep_name": "Sales Rep"}
-    )
-    st.dataframe(
-        eff_df,
-        column_config={
-            "Rev per Order":   st.column_config.NumberColumn("Avg Revenue/Order (Rs)", format="₹%d"),
-            "Rev per Partner": st.column_config.NumberColumn("Avg Revenue/Partner (Rs)", format="₹%d"),
-            "Cost per Order":  st.column_config.NumberColumn("Avg Cost/Order (Rs)", format="₹%d"),
-        },
-        hide_index=True, use_container_width=True
-    )
+    if not df_all.empty:
+        eff_df = df_all[["sales_rep_name", "total_revenue", "total_orders", "total_expenses",
+                     "unique_customers"]].copy()
+        eff_df["Rev per Order"] = (eff_df["total_revenue"] / eff_df["total_orders"].replace(0, np.nan)).fillna(0).round(0).astype(int)
+        eff_df["Rev per Partner"] = (eff_df["total_revenue"] / eff_df["unique_customers"].replace(0, np.nan)).fillna(0).round(0).astype(int)
+        eff_df["Cost per Order"] = (eff_df["total_expenses"] / eff_df["total_orders"].replace(0, np.nan)).fillna(0).round(0).astype(int)
+        eff_df = eff_df[["sales_rep_name", "Rev per Order", "Rev per Partner", "Cost per Order"]].rename(
+            columns={"sales_rep_name": "Sales Rep"}
+        )
+        st.dataframe(
+            eff_df,
+            column_config={
+                "Rev per Order":   st.column_config.NumberColumn("Avg Revenue/Order (Rs)", format="₹%d"),
+                "Rev per Partner": st.column_config.NumberColumn("Avg Revenue/Partner (Rs)", format="₹%d"),
+                "Cost per Order":  st.column_config.NumberColumn("Avg Cost/Order (Rs)", format="₹%d"),
+            },
+            hide_index=True, use_container_width=True
+        )

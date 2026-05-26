@@ -75,3 +75,4 @@ tzdata==2025.3
 urllib3==2.6.3
 xgboost==2.1.4
 zipp==3.23.0
+python-dotenv==1.0.1

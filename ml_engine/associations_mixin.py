@@ -4,6 +4,64 @@ import importlib
 from sqlalchemy import text
 
 class AssociationsMixin:
+
+    # ─────────────────────────────────────────────────────────────────────
+    # FORMULA-03: Single source of truth for the MBA annualization factor.
+    # Previously this identical expression was duplicated in three methods.
+    # ─────────────────────────────────────────────────────────────────────
+    @property
+    def _mba_annualization(self) -> float:
+        """12 / lookback_months — converts lookback-window revenue to annual."""
+        return 12.0 / float(self.mba_lookback_months)
+
+    def _estimate_revenue_gain_from_df_ml(
+        self, rules_df: "pd.DataFrame", product_col: str, frequency_col: str
+    ) -> "pd.Series":
+        """
+        BUG-04 helper — derive expected revenue gain from df_ml rather than
+        using a flat ×1,000 constant.
+
+        Logic:
+          1. If df_ml is loaded and contains net_amt/total_spend, compute the
+             average line revenue per product_name.
+          2. Multiply by `times_bought_together` (frequency_col) to get an
+             estimated cumulative revenue opportunity for the lookback window.
+          3. If no price data is available at all, return NaN so the UI shows
+             an honest \"N/A\" rather than a fictional number.
+        """
+        df_ml = getattr(self, "df_ml", None)
+        if df_ml is None or df_ml.empty:
+            return pd.Series(float("nan"), index=rules_df.index)
+
+        # Prefer net_amt (transaction-level) if available, else total_spend
+        amt_col = "net_amt" if "net_amt" in df_ml.columns else (
+            "total_spend" if "total_spend" in df_ml.columns else None
+        )
+        prod_col_ml = next(
+            (c for c in ("product_name", "group_name") if c in df_ml.columns), None
+        )
+
+        if amt_col is None or prod_col_ml is None:
+            return pd.Series(float("nan"), index=rules_df.index)
+
+        avg_price = (
+            df_ml.groupby(prod_col_ml)[amt_col]
+            .mean()
+            .rename("avg_line_revenue")
+        )
+
+        merged = rules_df[[product_col, frequency_col]].copy()
+        merged["avg_line_revenue"] = (
+            merged[product_col].map(avg_price)
+        )
+        result = (
+            merged["avg_line_revenue"].fillna(0.0)
+            * merged[frequency_col].astype(float)
+        ).round(2)
+        # Replace zero-revenue (unmapped products) with NaN so UI can show N/A
+        result = result.where(result > 0, other=float("nan"))
+        return result
+
     @staticmethod
     def _decorate_rule_quality(df, min_support, include_low_support):
         if "support_a" in df.columns and "support_b" in df.columns:
@@ -56,8 +114,12 @@ class AssociationsMixin:
                             df["confidence_a_to_b"] / p_b
                         ).clip(0.0, 50.0)
                     if "expected_revenue_gain" not in df.columns:
-                        df["expected_revenue_gain"] = (
-                            df["times_bought_together"].astype(float) * 1000.0
+                        # BUG-04 FIX: The old fallback was `times_bought_together * 1000`
+                        # — a made-up ₹1,000 constant with no business basis.
+                        # New approach: derive avg line revenue from df_ml if loaded;
+                        # fall back to NaN (displayed as "N/A") so the UI is honest.
+                        df["expected_revenue_gain"] = self._estimate_revenue_gain_from_df_ml(
+                            df, "product_b", "times_bought_together"
                         )
                     if "expected_margin_gain" not in df.columns:
                         df["expected_margin_gain"] = df["expected_revenue_gain"] * 0.15
@@ -350,15 +412,13 @@ class AssociationsMixin:
         )
         df = df.drop(columns=["rule_strength_rank"], errors="ignore")
         if "expected_revenue_gain" in df.columns:
-            annualization = 12.0 / float(self.mba_lookback_months)
-            df["expected_gain_yearly"] = df["expected_revenue_gain"].astype(float) * annualization
+            df["expected_gain_yearly"]  = df["expected_revenue_gain"].astype(float) * self._mba_annualization
             df["expected_gain_monthly"] = df["expected_gain_yearly"] / 12.0
-            df["expected_gain_weekly"] = df["expected_gain_yearly"] / 52.0
+            df["expected_gain_weekly"]  = df["expected_gain_yearly"] / 52.0
         if "expected_margin_gain" in df.columns:
-            annualization = 12.0 / float(self.mba_lookback_months)
-            df["expected_margin_yearly"] = df["expected_margin_gain"].astype(float) * annualization
+            df["expected_margin_yearly"]  = df["expected_margin_gain"].astype(float) * self._mba_annualization
             df["expected_margin_monthly"] = df["expected_margin_yearly"] / 12.0
-            df["expected_margin_weekly"] = df["expected_margin_yearly"] / 52.0
+            df["expected_margin_weekly"]  = df["expected_margin_yearly"] / 52.0
         return df.head(limit)
 
     def _get_top_affinity_pitch(self, partner_name, min_confidence=0.15, min_lift=1.0):
@@ -428,15 +488,13 @@ class AssociationsMixin:
             na_position="last",
         )
         if "expected_revenue_gain" in candidate.columns:
-            annualization = 12.0 / float(self.mba_lookback_months)
-            candidate["expected_gain_yearly"] = candidate["expected_revenue_gain"].astype(float) * annualization
+            candidate["expected_gain_yearly"]  = candidate["expected_revenue_gain"].astype(float) * self._mba_annualization
             candidate["expected_gain_monthly"] = candidate["expected_gain_yearly"] / 12.0
-            candidate["expected_gain_weekly"] = candidate["expected_gain_yearly"] / 52.0
+            candidate["expected_gain_weekly"]  = candidate["expected_gain_yearly"] / 52.0
         if "expected_margin_gain" in candidate.columns:
-            annualization = 12.0 / float(self.mba_lookback_months)
-            candidate["expected_margin_yearly"] = candidate["expected_margin_gain"].astype(float) * annualization
+            candidate["expected_margin_yearly"]  = candidate["expected_margin_gain"].astype(float) * self._mba_annualization
             candidate["expected_margin_monthly"] = candidate["expected_margin_yearly"] / 12.0
-            candidate["expected_margin_weekly"] = candidate["expected_margin_yearly"] / 52.0
+            candidate["expected_margin_weekly"]  = candidate["expected_margin_yearly"] / 52.0
         return candidate[
             [
                 "trigger_product",

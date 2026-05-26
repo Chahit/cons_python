@@ -235,13 +235,24 @@
       <h2>Health &amp; Financial Metrics</h2>
     </div>
     <h3>Health Score Formula</h3>
-    <p>Computed in <code>base_loader_mixin._add_health_scores()</code>:</p>
+    <p>Computed in <code>base_loader_mixin._add_health_scores()</code> using vectorized <code>np.select</code> for fast segment categorization (BUG-03). The weights adapt depending on whether the partner falls in the Top-20% tier by historical revenue:</p>
     <div class="formula">
-health_score = (
-  <span class="var">0.35</span> × normalize(log1p(recent_90_revenue))   <span class="comment"># Revenue strength</span>
-+ <span class="var">0.30</span> × normalize(growth_rate_90d.clip(-1, 1.5)) <span class="comment"># Growth trend</span>
-+ <span class="var">0.20</span> × (1 − normalize(recency_days))              <span class="comment"># Purchase recency</span>
-+ <span class="var">0.15</span> × (1 − normalize(log1p(revenue_volatility)))  <span class="comment"># Revenue stability</span>
+<span class="comment"># Standard partners (80% of accounts):</span>
+health_score_standard = (
+  <span class="var">0.30</span> × normalize(log1p(recent_90_revenue))     <span class="comment"># Revenue rank</span>
++ <span class="var">0.25</span> × normalize(growth_rate_90d.clip(-1, 1.5))  <span class="comment"># Growth rank</span>
++ <span class="var">0.25</span> × (1 − normalize(recency_days))                <span class="comment"># Churn safety (recency)</span>
++ <span class="var">0.12</span> × normalize(log1p(recent_txns))                <span class="comment"># Engagement rank</span>
++ <span class="var">0.08</span> × (1 − normalize(log1p(revenue_volatility)))    <span class="comment"># Stability rank</span>
+).clip(0, 1)
+
+<span class="comment"># Top-20% partners (Premium/VIP accounts):</span>
+health_score_top20 = (
+  <span class="var">0.40</span> × normalize(log1p(recent_90_revenue))     <span class="comment"># Revenue rank (higher emphasis)</span>
++ <span class="var">0.15</span> × normalize(growth_rate_90d.clip(-1, 1.5))  <span class="comment"># Growth rank</span>
++ <span class="var">0.25</span> × (1 − normalize(recency_days))                <span class="comment"># Churn safety (recency)</span>
++ <span class="var">0.12</span> × normalize(log1p(recent_txns))                <span class="comment"># Engagement rank</span>
++ <span class="var">0.08</span> × (1 − normalize(log1p(revenue_volatility)))    <span class="comment"># Stability rank</span>
 ).clip(0, 1)</div>
 
     <h3>Health Segments</h3>
@@ -284,27 +295,44 @@ health_score = (
   <div class="section">
     <div class="section-header">
       <div class="section-num">5</div>
-      <h2>Churn Risk Intelligence v2</h2>
+      <h2>Churn Risk Intelligence v3 (LightGBM &amp; Prophet Upgrade)</h2>
     </div>
     <p>
       The churn intelligence block renders only for partners in the <strong>At Risk</strong> or
-      <strong>Critical</strong> segment. It uses a composite score (0–100) built from multiple
-      behavioral signals, each with a severity level (critical / high / medium).
+      <strong>Critical</strong> segment. The backend incorporates a state-of-the-art <strong>LightGBM Classifier</strong>
+      (trained via self-supervised learning on historical partner revenue drop labels) when transaction volume permits,
+      with a rule-based fallback model for sparse data.
+    </p>
+    <p>
+      It integrates 5 newly-wired behavioral signals to compute an extremely high-accuracy composite risk score (0–100):
+      <code>avg_order_value</code>, <code>aov_trend</code> (declines increase risk), <code>category_count</code>, 
+      <code>category_diversity_change</code> (contracting diversity increases risk), and <code>engagement_velocity</code> (low velocity indicates friction).
     </p>
     <h3>Composite Score Components</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Signal</th><th>Severity Trigger</th><th>Action</th></tr></thead>
+        <thead><tr><th>Signal</th><th>Severity Trigger</th><th>Action / Strategy</th></tr></thead>
         <tbody>
-          <tr><td>Revenue Stopped</td><td>recent_90 = 0, prev_90 &gt; 0</td><td>Immediate escalation call</td></tr>
-          <tr><td>High Recency (≥120d)</td><td>Critical</td><td>Outreach with incentive offer</td></tr>
-          <tr><td>Revenue Drop ≥50%</td><td>Critical</td><td>Investigate cause, offer credit review</td></tr>
-          <tr><td>Category Abandonment</td><td>High</td><td>Re-introduce lost category</td></tr>
-          <tr><td>Order Volume Drop</td><td>High / Medium</td><td>Probe for supply friction</td></tr>
-          <tr><td>AOV Decline</td><td>Medium</td><td>Upsell or bundle to lift basket size</td></tr>
+          <tr><td>Truly Churned</td><td>recent_90 ≤ 0 AND prev_90 &gt; 0 (FORMULA-01)</td><td>Critical (churn risk set to 0.92) — Immediate rescue intervention</td></tr>
+          <tr><td>Seasonal / New Gap</td><td>recent_90 ≤ 0 AND prev_90 ≤ 0 (FORMULA-01)</td><td>Seasonal / No-history baseline (30% discount applied to risk score)</td></tr>
+          <tr><td>High Recency (≥120d)</td><td>Critical</td><td>Outreach with active onboarding/incentive offer</td></tr>
+          <tr><td>Revenue Drop ≥50%</td><td>Critical</td><td>Investigate cause, offer customized credit review</td></tr>
+          <tr><td>Category Abandonment</td><td>High</td><td>Cross-sell re-introduction of lost categories</td></tr>
+          <tr><td>Order Volume Drop</td><td>High / Medium</td><td>Investigate supply chain or logistics friction</td></tr>
+          <tr><td>AOV Decline</td><td>Medium</td><td>Proactive product bundling to lift basket size</td></tr>
         </tbody>
       </table>
     </div>
+    <h3>Revenue Forecasting &amp; Sigmoid Confidence</h3>
+    <p>
+      For high-revenue partners, the platform generates a sophisticated 30-day forecast using **Facebook Prophet** to capture yearly seasonality (IMPROVE-02).
+      The confidence in this forecast is modeled as a continuous sigmoid curve based on partner tenure (FORMULA-02):
+    </p>
+    <div class="formula">
+forecast_confidence = (1 / (1 + exp(−0.3 * (active_months − 6)))).clip(0.40, 0.90)</div>
+    <p>
+      This sigmoid model replaces the old binary step-function (0.45 or 0.75), representing how forecast trust grows organically with partner history.
+    </p>
     <h3>Score Gauge Bar</h3>
     <p>
       The composite score (0–100) is rendered as a colored progress bar.
@@ -329,9 +357,10 @@ health_score = (
       <div class="callout-body">
         <strong>Dual Schema Support</strong>
         <code>churn_reasons</code> can be either a <em>list of signals</em> (old format) or
-        a <em>dict with composite_score/signals/peer_context</em> (v2 format).
+        a <em>dict with composite_score/signals/peer_context</em> (v3 format).
         The UI handles both via duck-typing checks.
       </div>
+    </div>
     </div>
   </div>
 

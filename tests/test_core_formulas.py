@@ -248,9 +248,17 @@ class TestHealthScore(unittest.TestCase):
         )
 
     def test_weights_sum_to_one(self):
-        """The 4 health score weights must sum to 1.0."""
-        weights = [0.35, 0.30, 0.20, 0.15]
-        self.assertAlmostEqual(sum(weights), 1.0, places=5)
+        """Health score uses two distinct 5-weight formulas; both must sum to 1.0."""
+        # Standard partners (bottom 80% by revenue)
+        # Revenue 30% | Growth 25% | Churn-safety 25% | Engagement 12% | Stability 8%
+        standard_weights = [0.30, 0.25, 0.25, 0.12, 0.08]
+        # Top-20% revenue partners — growth weight compressed at scale
+        # Revenue 40% | Growth 15% | Churn-safety 25% | Engagement 12% | Stability 8%
+        top20_weights = [0.40, 0.15, 0.25, 0.12, 0.08]
+        self.assertAlmostEqual(sum(standard_weights), 1.0, places=9,
+                               msg="Standard partner weights must sum to 1.0")
+        self.assertAlmostEqual(sum(top20_weights), 1.0, places=9,
+                               msg="Top-20% partner weights must sum to 1.0")
 
     def test_degrowth_flag_triggered(self):
         h = _BaseHarness()
@@ -279,11 +287,28 @@ class TestChurnScoring(unittest.TestCase):
         return pd.DataFrame([defaults], index=["partner"])
 
     def test_high_churn_on_zero_revenue(self):
+        """Partner who HAD revenue but now has zero is truly churned → churn ≥ 0.90."""
         h = _ChurnHarness()
-        h.df_partner_features = self._make_pf(recent_90_revenue=0.0, revenue_drop_pct=100.0)
+        # Provide prev_90_revenue to trigger the truly-churned path (FORMULA-01).
+        h.df_partner_features = self._make_pf(
+            recent_90_revenue=0.0, prev_90_revenue=10000.0, revenue_drop_pct=100.0
+        )
         h._score_partner_churn_risk()
         prob = float(h.df_partner_features.loc["partner", "churn_probability"])
-        self.assertGreaterEqual(prob, 0.80)
+        self.assertGreaterEqual(prob, 0.90)
+
+    def test_no_history_partner_lower_churn(self):
+        """Partner with no revenue in either window is uncertain, not definitely churned.
+        FORMULA-01: no-history partners get churn * 0.70 (capped at 0.65), not 0.92."""
+        h = _ChurnHarness()
+        h.df_partner_features = self._make_pf(
+            recent_90_revenue=0.0, prev_90_revenue=0.0, revenue_drop_pct=0.0
+        )
+        h._score_partner_churn_risk()
+        prob = float(h.df_partner_features.loc["partner", "churn_probability"])
+        # Should be less than 0.70 — no history means uncertain, not confirmed churned
+        self.assertLess(prob, 0.70)
+        self.assertGreaterEqual(prob, 0.0)
 
     def test_low_churn_healthy_partner(self):
         h = _ChurnHarness()
@@ -315,7 +340,10 @@ class TestChurnScoring(unittest.TestCase):
         """expected_revenue_at_risk_90d = churn_prob * recent_90_revenue."""
         h = _ChurnHarness()
         revenue = 12000.0
-        h.df_partner_features = self._make_pf(recent_90_revenue=revenue, revenue_drop_pct=60.0)
+        # Pass prev_90_revenue so the partner is classified as active (not no-history)
+        h.df_partner_features = self._make_pf(
+            recent_90_revenue=revenue, prev_90_revenue=8000.0, revenue_drop_pct=60.0
+        )
         h._score_partner_churn_risk()
         prob = float(h.df_partner_features.loc["partner", "churn_probability"])
         rar = float(h.df_partner_features.loc["partner", "expected_revenue_at_risk_90d"])
