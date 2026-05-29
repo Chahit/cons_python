@@ -44,6 +44,8 @@ st.set_page_config(
     page_icon=":chart_with_upwards_trend:",
 )
 
+# ── Inject global styles exactly once per rerun; tab-level calls are no-ops.
+st.session_state.pop("_global_css_injected", None)  # reset per-rerun flag
 apply_global_styles()
 
 # --- FULL WIDTH CSS (base attempt — components.html will reinforce after Streamlit loads) ---
@@ -67,6 +69,23 @@ section.main .block-container {
 def get_engine():
     engine = SalesIntelligenceEngine()
     engine.load_data(lightweight=True)
+    # ── Background pre-warm: run clustering in a daemon thread so that
+    # the Partner 360 page (which needs ensure_clustering()) can often
+    # skip the KMeans wait entirely on first user visit.
+    import threading
+
+    def _prewarm_clustering():
+        try:
+            engine.ensure_clustering()
+        except Exception as _e:
+            print(f"[prewarm] clustering failed: {_e}")
+
+    _t = threading.Thread(
+        target=_prewarm_clustering,
+        daemon=True,
+        name="prewarm-clustering",
+    )
+    _t.start()
     return engine
 
 

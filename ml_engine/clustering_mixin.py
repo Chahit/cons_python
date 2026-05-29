@@ -501,6 +501,9 @@ class ClusteringMixin:
         """
         Bootstrap-like stability using ARI on overlapping indices.
         """
+        is_fast = getattr(self, "fast_mode", True)
+        if is_fast:
+            runs = 2
         rng = np.random.RandomState(random_state)
         n = X.shape[0]
         if n < 20:
@@ -514,7 +517,7 @@ class ClusteringMixin:
                 k = len(np.unique(labels[labels != -1]))
                 if k < 2:
                     continue
-                model = KMeans(n_clusters=k, random_state=rng.randint(1, 10_000), n_init=10)
+                model = KMeans(n_clusters=k, random_state=rng.randint(1, 10_000), n_init=2 if is_fast else 10)
                 ys = model.fit_predict(Xs)
             else:
                 mcs = max(6, int(0.02 * len(sample_idx)))
@@ -555,7 +558,8 @@ class ClusteringMixin:
         tried = []
         for k in candidate_ks:
             try:
-                km = KMeans(n_clusters=k, random_state=int(random_state), n_init=10)
+                _n_init = 3 if getattr(self, "fast_mode", True) else 10
+                km = KMeans(n_clusters=k, random_state=int(random_state), n_init=_n_init)
                 y = km.fit_predict(X).astype(int)
                 quality = self._compute_quality_scores(X, y)
                 sil = quality.get("silhouette")
@@ -956,9 +960,15 @@ class ClusteringMixin:
         label_sets = []
         algo_reports = []
 
+        # Determine n_init values based on fast_mode
+        is_fast = getattr(self, "fast_mode", True)
+        km_n_init = 3 if is_fast else 15
+        gmm_n_init = 1 if is_fast else 3
+        sc_n_init = 3 if is_fast else 10
+
         # Algorithm 1: KMeans at best_k (guaranteed to produce exactly best_k clusters)
         try:
-            km = KMeans(n_clusters=best_k, random_state=int(random_state), n_init=15)
+            km = KMeans(n_clusters=best_k, random_state=int(random_state), n_init=km_n_init)
             y_km = km.fit_predict(X).astype(int)
             label_sets.append(y_km)
             algo_reports.append({"algo": "KMeans", "k": best_k, "status": "ok"})
@@ -969,7 +979,7 @@ class ClusteringMixin:
         try:
             gmm = GaussianMixture(
                 n_components=best_k, covariance_type="full" if best_k <= 10 else "diag",
-                random_state=int(random_state), n_init=3, max_iter=200,
+                random_state=int(random_state), n_init=gmm_n_init, max_iter=100 if is_fast else 200,
                 reg_covar=1e-4,
             )
             y_gmm = gmm.fit_predict(X).astype(int)
@@ -984,7 +994,7 @@ class ClusteringMixin:
                 n_neighbors = min(max(5, int(0.08 * n)), n - 1)
                 sc = SpectralClustering(
                     n_clusters=best_k, affinity="nearest_neighbors",
-                    n_neighbors=n_neighbors, random_state=int(random_state), n_init=10,
+                    n_neighbors=n_neighbors, random_state=int(random_state), n_init=sc_n_init,
                 )
                 y_sc = sc.fit_predict(X).astype(int)
                 label_sets.append(y_sc)
@@ -1384,14 +1394,29 @@ class ClusteringMixin:
         if not profiles:
             return {}
 
+        profiles_text = "\n".join(
+            f"- {label}: {desc}" for label, desc in profiles.items()
+        )
+
+        import hashlib
+        from pathlib import Path
+        cache_dir = Path(__file__).resolve().parents[1] / ".cache"
+        cache_file = cache_dir / "llm_label_cache.json"
+        profiles_hash = hashlib.sha256(profiles_text.encode("utf-8")).hexdigest()
+
+        if cache_file.exists():
+            try:
+                cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
+                if profiles_hash in cache_data:
+                    print("[_generate_cluster_labels_llm] Cache hit! Reusing pre-labeled business names.")
+                    return cache_data[profiles_hash]
+            except Exception:
+                pass
+
         key = str(getattr(self, "gemini_api_key", "") or "").strip()
         model = str(getattr(self, "gemini_model", "gemini-2.5-flash")).strip()
         if not key:
             return {}
-
-        profiles_text = "\n".join(
-            f"- {label}: {desc}" for label, desc in profiles.items()
-        )
 
         prompt = f"""You are a business intelligence analyst. Based on these cluster profiles from a B2B distribution company, generate short, descriptive, business-meaningful labels for each cluster.
 
@@ -1433,6 +1458,22 @@ Respond ONLY with a JSON object mapping original label to new label. Example:
             for old, new in mapping.items():
                 if isinstance(new, str) and len(new.strip()) > 2:
                     result[str(old)] = new.strip()
+
+            # Save successfully generated result to cache
+            if result:
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    cache_data = {}
+                    if cache_file.exists():
+                        try:
+                            cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+                    cache_data[profiles_hash] = result
+                    cache_file.write_text(json.dumps(cache_data, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+
             return result
         except Exception:
             return {}
@@ -1775,10 +1816,97 @@ Respond ONLY with a JSON object mapping original label to new label. Example:
             else {}
         )
 
-    def run_clustering(self):
+    def _load_precomputed_clustering(self):
+        """
+        Attempts to load the last approved cluster assignments from the database.
+        Populates self.matrix and merges cluster labels back into self.df_partner_features.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            fallback = self.cluster_repo.load_last_approved_assignments()
+            if fallback is None or fallback.empty:
+                return False
+            
+            gs = self.df_recent_group_spend
+            if gs is None or gs.empty:
+                return False
+                
+            self.matrix = gs.pivot_table(
+                index="company_name",
+                columns="group_name",
+                values="total_spend",
+                fill_value=0,
+            )
+            self.matrix["state"] = (
+                gs[["company_name", "state"]]
+                .drop_duplicates("company_name")
+                .set_index("company_name")["state"]
+            )
+            
+            for c in ["cluster", "cluster_type", "cluster_label", "strategic_tag"]:
+                if c in fallback.columns:
+                    self.matrix[c] = fallback[c].reindex(self.matrix.index).fillna(
+                        -1 if c == "cluster" else ("Growth" if c == "cluster_type" else ("Uncategorized" if c == "cluster_label" else "Growth mixed"))
+                    )
+            
+            if "cluster" in self.matrix.columns:
+                self.matrix["cluster"] = self.matrix["cluster"].astype(int)
+            
+            self.cluster_quality_report = {
+                "status": "ok",
+                "loaded_from_precomputed": True,
+                "n_partners": int(len(self.matrix)),
+                "quality_gate": {"approved": True, "reason": "Precomputed database assignments loaded successfully."},
+                "temporal_tracking": {}
+            }
+            
+            try:
+                self.run_cluster_business_validation()
+            except Exception:
+                pass
+                
+            if (
+                self.df_partner_features is not None
+                and not self.df_partner_features.empty
+            ):
+                cluster_cols = ["cluster", "cluster_type", "cluster_label", "strategic_tag"]
+                cols_available = [c for c in cluster_cols if c in self.matrix.columns]
+                if cols_available:
+                    for c in cols_available:
+                        if c in self.df_partner_features.columns:
+                            self.df_partner_features = self.df_partner_features.drop(columns=[c])
+                    self.df_partner_features = self.df_partner_features.join(
+                        self.matrix[cols_available], how="left"
+                    )
+                    if "cluster_label" in self.df_partner_features.columns:
+                        self.df_partner_features["cluster_label"] = (
+                            self.df_partner_features["cluster_label"].fillna("Inactive")
+                        )
+                    if "cluster_type" in self.df_partner_features.columns:
+                        self.df_partner_features["cluster_type"] = (
+                            self.df_partner_features["cluster_type"].fillna("Inactive")
+                        )
+                    if "strategic_tag" in self.df_partner_features.columns:
+                        self.df_partner_features["strategic_tag"] = (
+                            self.df_partner_features["strategic_tag"].fillna("No recent activity")
+                        )
+                    if "cluster" in self.df_partner_features.columns:
+                        self.df_partner_features["cluster"] = (
+                            self.df_partner_features["cluster"].fillna(-1).astype(int)
+                        )
+            return True
+        except Exception as e:
+            print(f"[_load_precomputed_clustering] Failed to load: {e}")
+            return False
+
+    def run_clustering(self, force_live=False):
         """Tiered strategy: adaptive VIP tier -> KMeans, remaining tier -> HDBSCAN hybrid."""
         if self.df_ml is None:
             self.ensure_core_loaded()
+
+        if getattr(self, "use_precomputed_clustering", True) and not force_live:
+            if self._load_precomputed_clustering():
+                return self.matrix
 
         # df_recent_group_spend is the long-form table with company_name, group_name,
         # total_spend and state — the correct source for all group-level clustering ops.

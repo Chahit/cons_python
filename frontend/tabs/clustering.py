@@ -110,8 +110,39 @@ def render(ai):
     skel = st.empty()
     with skel.container():
         skeleton_loader(n_metric_cards=4, n_rows=3, label="Running clustering engine...")
-    ai.ensure_clustering()
+
+    # ── Handle force-live re-run triggered by button press ───────────────────
+    if st.session_state.get("_cluster_force_live"):
+        st.session_state["_cluster_force_live"] = False
+        ai._clustering_ready = False
+        with st.spinner("🔄 Re-running full ensemble clustering (live)..."):
+            ai.run_clustering(force_live=True)
+            ai._clustering_ready = True
+    else:
+        ai.ensure_clustering()
+
     skel.empty()
+
+    # ── Cache / live source status banner ────────────────────────────────────
+    qr = getattr(ai, "cluster_quality_report", {}) or {}
+    _from_cache = qr.get("loaded_from_precomputed", False)
+    _col_banner, _col_btn = st.columns([5, 1])
+    with _col_banner:
+        if _from_cache:
+            st.info(
+                "⚡ **Results loaded from cached DB assignments.** "
+                "Click **Force Live Refresh** to re-run the full ensemble clustering.",
+                icon="💾",
+            )
+        else:
+            st.success("✅ **Clustering computed live this session.**", icon="🧠")
+    with _col_btn:
+        st.markdown("<div style='padding-top:8px'>", unsafe_allow_html=True)
+        if st.button("🔄 Force Live Refresh", key="btn_cluster_force_live", use_container_width=True):
+            st.session_state["_cluster_force_live"] = True
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
 
     matrix = ai.matrix.copy()
     if matrix is None or matrix.empty:

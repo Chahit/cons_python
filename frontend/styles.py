@@ -1,6 +1,7 @@
 """
 Shared UI utilities for the Consistent AI Dashboard.
-Import and call apply_global_styles() at the top of each tab's render().
+apply_global_styles() is safe to call from any tab's render() — it is
+idempotent within a single Streamlit rerun, so duplicate calls are free.
 """
 
 import streamlit as st
@@ -459,8 +460,20 @@ section.main .block-container {
 
 
 def apply_global_styles():
-    """Inject the global stylesheet. Call once at the top of every tab's render()."""
+    """Inject the global stylesheet exactly once per Streamlit rerun.
+
+    Safe to call from multiple tabs — subsequent calls within the same
+    rerun are no-ops, so there is no duplicate CSS injection cost.
+    The CSS *is* re-injected on every rerun because Streamlit rebuilds
+    the full page DOM each time.
+    """
+    # Use a rerun-scoped counter stored in session_state.
+    # _css_rerun_id is bumped each time the flag is missing (i.e. new rerun).
+    _key = "_global_css_injected"
+    if st.session_state.get(_key):
+        return  # already injected this rerun
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
+    st.session_state[_key] = True
 
 
 # ── Helper: section header (uppercase label + thin line) ─────────────────────

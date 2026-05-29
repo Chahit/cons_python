@@ -153,6 +153,9 @@ class SalesIntelligenceEngine(
         self.use_precomputed_assoc = (
             os.getenv("USE_PRECOMPUTED_ASSOC", "true").lower() == "true"
         )
+        self.use_precomputed_clustering = (
+            os.getenv("USE_PRECOMPUTED_CLUSTERING", "true").lower() == "true"
+        )
         self.enable_realtime_partner_scoring = (
             os.getenv("ENABLE_REALTIME_PARTNER_SCORING", "false").lower() == "true"
         )
