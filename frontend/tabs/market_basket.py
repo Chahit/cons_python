@@ -313,18 +313,24 @@ def render(ai):
 
     unique_products = _get_unique_products(_df_all) if not _df_all.empty else []
 
-    # Map prices and margin rates
+    # Map prices and margin rates — guard against NaN/inf
+    import math
     product_prices = {}
     product_margins = {}
     if not _df_all.empty:
         for row in _df_all.itertuples():
             pa = getattr(row, "product_a", None)
             pb = getattr(row, "product_b", None)
-            rev = getattr(row, "expected_revenue_gain", 0)
-            freq = getattr(row, "times_bought_together", 1)
-            rate = getattr(row, "margin_rate", 0.15)
-            # Average line revenue
-            avg_rev = float(rev) / float(freq) if freq > 0 else 15000.0
+            rev  = float(getattr(row, "expected_revenue_gain", 0) or 0)
+            freq = float(getattr(row, "times_bought_together", 1) or 1)
+            rate = float(getattr(row, "margin_rate", 0.15) or 0.15)
+            # Average line revenue — safe division
+            avg_rev = rev / freq if freq > 0 else 15000.0
+            # Guard: if somehow NaN/inf slipped through, default to 15000
+            if not math.isfinite(avg_rev) or avg_rev <= 0:
+                avg_rev = 15000.0
+            if not math.isfinite(rate) or rate <= 0:
+                rate = 0.15
             if pa and pa not in product_prices:
                 product_prices[pa] = avg_rev
                 product_margins[pa] = rate
@@ -360,10 +366,14 @@ def render(ai):
         total_weighted_lift = 0.0
         pair_counts = 0
 
-        # Sum baseline figures
+        # Sum baseline figures — guard against NaN in all price lookups
         for p in selected_sandbox_products:
-            price = product_prices.get(p, 15000.0)
-            margin_rate = product_margins.get(p, 0.15)
+            price = float(product_prices.get(p, 15000.0) or 15000.0)
+            if not math.isfinite(price) or price <= 0:
+                price = 15000.0
+            margin_rate = float(product_margins.get(p, 0.15) or 0.15)
+            if not math.isfinite(margin_rate) or margin_rate <= 0:
+                margin_rate = 0.15
             total_baseline_revenue += price
             total_baseline_margin += price * margin_rate
 
@@ -377,28 +387,37 @@ def render(ai):
                     ((_df_all["product_a"] == p2) & (_df_all["product_b"] == p1))
                 ]
                 if not pair_row.empty:
-                    lift_val = float(pair_row.iloc[0].get("lift_a_to_b", 1.0))
+                    lift_raw = pair_row.iloc[0].get("lift_a_to_b", 1.0)
+                    lift_val = float(lift_raw) if lift_raw is not None and math.isfinite(float(lift_raw or 1.0)) else 1.0
                     total_weighted_lift += lift_val
                     pair_counts += 1
 
         avg_pair_lift = (total_weighted_lift / pair_counts) if pair_counts > 0 else 1.2
+        if not math.isfinite(avg_pair_lift):
+            avg_pair_lift = 1.2
 
         # Model demand elastic expansion based on lift and discount
         discount_fraction = float(bundle_discount) / 100.0
-        demand_uplift = 1.0 + (discount_fraction * 1.5) * (avg_pair_lift - 0.2)
-        demand_uplift = clip_val = max(1.0, min(float(demand_uplift), 4.0))
+        demand_uplift_raw = 1.0 + (discount_fraction * 1.5) * (avg_pair_lift - 0.2)
+        demand_uplift = max(1.0, min(float(demand_uplift_raw) if math.isfinite(demand_uplift_raw) else 1.2, 4.0))
 
-        # Bundle pricing & margins
+        # Bundle pricing & margins — ensure no NaN reaches metrics
         simulated_bundle_revenue = total_baseline_revenue * (1.0 - discount_fraction)
+        if not math.isfinite(simulated_bundle_revenue):
+            simulated_bundle_revenue = 0.0
         
         # Simulated Margin: sum of (price * margin_rate - price * discount_fraction)
         sim_margin_sum = 0.0
         for p in selected_sandbox_products:
-            price = product_prices.get(p, 15000.0)
-            margin_rate = product_margins.get(p, 0.15)
+            price = float(product_prices.get(p, 15000.0) or 15000.0)
+            if not math.isfinite(price) or price <= 0:
+                price = 15000.0
+            margin_rate = float(product_margins.get(p, 0.15) or 0.15)
+            if not math.isfinite(margin_rate):
+                margin_rate = 0.15
             sim_margin_sum += price * (margin_rate - discount_fraction)
         
-        simulated_net_margin = max(0.0, sim_margin_sum) * demand_uplift
+        simulated_net_margin = max(0.0, sim_margin_sum if math.isfinite(sim_margin_sum) else 0.0) * demand_uplift
         margin_delta = simulated_net_margin - total_baseline_margin
         pct_margin_delta = (margin_delta / total_baseline_margin) if total_baseline_margin > 0 else 0.0
 
@@ -551,64 +570,39 @@ def render(ai):
                 "- **Cross Category**: different categories (e.g. HDD → Cables)"
             )
 
-        # Plotly Product Affinity Matrix Heatmap (Wow Factor)
-        if not df_assoc.empty:
-            try:
-                # Group by product and sum frequency to find the top products
-                top_prods_a = df_assoc.groupby("product_a")["times_bought_together"].sum().rename("total_freq")
-                top_prods_b = df_assoc.groupby("product_b")["times_bought_together"].sum().rename("total_freq")
-                top_prods_combined = top_prods_a.add(top_prods_b, fill_value=0)
-                
-                if not top_prods_combined.empty:
-                    top_prods = top_prods_combined.sort_values(ascending=False).head(15).index.tolist()
-                    
-                    if len(top_prods) >= 2:
-                        matrix_lift = np.ones((len(top_prods), len(top_prods)))
-                        for i, p1 in enumerate(top_prods):
-                            for j, p2 in enumerate(top_prods):
-                                if p1 == p2:
-                                    matrix_lift[i, j] = 1.0
-                                    continue
-                                # Find rule
-                                match = df_assoc[
-                                    ((df_assoc["product_a"] == p1) & (df_assoc["product_b"] == p2)) |
-                                    ((df_assoc["product_a"] == p2) & (df_assoc["product_b"] == p1))
-                                ]
-                                if not match.empty:
-                                    matrix_lift[i, j] = float(match.iloc[0].get("lift_a_to_b", 1.0))
-                        
-                        fig_heat = go.Figure(data=go.Heatmap(
-                            z=matrix_lift,
-                            x=top_prods,
-                            y=top_prods,
-                            colorscale="Tealgrn",
-                            colorbar=dict(title="Lift Factor", ticksuffix="x", titlefont={'color': '#94a3b8'}, tickfont={'color': '#94a3b8'}),
-                            hovertemplate="Product A: %{y}<br>Product B: %{x}<br>Affinity Lift: %{z:.2f}x<extra></extra>"
-                        ))
-                        fig_heat.update_layout(
-                            title={'text': "🔥 Interactive Product Affinity Matrix (Lift Factor Correlation)", 'font': {'size': 14, 'color': '#e2e8f0'}},
-                            paper_bgcolor='rgba(0,0,0,0)',
-                            plot_bgcolor='rgba(0,0,0,0)',
-                            margin=dict(l=20, r=20, t=55, b=20),
-                            height=400,
-                            xaxis={'tickfont': {'color': '#94a3b8', 'size': 9}, 'tickangle': 35, 'gridcolor': '#1e293b'},
-                            yaxis={'tickfont': {'color': '#94a3b8', 'size': 9}, 'gridcolor': '#1e293b'},
-                        )
-                        st.plotly_chart(fig_heat, use_container_width=True)
-            except Exception as ex_heat:
-                st.caption(f"Could not render affinity heatmap: {ex_heat}")
+        # Product Affinity Matrix heatmap removed per user request
 
         same_tab, cross_tab = st.tabs([
             f"🔁 Same-Category Bundles ({len(df_same)})",
             f"🔀 Cross-Category Bundles ({len(df_cross)})",
         ])
 
+        def _safe_df(df, cols):
+            """Sanitize dataframe before rendering — prevents React error #185."""
+            if df.empty:
+                return df
+            df = df.copy()
+            numeric_cols = ["times_bought_together", "confidence_a_to_b", "lift_a_to_b",
+                            "expected_gain_monthly", "expected_margin_monthly",
+                            "confidence", "lift", "frequency"]
+            for c in numeric_cols:
+                if c in df.columns:
+                    df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+                    # Replace inf values
+                    import numpy as np_local
+                    df[c] = df[c].replace([np_local.inf, -np_local.inf], 0.0)
+            for c in ["product_a", "product_b", "rule_strength", "trigger_product", "recommended_product", "bundle_type"]:
+                if c in df.columns:
+                    df[c] = df[c].fillna("").astype(str)
+            # Keep only requested cols that exist
+            return df[[c for c in cols if c in df.columns]]
+
         with same_tab:
             st.caption("Depth-selling within a product family — same category on both sides.")
             if df_same.empty:
                 st.info("No same-category rules with current filters.")
             else:
-                st.dataframe(df_same[[c for c in _display_cols if c in df_same.columns]],
+                st.dataframe(_safe_df(df_same, _display_cols),
                              column_config=_col_cfg, use_container_width=True, hide_index=True)
 
         with cross_tab:
@@ -616,7 +610,7 @@ def render(ai):
             if df_cross.empty:
                 st.info("No cross-category rules with current filters.")
             else:
-                st.dataframe(df_cross[[c for c in _display_cols if c in df_cross.columns]],
+                st.dataframe(_safe_df(df_cross, _display_cols),
                              column_config=_col_cfg, use_container_width=True, hide_index=True)
     st.markdown("---")
 
@@ -722,7 +716,7 @@ def render(ai):
                 "expected_gain_monthly": st.column_config.NumberColumn("₹ Gain/Mo", format="₹%d"),
             }
             st.dataframe(
-                partner_recos[[c for c in _preco_cols if c in partner_recos.columns]],
+                _safe_df(partner_recos, _preco_cols),
                 column_config=_preco_cfg,
                 use_container_width=True, hide_index=True,
             )

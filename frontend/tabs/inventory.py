@@ -646,6 +646,23 @@ def _render_live_view(ai):
         )
         return
 
+    # ── Sanitize display columns before rendering — prevents React #185 ────────
+    if "last_purchase_date" in leads.columns:
+        leads["last_purchase_date"] = (
+            pd.to_datetime(leads["last_purchase_date"], errors="coerce")
+            .dt.strftime("%Y-%m-%d")
+            .fillna("")
+        )
+    if "lead_score" in leads.columns:
+        leads["lead_score"] = pd.to_numeric(leads["lead_score"], errors="coerce").fillna(0.0).round(3)
+    for _num_col in ["buyer_past_purchase_qty", "purchase_txn_count"]:
+        if _num_col in leads.columns:
+            leads[_num_col] = pd.to_numeric(leads[_num_col], errors="coerce").fillna(0).astype(int)
+    for _str_col in ["potential_buyer", "mobile_no", "state_name", "Lead Warmth",
+                     "Audience Type", "purchase_pattern"]:
+        if _str_col in leads.columns:
+            leads[_str_col] = leads[_str_col].fillna("").astype(str)
+
     _display_cols = [c for c in [
         "potential_buyer", "mobile_no", "state_name", "Lead Warmth",
         "Audience Type", "buyer_past_purchase_qty", "purchase_pattern",
@@ -878,8 +895,10 @@ def _render_historical_view(ai):
     with st.expander(f"📋 Full Product List ({n_products} items)", expanded=True):
         display_df = snap_df[["product_name", "total_stock_qty", "max_age_days"]].copy()
         display_df = display_df.sort_values("max_age_days", ascending=False)
-        display_df["max_age_days"] = display_df["max_age_days"].astype(int)
-        display_df["total_stock_qty"] = display_df["total_stock_qty"].astype(int)
+        # Sanitize — prevent React #185 from None/NaN in numeric columns
+        display_df["max_age_days"]    = pd.to_numeric(display_df["max_age_days"], errors="coerce").fillna(0).astype(int)
+        display_df["total_stock_qty"] = pd.to_numeric(display_df["total_stock_qty"], errors="coerce").fillna(0).astype(int)
+        display_df["product_name"]    = display_df["product_name"].fillna("").astype(str)
         st.dataframe(
             display_df,
             column_config={

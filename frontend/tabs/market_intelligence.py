@@ -32,11 +32,16 @@ _NEWS_CACHE_SECONDS = 4 * 3600
 _PRICE_CACHE_HOURS  = 6
 
 _RSS_FEEDS = [
-    ("Tom's Hardware",  "https://www.tomshardware.com/feeds/all"),
-    ("The Register",    "https://www.theregister.com/headlines.atom"),
-    ("Ars Technica",    "https://feeds.arstechnica.com/arstechnica/technology-lab"),
-    ("Economic Times",  "https://economictimes.indiatimes.com/tech/rssfeeds/13357270.cms"),
-    ("SlashDot",        "https://rss.slashdot.org/Slashdot/slashDot"),
+    ("Tom's Hardware",      "https://www.tomshardware.com/feeds/all"),
+    ("The Register",        "https://www.theregister.com/headlines.atom"),
+    ("Ars Technica",        "https://feeds.arstechnica.com/arstechnica/technology-lab"),
+    ("Economic Times Tech", "https://economictimes.indiatimes.com/tech/rssfeeds/13357270.cms"),
+    ("SlashDot",            "https://rss.slashdot.org/Slashdot/slashDot"),
+    ("NDTV Profit",         "https://feeds.feedburner.com/ndtvprofit-latest"),
+    ("Business Standard",   "https://www.business-standard.com/rss/technology-10401.rss"),
+    ("MoneyControl Tech",   "https://www.moneycontrol.com/rss/technology.xml"),
+    ("Inc42",               "https://inc42.com/feed/"),
+    ("AnandTech",           "https://www.anandtech.com/rss/"),
 ]
 
 
@@ -67,6 +72,33 @@ _CATEGORY_DEFAULTS = {
     "POE Switch": ["TP-Link 8-Port Gigabit PoE Switch", "D-Link 9-Port PoE Switch", "Netgear 8-Port Gigabit PoE+ GS308EP"],
     "CON CABLE": ["Con Cat6 Ethernet Patch Cable 3M", "HDMI 2.0 High Speed Cable 1.5M", "USB Type-C Fast Charging Cable"],
     "Bulk Drum Unit": ["Brother DR-2401 Drum Unit", "HP 104A Black Original Laser Imaging Drum", "Canon Drum Cartridge 051"],
+}
+
+# ── Competitor mapping per product category ───────────────────────────────────
+_CATEGORY_COMPETITORS = {
+    "CCTV CAMERA": ["CP Plus", "Hikvision", "Dahua", "Bosch Security", "Axis Communications",
+                    "Honeywell", "TVT", "Hanwha", "Reolink", "Amcrest"],
+    "Con Surveillance": ["Seagate", "Western Digital", "Toshiba", "Hitachi", "Samsung",
+                          "LaCie", "G-Technology", "Transcend"],
+    "Con Pen Drive": ["SanDisk", "Kingston", "HP", "Transcend", "Sony", "Adata",
+                      "Silicon Power", "PNY", "Lexar"],
+    "Con Micro SD": ["SanDisk", "Samsung", "Kingston", "Lexar", "Transcend", "Sony",
+                     "Adata", "Silicon Power"],
+    "Con Micro SD-S": ["SanDisk", "Samsung", "Kingston", "Lexar", "Transcend"],
+    "ACER RAM": ["Kingston", "Corsair", "Samsung", "Crucial", "G.Skill", "Hynix",
+                 "Adata", "Team Group"],
+    "Gaming SMPS": ["Corsair", "Ant Esports", "Cooler Master", "Zebronics",
+                    "Circle", "Antec", "Seasonic", "Deepcool"],
+    "Con External Hard Disk": ["Seagate", "Western Digital", "Toshiba", "Samsung", "LaCie",
+                               "Transcend", "Adata", "Silicon Power", "Crucial"],
+    "CON USB HUB & DOCK": ["TP-Link", "Anker", "Portronics", "Belkin", "Ugreen",
+                           "Orico", "Zebronics", "Promate"],
+    "POE Switch": ["TP-Link", "D-Link", "Netgear", "Cisco", "Ubiquiti", "HPE",
+                   "Zyxel", "Hikvision", "Grandstream"],
+    "CON CABLE": ["D-Link", "TP-Link", "Belkin", "Zebronics", "Portronics", "Ugreen",
+                  "AmazonBasics", "Borosil"],
+    "Bulk Drum Unit": ["Brother", "HP", "Canon", "Epson", "Lexmark", "Samsung",
+                       "Xerox", "Kyocera"],
 }
 
 
@@ -600,7 +632,7 @@ def _fetch_prices(query: str, serpapi_key: str, category: str = "Product") -> tu
 # ═════════════════════════════════════════════════════════════════════════════
 # RSS + GPT news briefing
 # ═════════════════════════════════════════════════════════════════════════════
-def _fetch_rss_headlines(max_per_feed: int = 5) -> list:
+def _fetch_rss_headlines(max_per_feed: int = 15) -> list:
     try:
         import feedparser
     except ImportError:
@@ -613,7 +645,7 @@ def _fetch_rss_headlines(max_per_feed: int = 5) -> list:
                 headlines.append({
                     "source":  source_name,
                     "title":   entry.get("title", ""),
-                    "summary": entry.get("summary", "")[:300],
+                    "summary": entry.get("summary", "")[:400],
                     "link":    entry.get("link", ""),
                 })
         except Exception:
@@ -624,7 +656,7 @@ def _fetch_rss_headlines(max_per_feed: int = 5) -> list:
 def _build_news_briefing(headlines: list, categories: list) -> dict:
     cats_str = ", ".join(categories[:20]) if categories else "IT hardware products"
     headlines_txt = "\n".join(
-        [f"- [{h['source']}] {h['title']}" for h in headlines[:25]]
+        [f"- [{h['source']}] {h['title']}" for h in headlines[:100]]
     )
     system = (
         "You are a senior B2B sales intelligence analyst for an Indian IT hardware distributor. "
@@ -644,7 +676,8 @@ Produce a JSON object with this exact structure:
       "impact_category": "one of our product categories listed above (or 'General' if none match)",
       "impact_level": "High | Medium | Low",
       "impact_summary": "1-2 sentences on how this affects our business",
-      "recommended_action": "specific action for our sales team"
+      "recommended_action": "specific action for our sales team",
+      "action_urgency": "Immediate | This Week | Monitor"
     }}
   ],
   "overall_market_mood": "Bullish | Bearish | Neutral",
@@ -652,9 +685,9 @@ Produce a JSON object with this exact structure:
   "supply_chain_alert": "any supply shortage or price pressure alert, or null"
 }}
 CRITICAL: The 'impact_category' field MUST be EXACTLY one of our categories listed above or 'General'. Do not invent new categories.
-Include only the 5 most impactful stories. Output ONLY valid JSON, no markdown fences.
+Include the 15 most impactful stories. Output ONLY valid JSON, no markdown fences.
 """
-    raw = _gpt(system, user, max_tokens=1500)
+    raw = _gpt(system, user, max_tokens=3000)
     try:
         data = json.loads(raw)
     except Exception:
@@ -769,7 +802,7 @@ def render(ai):
     with tab_news:
         st.markdown(
             "<div style='font-size:13px;color:#64748b;margin-bottom:16px;'>"
-            "Headlines from 5 tech/supply-chain feeds, analysed by GPT-4o against your product categories. "
+            "Headlines from 10 tech/supply-chain feeds, analysed by GPT-4o against your product categories. "
             "Refreshes every 4 hours — no API cost on repeat views.</div>",
             unsafe_allow_html=True,
         )
@@ -785,13 +818,13 @@ def render(ai):
         with col_info:
             if _cache_valid:
                 age_min = int((_now - _cache_ts) / 60)
-                st.caption(f"Cached briefing · {age_min} min ago")
+                st.caption(f"Cached briefing · {age_min} min ago · from {len(_RSS_FEEDS)} sources")
 
         if force_refresh or not _cache_valid:
             if not has_openai:
                 st.error("OpenAI key is required for News Briefing. Add `OPENAI_API_KEY` to `.env`.")
             else:
-                with st.spinner("Fetching headlines from 5 RSS sources…"):
+                with st.spinner(f"Fetching headlines from {len(_RSS_FEEDS)} RSS sources…"):
                     headlines = _fetch_rss_headlines()
                 with st.spinner(
                     f"GPT-4o analysing {len(headlines)} headlines against "
@@ -848,6 +881,70 @@ def render(ai):
             )
 
             stories = briefing.get("top_stories", [])
+
+            # ── Action Board ───────────────────────────────────────────────────
+            if stories:
+                immediate  = [s for s in stories if s.get("action_urgency") == "Immediate"]
+                this_week  = [s for s in stories if s.get("action_urgency") == "This Week"]
+                monitor    = [s for s in stories if s.get("action_urgency") == "Monitor"]
+                # If GPT didn't return action_urgency, derive it from impact_level
+                if not (immediate or this_week or monitor):
+                    immediate = [s for s in stories if s.get("impact_level") == "High"]
+                    this_week = [s for s in stories if s.get("impact_level") == "Medium"]
+                    monitor   = [s for s in stories if s.get("impact_level") == "Low"]
+
+                if immediate or this_week or monitor:
+                    section_header("📋 Intelligence Action Board")
+                    ab1, ab2, ab3 = st.columns(3)
+                    with ab1:
+                        st.markdown(
+                            f"<div style='background:#ef444415;border:1px solid #ef444440;"
+                            f"border-top:3px solid #ef4444;border-radius:10px;padding:14px 16px;'>"
+                            f"<div style='color:#ef4444;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;'>"
+                            f"⚠️ Immediate Action ({len(immediate)})</div>"
+                            + "".join(
+                                f"<div style='background:#ef444410;border-radius:6px;padding:8px 10px;margin-bottom:6px;'>"
+                                f"<div style='font-size:12px;font-weight:600;color:#fca5a5;margin-bottom:3px;'>{s.get('impact_category','')}</div>"
+                                f"<div style='font-size:11px;color:#e2e8f0;'>{s.get('recommended_action','')}</div>"
+                                f"</div>"
+                                for s in immediate[:4]
+                            )
+                            + "</div>",
+                            unsafe_allow_html=True
+                        )
+                    with ab2:
+                        st.markdown(
+                            f"<div style='background:#f59e0b15;border:1px solid #f59e0b40;"
+                            f"border-top:3px solid #f59e0b;border-radius:10px;padding:14px 16px;'>"
+                            f"<div style='color:#f59e0b;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;'>"
+                            f"📅 This Week ({len(this_week)})</div>"
+                            + "".join(
+                                f"<div style='background:#f59e0b10;border-radius:6px;padding:8px 10px;margin-bottom:6px;'>"
+                                f"<div style='font-size:12px;font-weight:600;color:#fcd34d;margin-bottom:3px;'>{s.get('impact_category','')}</div>"
+                                f"<div style='font-size:11px;color:#e2e8f0;'>{s.get('recommended_action','')}</div>"
+                                f"</div>"
+                                for s in this_week[:4]
+                            )
+                            + "</div>",
+                            unsafe_allow_html=True
+                        )
+                    with ab3:
+                        st.markdown(
+                            f"<div style='background:#22c55e15;border:1px solid #22c55e40;"
+                            f"border-top:3px solid #22c55e;border-radius:10px;padding:14px 16px;'>"
+                            f"<div style='color:#22c55e;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;'>"
+                            f"📊 Monitor ({len(monitor)})</div>"
+                            + "".join(
+                                f"<div style='background:#22c55e10;border-radius:6px;padding:8px 10px;margin-bottom:6px;'>"
+                                f"<div style='font-size:12px;font-weight:600;color:#86efac;margin-bottom:3px;'>{s.get('impact_category','')}</div>"
+                                f"<div style='font-size:11px;color:#e2e8f0;'>{s.get('recommended_action','')}</div>"
+                                f"</div>"
+                                for s in monitor[:4]
+                            )
+                            + "</div>",
+                            unsafe_allow_html=True
+                        )
+                    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
             # ── #6: Category + Level filter ───────────────────────────────
             if stories:
@@ -1216,6 +1313,139 @@ def render(ai):
                     margin=dict(l=0, r=80, t=10, b=10),
                 )
                 st.plotly_chart(fig_cat, use_container_width=True)
+
+        # ── Competitor Brand & Marketplace Intelligence ───────────────────
+        st.markdown("<div style='margin-top:20px;'></div>", unsafe_allow_html=True)
+        with st.expander("🏢 Competitor Brand & Marketplace Intelligence", expanded=True):
+            st.caption(
+                "Select competitor brands and automatically generate up to 20 marketplace queries. "
+                "Compare pricing patterns across Amazon, Flipkart, Google Shopping, and wholesale channels."
+            )
+            if selected_cat == "— Select —":
+                st.info("Please select a Product Category above to load competitor brand intelligence.")
+            else:
+                comp_list = _CATEGORY_COMPETITORS.get(selected_cat, [])
+                if not comp_list:
+                    st.info(f"No predefined competitors found for category: {selected_cat}")
+                else:
+                    selected_comps = st.multiselect(
+                        f"Select Competitor Brands to compare ({selected_cat})",
+                        options=comp_list,
+                        default=comp_list[:3] if len(comp_list) >= 3 else comp_list,
+                        key="comp_brand_sel"
+                    )
+                    
+                    if selected_comps:
+                        query_types = ["Amazon", "Flipkart", "Google Shopping", "Wholesale"]
+                        queries_to_run = []
+                        for comp in selected_comps:
+                            for qt in query_types:
+                                if len(queries_to_run) < 20:
+                                    queries_to_run.append({
+                                        "competitor": comp,
+                                        "marketplace": qt,
+                                        "query": f"{comp} {selected_cat} {qt}"
+                                    })
+                                    
+                        st.markdown(f"**Generated {len(queries_to_run)} search queries** for competitor × marketplace combinations.")
+                        
+                        fc_col, inf_col = st.columns([1, 3])
+                        with fc_col:
+                            fetch_comp_btn = st.button("🚀 Fetch Prices", key="fetch_comp_intel")
+                        with inf_col:
+                            st.caption("Click to scan or refresh pricing data. Leverages local cache to minimize API utilization.")
+                            
+                        # Load current data from cache to show table instantly
+                        table_data = []
+                        for item in queries_to_run:
+                            cached = _get_cached_result(item["query"])
+                            if cached:
+                                avg_p, min_p, max_p, _, _, _ = cached
+                                status = "Cached"
+                            else:
+                                avg_p, min_p, max_p = None, None, None
+                                status = "Not Fetched"
+                                
+                            table_data.append({
+                                "Competitor": item["competitor"],
+                                "Channel": item["marketplace"],
+                                "Search Query": item["query"],
+                                "Min Price (₹)": min_p,
+                                "Avg Price (₹)": avg_p,
+                                "Max Price (₹)": max_p,
+                                "Status": status
+                            })
+                            
+                        if fetch_comp_btn:
+                            progress_bar = st.progress(0.0)
+                            status_text = st.empty()
+                            
+                            updated_data = []
+                            for idx, item in enumerate(queries_to_run):
+                                status_text.text(f"Processing ({idx+1}/{len(queries_to_run)}): {item['query']}...")
+                                results, fetch_error = _fetch_prices(item["query"], serpapi_key, selected_cat)
+                                if results:
+                                    clean_res, avg_p, min_p, max_p, spread = _clean_price_results(results)
+                                    _save_price_result(
+                                        item["query"], selected_cat, avg_p, min_p, max_p,
+                                        json.dumps(clean_res), ""
+                                    )
+                                    status = "Live"
+                                else:
+                                    avg_p, min_p, max_p = 0.0, 0.0, 0.0
+                                    status = "Failed"
+                                    
+                                updated_data.append({
+                                    "Competitor": item["competitor"],
+                                    "Channel": item["marketplace"],
+                                    "Search Query": item["query"],
+                                    "Min Price (₹)": min_p,
+                                    "Avg Price (₹)": avg_p,
+                                    "Max Price (₹)": max_p,
+                                    "Status": status
+                                })
+                                progress_bar.progress((idx + 1) / len(queries_to_run))
+                                
+                            progress_bar.empty()
+                            status_text.empty()
+                            st.session_state["_comp_intel_results"] = updated_data
+                            st.session_state["_comp_intel_cat"] = selected_cat
+                            st.rerun()
+                            
+                        # Determine current display source
+                        display_results = None
+                        if "_comp_intel_results" in st.session_state and st.session_state.get("_comp_intel_cat") == selected_cat:
+                            curr_state_res = st.session_state["_comp_intel_results"]
+                            state_comps = {r["Competitor"] for r in curr_state_res}
+                            if state_comps == set(selected_comps):
+                                display_results = curr_state_res
+                                
+                        if display_results is None:
+                            display_results = table_data
+                            
+                        df_intel = pd.DataFrame(display_results)
+                        st.markdown(f"#### 📊 Competitor Intelligence Grid — {selected_cat}")
+                        
+                        # Replace None/NaN to avoid React #185 errors
+                        for _num_col in ["Min Price (₹)", "Avg Price (₹)", "Max Price (₹)"]:
+                            if _num_col in df_intel.columns:
+                                df_intel[_num_col] = pd.to_numeric(df_intel[_num_col], errors="coerce").fillna(0.0)
+                        for _str_col in ["Competitor", "Channel", "Search Query", "Status"]:
+                            if _str_col in df_intel.columns:
+                                df_intel[_str_col] = df_intel[_str_col].fillna("").astype(str)
+                                
+                        st.dataframe(
+                            df_intel,
+                            column_config={
+                                "Min Price (₹)": st.column_config.NumberColumn("Min Price", format="₹%,.0f"),
+                                "Avg Price (₹)": st.column_config.NumberColumn("Avg Price", format="₹%,.0f"),
+                                "Max Price (₹)": st.column_config.NumberColumn("Max Price", format="₹%,.0f"),
+                            },
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    else:
+                        st.info("Select one or more competitor brands above to generate pricing intelligence.")
 
         # ── #17: Competitor Price Tracker ─────────────────────────────────
         st.markdown("<div style='margin-top:20px;'></div>", unsafe_allow_html=True)

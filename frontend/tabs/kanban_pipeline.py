@@ -583,65 +583,8 @@ def _render_segment_migration(
         unsafe_allow_html=True,
     )
 
-    # ── Plotly Sankey Customer Migration Chart (Wow Factor 1) ───────────
-    sources = []
-    targets = []
-    values = []
-    link_colors = []
-    
-    for idx_p, seg_p in enumerate(SEG_ORDER):
-        for idx_c, seg_c in enumerate(SEG_ORDER):
-            val = int(matrix_df.loc[seg_p, seg_c]) if seg_p in matrix_df.index and seg_c in matrix_df.columns else 0
-            if val > 0:
-                sources.append(idx_p)
-                targets.append(5 + idx_c)
-                values.append(val)
-                # Map source to nice transparent HSL flow colors
-                color = {
-                    "Champion": "rgba(34, 197, 94, 0.4)",
-                    "Emerging": "rgba(6, 182, 212, 0.4)",
-                    "Healthy":  "rgba(59, 130, 246, 0.4)",
-                    "At Risk":  "rgba(245, 158, 11, 0.4)",
-                    "Critical": "rgba(239, 68, 68, 0.4)"
-                }.get(seg_p, "rgba(100, 116, 139, 0.4)")
-                link_colors.append(color)
-
-    if sum(values) > 0:
-        import plotly.graph_objects as go
-        node_labels = [
-            "🏆 Prior Champion", "🚀 Prior Emerging", "✅ Prior Healthy", "⚠️ Prior At Risk", "🔴 Prior Critical",
-            "🏆 Champion (Now)", "🚀 Emerging (Now)", "✅ Healthy (Now)", "⚠️ At Risk (Now)", "🔴 Critical (Now)"
-        ]
-        node_colors = [
-            "#22c55e", "#06b6d4", "#3b82f6", "#f59e0b", "#ef4444",
-            "#22c55e", "#06b6d4", "#3b82f6", "#f59e0b", "#ef4444"
-        ]
-        
-        fig_sankey = go.Figure(data=[go.Sankey(
-            node = dict(
-              pad = 15,
-              thickness = 20,
-              line = dict(color = "#1e2235", width = 0.5),
-              label = node_labels,
-              color = node_colors
-            ),
-            link = dict(
-              source = sources,
-              target = targets,
-              value = values,
-              color = link_colors
-            )
-        )])
-        fig_sankey.update_layout(
-            title_text="🔄 Dynamic Sankey Segment Migration Chart (Prior &rarr; Current)",
-            title_font_size=12,
-            font_color="#e2e8f0",
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            height=300,
-            margin=dict(l=10, r=10, t=35, b=10)
-        )
-        st.plotly_chart(fig_sankey, use_container_width=True)
+    # Sankey Customer Migration Chart removed
+    pass
 
     # ── Movers list ───────────────────────────────────────────────────────
     seg_prev_col = "segment_prev" if "segment_prev" in merged.columns else "segment_prior"

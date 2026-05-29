@@ -168,8 +168,8 @@ def _module_card_html(m: dict) -> str:
     """Build the HTML for a single module selection card."""
     tags_html = "".join(
         f"<span style='background:rgba(255,255,255,0.06);border:1px solid #1e2535;"
-        f"color:#64748b;border-radius:20px;padding:3px 9px;font-size:10.5px;"
-        f"font-weight:600;margin-right:5px;'>{t}</span>"
+        f"color:#64748b;border-radius:20px;padding:4px 10px;font-size:10.5px;"
+        f"font-weight:600;display:inline-flex;align-items:center;'>{t}</span>"
         for t in m["tags"]
     )
     badge_html = (
@@ -190,7 +190,7 @@ def _module_card_html(m: dict) -> str:
       <div style="font-size:10px;color:#4b5563;font-family:monospace;margin-bottom:5px;">{m['num']}</div>
       <div style="font-size:15px;font-weight:700;color:#e2e8f0;margin-bottom:8px;line-height:1.3;">{m['title']}</div>
       <div style="font-size:12.5px;color:#94a3b8;line-height:1.6;margin-bottom:14px;">{m['desc']}</div>
-      <div>{tags_html}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">{tags_html}</div>
     </div>
     """
 

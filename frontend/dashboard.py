@@ -247,7 +247,6 @@ for _icon, _label, _desc in _NAV_ITEMS:
     if st.sidebar.button(
         f"{_icon}  {_label}",
         key=f"nav_{_label}",
-        help=_desc,
     ):
         st.session_state.active_page = _label
         st.rerun()
@@ -351,6 +350,11 @@ components.html(f"""
       max-width:88%; font-size:13px; line-height:1.45; white-space:pre-wrap; word-break:break-word;
     }}
     .ai-msg-hint {{ color:#555; font-size:12px; font-style:italic; padding:4px 0; }}
+    #_ai_intro {{
+      padding:10px 14px 2px; color:#9ca3af; font-size:11.5px; line-height:1.5;
+      border-bottom:1px solid #1e1e1e;
+    }}
+    #_ai_intro strong {{ color:#e5e7eb; font-weight:600; }}
     #_ai_quick {{
       padding:6px 12px 4px; display:flex; flex-wrap:wrap; gap:5px;
       border-top:1px solid #1e1e1e;
@@ -372,7 +376,7 @@ components.html(f"""
     #_ai_textarea:focus {{ border-color:#2563eb; }}
     #_ai_send {{
       background:#2563eb; color:#fff; border:none; border-radius:8px;
-      padding:9px 14px; font-size:18px; cursor:pointer; line-height:1;
+      padding:9px 14px; font-size:12px; font-weight:700; cursor:pointer; line-height:1;
     }}
     #_ai_send:hover {{ background:#1d4ed8; }}
     #_ai_clear {{
@@ -409,7 +413,7 @@ components.html(f"""
   var bubble = par.createElement('div');
   bubble.id = '_ai_bubble';
   bubble.innerHTML = '💬';
-  bubble.title = 'AI Assistant';
+  bubble.setAttribute('aria-label', 'Open AI Assistant');
   par.body.appendChild(bubble);
 
   // ── Create panel ──────────────────────────────────────────────────────────
@@ -420,16 +424,46 @@ components.html(f"""
       <span>🤖 AI Assistant</span>
       <span id="_ai_close">✕</span>
     </div>
+    <div id="_ai_intro"><strong>Ask Consistent AI</strong> about partner health, revenue changes, churn risk, or where to look next.</div>
     <div id="_ai_msgs">` + msgsHtml + `</div>
     <div id="_ai_thinking">Thinking...</div>
     <div id="_ai_quick">` + quickHtml + `</div>
     <div id="_ai_inp_area">
-      <textarea id="_ai_textarea" rows="1" placeholder="Ask about revenue, partners, competitors..."></textarea>
-      <button id="_ai_send" title="Send">➤</button>
+      <textarea id="_ai_textarea" rows="1" placeholder="Ask a question about this account, module, or trend..."></textarea>
+      <button id="_ai_send">Send</button>
     </div>
     <div id="_ai_clear">Clear conversation</div>
   `;
   par.body.appendChild(panel);
+
+  function hideNativeChatControls() {{
+    var nativeInput = par.querySelector('input[aria-label="_msg"]');
+    var nativeButton = null;
+    par.querySelectorAll('button').forEach(function(btn) {{
+      if (!nativeButton && btn.textContent && btn.textContent.trim() === '_send') {{
+        nativeButton = btn;
+      }}
+    }});
+
+    [nativeInput, nativeButton].forEach(function(el) {{
+      if (!el) return;
+      var container =
+        el.closest('[data-testid="stForm"]') ||
+        el.closest('form') ||
+        el.closest('[data-testid="stElementContainer"]') ||
+        el.parentElement;
+      if (container) {{
+        container.style.display = 'none';
+        container.style.visibility = 'hidden';
+        container.style.height = '0';
+        container.style.overflow = 'hidden';
+      }}
+      el.setAttribute('tabindex', '-1');
+      el.setAttribute('aria-hidden', 'true');
+    }});
+  }}
+
+  hideNativeChatControls();
 
   // ── Auto scroll messages ──────────────────────────────────────────────────
   var msgDiv = par.getElementById('_ai_msgs');
@@ -447,7 +481,8 @@ components.html(f"""
   par.getElementById('_ai_close').addEventListener('click', togglePanel);
 
   // ── Send message via hidden Streamlit form ────────────────────────────────
-  window._aiSend = function(textOverride) {{
+  var rootWin = par.defaultView || window.parent;
+  rootWin._aiSend = function(textOverride) {{
     var ta = par.getElementById('_ai_textarea');
     var val = (textOverride || ta.value || '').trim();
     if (!val) return;
@@ -509,29 +544,30 @@ components.html(f"""
 
   // ── Textarea send on Enter ────────────────────────────────────────────────
   par.getElementById('_ai_textarea').addEventListener('keydown', function(e) {{
-    if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); window._aiSend(); }}
+    if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); rootWin._aiSend(); }}
   }});
-  par.getElementById('_ai_send').addEventListener('click', function() {{ window._aiSend(); }});
+  par.getElementById('_ai_send').addEventListener('click', function() {{ rootWin._aiSend(); }});
 
   // ── Clear conversation ────────────────────────────────────────────────────
   par.getElementById('_ai_clear').addEventListener('click', function() {{
     // Trigger clear by sending special token
-    window._aiSend('__CLEAR__');
+    rootWin._aiSend('__CLEAR__');
   }});
 
   // ── Keep panel open across rerenders ────────────────────────────────────
-  if (window._chatWasOpen) panel.classList.add('open');
+  if (rootWin._chatWasOpen) panel.classList.add('open');
   bubble.addEventListener('click', function() {{
-    window._chatWasOpen = panel.classList.contains('open');
+    rootWin._chatWasOpen = panel.classList.contains('open');
   }});
 
 }})();
 </script>
-""", height=0, scrolling=False)
+""", height=1, scrolling=False)
 
 
 # ── LIGHT / DARK MODE TOGGLE ──────────────────────────────────────────────────
-components.html("""
+if False:
+    components.html("""
 <script>
 (function() {{
   var par = window.parent.document;
@@ -877,7 +913,7 @@ components.html("""
   // ── Premium pill button ───────────────────────────────────────────────────
   var btn = par.createElement('div');
   btn.id = '_theme_toggle_btn';
-  btn.title = 'Toggle Light / Dark mode';
+  btn.setAttribute('aria-label', 'Toggle light or dark mode');
   btn.innerHTML = `
     <div id="_theme_toggle_track">
       <span id="_tt_moon" style="z-index:1;padding-left:3px;pointer-events:none;">🌙</span>
@@ -892,11 +928,9 @@ components.html("""
     var knob = par.getElementById('_theme_toggle_knob');
     if (light) {{
       par.documentElement.classList.add('si-light');
-      btn.title = 'Switch to Dark mode';
       if (knob) knob.classList.add('light-pos');
     }} else {{
       par.documentElement.classList.remove('si-light');
-      btn.title = 'Switch to Light mode';
       if (knob) knob.classList.remove('light-pos');
     }}
   }}
@@ -912,7 +946,7 @@ components.html("""
 
 }})();
 </script>
-""", height=0, scrolling=False)
+    """, height=1, scrolling=False)
 
 
 
@@ -928,7 +962,12 @@ if st.session_state.chat_history and (
 # Hide the form from the main UI
 st.markdown("""
 <style>
-[data-testid="stForm"] { position:absolute; left:-9999px; opacity:0; pointer-events:none; }
+[data-testid="stForm"] {
+    display:none !important;
+    visibility:hidden !important;
+    height:0 !important;
+    overflow:hidden !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
