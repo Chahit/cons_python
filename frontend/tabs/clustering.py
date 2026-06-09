@@ -331,6 +331,15 @@ def render(ai):
         fig.update_traces(marker=dict(size=7, opacity=0.85))
         fig.update_layout(height=450, margin=dict(l=0, r=0, b=0, t=30))
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(
+            "<div style='font-size:12px;color:#94a3b8;margin-top:6px;line-height:1.5;padding:8px 12px;background:rgba(255,255,255,0.02);border-radius:6px;border-left:3px solid #8b5cf6;'>"
+            "🗺️ <b>Plain-English Map Guide:</b> Each dot is a partner. "
+            "Dots grouped close together have identical purchase profiles. "
+            "Distance represents difference in what products they buy. "
+            "This makes it easy to find similar accounts and copy successful sales playbooks!"
+            "</div>",
+            unsafe_allow_html=True
+        )
     with col_comp:
         comp_df = plot_df.groupby(["Cluster", "Cluster Type"]).size().reset_index(name="Count")
         fig_comp = px.bar(
@@ -341,6 +350,13 @@ def render(ai):
         )
         fig_comp.update_layout(height=450, margin=dict(l=0, r=0, b=0, t=40))
         st.plotly_chart(fig_comp, use_container_width=True)
+        st.markdown(
+            "<div style='font-size:12px;color:#94a3b8;margin-top:6px;line-height:1.5;padding:8px 12px;background:rgba(255,255,255,0.02);border-radius:6px;border-left:3px solid #f472b6;'>"
+            "📊 <b>Plain-English Summary:</b> Shows the number of partners in each cluster. "
+            "Stacked colors represent sub-types, letting you quickly see how healthy or critical each segment is at a glance."
+            "</div>",
+            unsafe_allow_html=True
+        )
 
     st.markdown("---")
 
@@ -540,6 +556,101 @@ def render(ai):
     mix_cols = [c for c in filtered.columns if c.startswith("mix::rw::") or
                 (c not in ["cluster", "cluster_type", "cluster_label", "strategic_tag", "state"]
                  and filtered[c].dtype in [np.float64, np.int64, float, int])]
+
+    # ── Persona Card ──
+    persona_title = "🏢 General Segment Profile"
+    persona_desc = "Standard buying partner with average spend volume across diverse categories."
+    persona_icon = "🏢"
+    persona_color = "#3b82f6"
+    persona_highlights = [
+        "Consistent order intervals",
+        "Moderate revenue contribution",
+        "Standard credit risk profile"
+    ]
+
+    selected_lbl_lower = selected_label.lower()
+    rev_90_col  = next((c for c in ["recent_90_revenue", "total_revenue"] if pf_cluster is not None and c in pf_cluster.columns), None)
+    avg_rev_val = pf_cluster[rev_90_col].mean() if (pf_cluster is not None and rev_90_col) else 0.0
+
+    if "vip" in selected_lbl_lower or "champion" in selected_lbl_lower or avg_rev_val > 150000:
+        persona_title = "🏆 The Premium Tier"
+        persona_desc = "Large enterprise partners who order high-end POE switches in bulk and have perfect payment records."
+        persona_icon = "🏆"
+        persona_color = "#10b981"
+        persona_highlights = [
+            "High-volume, high-value bulk purchases",
+            "Near-perfect payment record & low credit risk",
+            "Highly strategic accounts with dedicated account managers"
+        ]
+    elif "retail" in selected_lbl_lower or "fast" in selected_lbl_lower or "emerging" in selected_lbl_lower or (0 < avg_rev_val < 75000):
+        persona_title = "⚡ The Fast-Moving Retailers"
+        persona_desc = "Bazaars and local shops buying RAM and Pendrives daily in small volumes."
+        persona_icon = "⚡"
+        persona_color = "#f59e0b"
+        persona_highlights = [
+            "Daily/weekly high-frequency low-volume transactions",
+            "Focused on commodity fast-moving goods (RAM, Pendrives, basic cables)",
+            "Highly sensitive to market price fluctuations"
+        ]
+    elif "at risk" in selected_lbl_lower or "critical" in selected_lbl_lower or "churn" in selected_lbl_lower:
+        persona_title = "🚨 The Recoverable Accounts"
+        persona_desc = "Previously steady partners whose buying velocity has dropped significantly due to pricing or competitor entry."
+        persona_icon = "🚨"
+        persona_color = "#ef4444"
+        persona_highlights = [
+            "Significant gap in recent orders (>90 days idle)",
+            "High recovery potential if reached out with targeted promotions",
+            "Typically have some historical loyalty to leverage"
+        ]
+
+    st.markdown(
+        f"""
+        <div style="
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.45) 0%, rgba(15, 23, 42, 0.75) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+        ">
+            <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 12px;">
+                <div style="
+                    font-size: 28px;
+                    background: {persona_color}18;
+                    color: {persona_color};
+                    border: 1px solid {persona_color}44;
+                    padding: 8px;
+                    border-radius: 10px;
+                    width: 50px;
+                    height: 50px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                ">
+                    {persona_icon}
+                </div>
+                <div>
+                    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: {persona_color}; font-weight: 700; line-height:1.2;">
+                        Active Business Persona
+                    </div>
+                    <div style="font-size: 18px; font-weight: 800; color: #f8fafc; line-height:1.3;">
+                        {persona_title}
+                    </div>
+                </div>
+            </div>
+            <p style="font-size: 13px; color: #cbd5e1; line-height: 1.5; margin-bottom: 14px; font-style: italic;">
+                "{persona_desc}"
+            </p>
+            <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px;">
+                <div style="font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">Key Behavioral Highlights:</div>
+                <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #cbd5e1; line-height: 1.5;">
+                    {"".join(f"<li>{item}</li>" for item in persona_highlights)}
+                </ul>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # ── Cluster narrative (Why are they here?) ───────────────────────────────
     narrative_lines = _cluster_narrative(filtered, pf_cluster, mix_cols)

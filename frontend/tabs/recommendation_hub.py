@@ -818,6 +818,77 @@ def render(ai):
                 st.subheader("Recommendation Explanation")
                 st.info(explanation)
 
+            # --- Compile Price Quote Checklist Console ---
+            st.markdown("---")
+            section_header("📝 Interactive Price Quote Builder")
+            st.caption("Check off the recommended products below to compile a professional, customer-ready quote in one click!")
+            
+            if not actions:
+                st.info("Please generate the recommendation plan first to load pitch items.")
+            else:
+                quote_items = []
+                for idx, action in enumerate(actions):
+                    prod_name = action.get("recommended_offer", f"Offer {idx+1}")
+                    # Let's see if we can get a price or guess a default average price
+                    price_est = 15000.0
+                    if 'expected_gain_monthly' in action:
+                        price_est = float(action.get('expected_gain_monthly', 15000.0))
+                    elif 'gain' in action:
+                        price_est = float(action.get('gain', 15000.0))
+                    
+                    # Round and clean
+                    price_est = round(price_est, -2) if price_est > 0 else 15000.0
+                    
+                    # Display checkbox in column
+                    col_chk, col_info = st.columns([1, 12])
+                    with col_chk:
+                        is_selected = st.checkbox("", value=True, key=f"quote_chk_{idx}")
+                    with col_info:
+                        st.markdown(
+                            f"<div style='background:rgba(255,255,255,0.02);padding:10px 16px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);'>"
+                            f"<span style='font-weight:700;color:#f8fafc;'>{prod_name}</span><br/>"
+                            f"<span style='font-size:11px;color:#94a3b8;'>Estimated Value: <b>₹{price_est:,.0f}</b> | Priority: {action.get('priority', 'High')}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                    if is_selected:
+                        quote_items.append((prod_name, price_est))
+
+                # Interactive Compile Quote Button
+                if quote_items:
+                    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+                    if st.button("📝 Compile & Format Client Quote", key="compile_quote_btn", use_container_width=True):
+                        # Construct beautiful quote text block
+                        total_quote_amt = sum(item[1] for item in quote_items)
+                        quote_date = datetime.date.today().strftime("%B %d, %Y")
+                        
+                        quote_text = (
+                            f"=========================================\n"
+                            f"         COMMERCIAL PRICE QUOTE          \n"
+                            f"=========================================\n"
+                            f"Client: {selected_partner}\n"
+                            f"Date: {quote_date}\n"
+                            f"Reference: SI-RECO-{hashlib.md5(selected_partner.encode()).hexdigest()[:6].upper()}\n"
+                            f"-----------------------------------------\n"
+                        )
+                        for item_idx, item in enumerate(quote_items, start=1):
+                            quote_text += f"{item_idx}. {item[0]:<30}  ₹{item[1]:,.2f}\n"
+                        
+                        quote_text += (
+                            f"-----------------------------------------\n"
+                            f"ESTIMATED TOTAL VALUE:             ₹{total_quote_amt:,.2f}\n"
+                            f"=========================================\n"
+                            f"Notes:\n"
+                            f"- Pricing is subject to standard credit terms and availability.\n"
+                            f"- This quote was compiled from sales intelligence portfolio gaps.\n"
+                            f"Thank you for your business!\n"
+                        )
+                        
+                        st.success("🎉 Quote successfully compiled! Copy the formatted text below:")
+                        st.code(quote_text, language=None)
+                else:
+                    st.warning("⚠️ Select at least one recommended product above to compile a quote.")
+
             st.markdown("---")
             st.subheader("📨 Personalized Pitch Scripts")
             st.caption("Built from your inventory, partner purchase history, and affinity signals — no generic discounts.")

@@ -431,7 +431,7 @@ def render(ai):
             mode="gauge+number",
             value=total_baseline_margin,
             domain={'x': [0, 0.45], 'y': [0, 1]},
-            title={'text': "Baseline Standalone Margin", 'font': {'size': 13, 'color': '#94a3b8'}},
+            title={'text': "Expected Monthly Earnings (Baseline)", 'font': {'size': 13, 'color': '#94a3b8'}},
             number={'prefix': "₹", 'font': {'color': '#e2e8f0', 'size': 26}},
             gauge={
                 'axis': {'range': [0, max_gauge_val], 'tickwidth': 1, 'tickcolor': "#475569"},
@@ -448,7 +448,7 @@ def render(ai):
             delta={'reference': total_baseline_margin, 'relative': False, 'valueformat': '₹.0f',
                    'increasing': {'color': '#22c55e'}, 'decreasing': {'color': '#ef4444'}},
             domain={'x': [0.55, 1], 'y': [0, 1]},
-            title={'text': "Projected Bundle Margin", 'font': {'size': 13, 'color': '#94a3b8'}},
+            title={'text': "Expected Monthly Earnings (Projected)", 'font': {'size': 13, 'color': '#94a3b8'}},
             number={'prefix': "₹", 'font': {'color': '#e2e8f0', 'size': 26}},
             gauge={
                 'axis': {'range': [0, max_gauge_val], 'tickwidth': 1, 'tickcolor': "#475569"},
@@ -531,33 +531,51 @@ def render(ai):
     engine = getattr(ai, "engine", None)
     cat_map = _fetch_category_map(engine) if engine else {}
 
-    if not df_assoc.empty and cat_map:
+    def _star_rating(conf, lift):
+        try:
+            c = float(conf)
+            l = float(lift)
+        except Exception:
+            return "⭐⭐"
+        if l >= 3.0 or c >= 0.6:
+            return "⭐⭐⭐⭐⭐ (Highly Recommended)"
+        if l >= 2.0 or c >= 0.4:
+            return "⭐⭐⭐⭐ (Strong Bundle)"
+        if l >= 1.5 or c >= 0.25:
+            return "⭐⭐⭐ (Recommended)"
+        return "⭐⭐ (Good Match)"
+
+    if not df_assoc.empty:
         df_assoc = df_assoc.copy()
-        df_assoc["cat_a"] = df_assoc["product_a"].map(cat_map).fillna("General")
-        df_assoc["cat_b"] = df_assoc["product_b"].map(cat_map).fillna("General")
-        df_assoc["bundle_type"] = df_assoc.apply(
-            lambda r: "Same Category" if r["cat_a"] == r["cat_b"] else "Cross Category", axis=1
-        )
-        df_same  = df_assoc[df_assoc["bundle_type"] == "Same Category"]
-        df_cross = df_assoc[df_assoc["bundle_type"] == "Cross Category"]
+        df_assoc["pitch_rating"] = df_assoc.apply(lambda r: _star_rating(r["confidence_a_to_b"], r["lift_a_to_b"]), axis=1)
+        if cat_map:
+            df_assoc["cat_a"] = df_assoc["product_a"].map(cat_map).fillna("General")
+            df_assoc["cat_b"] = df_assoc["product_b"].map(cat_map).fillna("General")
+            df_assoc["bundle_type"] = df_assoc.apply(
+                lambda r: "Same Category" if r["cat_a"] == r["cat_b"] else "Cross Category", axis=1
+            )
+            df_same  = df_assoc[df_assoc["bundle_type"] == "Same Category"]
+            df_cross = df_assoc[df_assoc["bundle_type"] == "Cross Category"]
+        else:
+            df_same  = df_assoc
+            df_cross = pd.DataFrame()
     else:
-        df_same  = df_assoc.copy() if not df_assoc.empty else pd.DataFrame()
+        df_same  = pd.DataFrame()
         df_cross = pd.DataFrame()
 
     _display_cols = [
         "product_a", "product_b", "times_bought_together",
-        "confidence_a_to_b", "lift_a_to_b", "rule_strength",
+        "pitch_rating",
         "expected_gain_monthly", "expected_margin_monthly",
     ]
     _col_cfg = {
         "product_a": "If they buy…", "product_b": "…pitch this",
         "times_bought_together": st.column_config.NumberColumn("Frequency"),
-        "confidence_a_to_b":    st.column_config.NumberColumn("Confidence", format="%.2f"),
-        "lift_a_to_b":          st.column_config.NumberColumn("Lift", format="%.2f"),
-        "rule_strength":        "Rule Strength",
-        "expected_gain_monthly": st.column_config.NumberColumn("₹ Gain/Month", format="₹%d"),
-        "expected_margin_monthly": st.column_config.NumberColumn("₹ Margin/Month", format="₹%d"),
+        "pitch_rating":          st.column_config.TextColumn("Pitch Recommendation Rating"),
+        "expected_gain_monthly": st.column_config.NumberColumn("₹ Gain/Month", format="₹%.0f"),
+        "expected_margin_monthly": st.column_config.NumberColumn("₹ Margin/Month", format="₹%.0f"),
     }
+
 
     left = st.container()
 
@@ -582,20 +600,26 @@ def render(ai):
             if df.empty:
                 return df
             df = df.copy()
+            import numpy as np_local
             numeric_cols = ["times_bought_together", "confidence_a_to_b", "lift_a_to_b",
                             "expected_gain_monthly", "expected_margin_monthly",
+                            "expected_revenue_gain", "expected_margin_gain",
                             "confidence", "lift", "frequency"]
             for c in numeric_cols:
                 if c in df.columns:
                     df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
-                    # Replace inf values
-                    import numpy as np_local
                     df[c] = df[c].replace([np_local.inf, -np_local.inf], 0.0)
-            for c in ["product_a", "product_b", "rule_strength", "trigger_product", "recommended_product", "bundle_type"]:
+                    df[c] = df[c].astype(float)
+            # Sanitize all remaining object/non-numeric columns for Decimal/None leakage
+            for c in df.columns:
+                if df[c].dtype == object:
+                    df[c] = df[c].fillna("").astype(str)
+            for c in ["product_a", "product_b", "rule_strength", "trigger_product", "recommended_product", "bundle_type", "pitch_rating"]:
                 if c in df.columns:
                     df[c] = df[c].fillna("").astype(str)
             # Keep only requested cols that exist
             return df[[c for c in cols if c in df.columns]]
+
 
         with same_tab:
             st.caption("Depth-selling within a product family — same category on both sides.")
@@ -690,8 +714,9 @@ def render(ai):
             st.warning("No cross-sell opportunities found for this partner with current filters.")
         else:
             # Enrich recs with category info
+            partner_recos = partner_recos.copy()
+            partner_recos["pitch_rating"] = partner_recos.apply(lambda r: _star_rating(r["confidence"], r["lift"]), axis=1)
             if cat_map:
-                partner_recos = partner_recos.copy()
                 partner_recos["trigger_cat"] = partner_recos["trigger_product"].map(cat_map).fillna("General")
                 partner_recos["rec_cat"]     = partner_recos["recommended_product"].map(cat_map).fillna("General")
                 partner_recos["bundle_type"] = partner_recos.apply(
@@ -700,7 +725,7 @@ def render(ai):
 
             _preco_cols = [
                 "trigger_product", "recommended_product",
-                "confidence", "lift", "frequency", "rule_strength",
+                "pitch_rating", "frequency",
                 "expected_gain_monthly",
             ]
             if "bundle_type" in partner_recos.columns:
@@ -709,11 +734,10 @@ def render(ai):
                 "bundle_type":          "Type",
                 "trigger_product":      "Bought Product",
                 "recommended_product":  "Pitch This",
-                "confidence":           st.column_config.NumberColumn("Conf.", format="%.2f"),
-                "lift":                 st.column_config.NumberColumn("Lift", format="%.2f"),
-                "frequency":            st.column_config.NumberColumn("Freq."),
-                "rule_strength":        "Strength",
-                "expected_gain_monthly": st.column_config.NumberColumn("₹ Gain/Mo", format="₹%d"),
+                "pitch_rating":          st.column_config.TextColumn("Recommendation Rating"),
+                "frequency":            st.column_config.NumberColumn("Bought Together (Times)"),
+                "expected_gain_monthly": st.column_config.NumberColumn("₹ Gain/Mo", format="₹%.0f"),
+
             }
             st.dataframe(
                 _safe_df(partner_recos, _preco_cols),

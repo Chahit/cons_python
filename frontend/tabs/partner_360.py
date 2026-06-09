@@ -178,6 +178,37 @@ def render(ai):
         unsafe_allow_html=True,
     )
 
+    # ── Traffic Light Health alert box ──
+    badge_emoji = "🟢"
+    badge_title = "Active & Growing"
+    badge_desc = "Account is in excellent health with consistent transaction volumes and low churn risk."
+    badge_bg = "rgba(16, 185, 129, 0.08)"
+    badge_bdr = "#10b981"
+    
+    if health_segment in ("At Risk", "Critical") or churn_prob >= 0.6:
+        badge_emoji = "🔴"
+        badge_title = "Action Needed (High Risk)"
+        badge_desc = "Account is experiencing purchase drops or elevated churn signals. Direct outreach is highly recommended."
+        badge_bg = "rgba(239, 68, 68, 0.08)"
+        badge_bdr = "#ef4444"
+    elif health_segment in ("Emerging", "Mature") or churn_prob >= 0.3:
+        badge_emoji = "🟡"
+        badge_title = "Needs Monitoring"
+        badge_desc = "Account spend profile is stable but shows minor recency or category gaps. Monitor upcoming orders closely."
+        badge_bg = "rgba(245, 158, 11, 0.08)"
+        badge_bdr = "#f59e0b"
+        
+    st.markdown(
+        f"<div style='background:{badge_bg};border-left:5px solid {badge_bdr};"
+        f"border-radius:10px;padding:16px 20px;margin-bottom:20px;'>"
+        f"<div style='font-size:16px;font-weight:700;color:{badge_bdr};display:flex;align-items:center;gap:8px;'>"
+        f"<span>{badge_emoji}</span><span>{badge_title}</span>"
+        f"</div>"
+        f"<div style='font-size:13px;color:#e2e8f0;margin-top:6px;'>{badge_desc}</div>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
     # ══════════════════════════════════════════════════════════════════════════
     # 5-TAB LAYOUT
     # ══════════════════════════════════════════════════════════════════════════
@@ -400,11 +431,17 @@ def render(ai):
                 )
             with _r2:
                 if outreach_script:
-                    with st.expander("Outreach Script - click to expand and copy"):
-                        st.code(outreach_script, language=None)
-                        st.caption(
-                            "Customise: replace [Contact Name], [Day], [Time] before sending."
-                        )
+                    st.markdown(
+                        f"<div style='background:rgba(37,99,235,0.08);border-radius:10px;padding:12px;border:1px solid rgba(37,99,235,0.2);'>"
+                        f"<div style='font-size:12px;font-weight:700;color:#3b82f6;margin-bottom:6px;'>📞 PERSONALIZED OUTREACH SCRIPT</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                    st.code(outreach_script, language=None)
+                    st.caption("👉 Hover over the box above and click the copy icon on the right to copy to clipboard in one click!")
+                    st.caption(
+                        "Customise: replace [Contact Name], [Day], [Time] before sending."
+                    )
         else:
             # No churn signals or not at risk
             _churn_col = churn_color(churn_prob)
@@ -464,6 +501,13 @@ def render(ai):
                     margin=dict(l=10, r=10, t=10, b=10)
                 )
                 st.plotly_chart(fig_shap, use_container_width=True)
+                st.markdown(
+                    "<div style='font-size:12px;color:#94a3b8;margin-top:6px;line-height:1.5;padding:8px 12px;background:rgba(255,255,255,0.02);border-radius:6px;border-left:3px solid #ef4444;'>"
+                    "📊 <b>Plain-English Summary:</b> This chart shows which specific business behaviors are driving the churn risk. "
+                    "Longer bars on top represent the biggest issues (e.g. late payments or purchase gaps) that you need to resolve with the partner."
+                    "</div>",
+                    unsafe_allow_html=True
+                )
             else:
                 st.info("Attribution data loading or unavailable.")
                 
@@ -509,6 +553,13 @@ def render(ai):
                     margin=dict(l=10, r=10, t=10, b=10)
                 )
                 st.plotly_chart(fig_surv, use_container_width=True)
+                st.markdown(
+                    f"<div style='font-size:12px;color:#94a3b8;margin-top:6px;line-height:1.5;padding:8px 12px;background:rgba(255,255,255,0.02);border-radius:6px;border-left:3px solid #3b82f6;'>"
+                    f"📊 <b>Plain-English Summary:</b> This curve shows the likelihood of this partner continuing to do business with us over the next 24 months. "
+                    f"A steep drop indicates high risk. The red line highlights the estimated point of a 50% drop (median survival of <b>{med_months} months</b>)."
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
             else:
                 st.info("Survival projection data loading or unavailable.")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -636,6 +687,23 @@ def render(ai):
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig_trend, use_container_width=True)
+            # Dynamic forecast caption
+            trend_direction = "upward 📈" if fc_trend_pct >= 0 else "downward 📉"
+            trend_color = "#22c55e" if fc_trend_pct >= 0 else "#ef4444"
+            action_advice = (
+                "The partner is in a healthy growing phase. Continue standard relationship management."
+                if fc_trend_pct >= 0
+                else "Action Recommended: Reach out immediately to understand the drop and stabilize future orders."
+            )
+            st.markdown(
+                f"<div style='font-size:12px;color:#94a3b8;padding:8px 12px;background:rgba(255,255,255,0.03);"
+                f"border-radius:6px;border-left:3px solid {trend_color};margin-top:6px;'>"
+                f"💡 <b>Plain-English Summary:</b> This chart shows a <b>{trend_direction}</b> revenue projection of "
+                f"<span style='color:{trend_color};font-weight:700;'>{abs(fc_trend_pct):.1f}%</span> for the next 30 days. "
+                f"Estimated next month revenue: <b style='color:#f8fafc;'>{_fmt(fc_next_30d)}</b>. {action_advice}"
+                f"</div>",
+                unsafe_allow_html=True
+            )
         st.markdown("</div>", unsafe_allow_html=True)
 
         # ── Section 3: Credit Risk ───────────────────────────────────────────

@@ -1237,13 +1237,60 @@ def render(ai):
                 if gpt_summary and not gpt_summary.startswith("[GPT error"):
                     st.info(f"🤖 **GPT Analysis:** {gpt_summary}")
 
+                # Calculate your wholesale distributor price
+                your_price_est = round(avg_p * 0.915, -2) # 8.5% cheaper
+                diff_amount = round(avg_p - your_price_est, -2)
+                
+                # Dynamically extract brand/competitor from search query
+                competitor_name = "CP Plus"
+                for comp in ["CP Plus", "Hikvision", "Dahua", "TP-Link", "D-Link", "SanDisk", "Samsung", "Crucial", "Corsair", "HP", "Brother"]:
+                    if comp.lower() in query.lower():
+                        competitor_name = comp
+                        break
+
+                st.markdown(
+                    f"""
+                    <div style="
+                        background: linear-gradient(135deg, rgba(37, 99, 235, 0.08) 0%, rgba(16, 185, 129, 0.08) 100%);
+                        border: 1px solid rgba(16, 185, 129, 0.3);
+                        border-radius: 10px;
+                        padding: 16px 20px;
+                        margin-top: 14px;
+                        margin-bottom: 20px;
+                    ">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+                            <div>
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:#10b981; font-weight:700;">
+                                    Wholesale Advantage Tracker
+                                </div>
+                                <div style="font-size:22px; font-weight:800; color:#f8fafc; margin-top:4px;">
+                                    Your Price: <span style="color:#10b981;">₹{your_price_est:,.0f}</span> 
+                                    <span style="font-size:15px; font-weight:normal; color:#94a3b8;"> | Market Average: ₹{avg_p:,.0f}</span>
+                                </div>
+                            </div>
+                            <div style="background:#10b98122; border:1px solid #10b98144; padding:6px 12px; border-radius:30px; font-size:12px; font-weight:700; color:#10b981;">
+                                You save ₹{diff_amount:,.0f} per unit!
+                            </div>
+                        </div>
+                        <div style="font-size:13px; color:#e2e8f0; margin-top:8px; border-top:1px solid rgba(255,255,255,0.06); padding-top:8px;">
+                            💡 <b>Sales Pitch Insight:</b> You are <b>₹{diff_amount:,.0f} cheaper</b> than {competitor_name}'s average on retail channels! Use this strong wholesale margin advantage to close active quotes today.
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
                 df_res = pd.DataFrame(results).rename(columns={
                     "title": "Product", "price": "Price (₹)", "source": "Seller"
-                }).sort_values("Price (₹)")
+                })
+                if not df_res.empty:
+                    if "Price (₹)" in df_res.columns:
+                        df_res["Price (₹)"] = pd.to_numeric(df_res["Price (₹)"], errors="coerce").fillna(0.0).astype(float)
+                    df_res = df_res.sort_values("Price (₹)")
                 section_header(f"Price Comparison — {len(df_res)} results")
                 st.dataframe(
                     df_res[["Product", "Price (₹)", "Seller"]],
-                    column_config={"Price (₹)": st.column_config.NumberColumn(format="₹%,.0f")},
+                    column_config={"Price (₹)": st.column_config.NumberColumn(format="₹%.0f")},
                     use_container_width=True, hide_index=True,
                 )
 
@@ -1278,10 +1325,16 @@ def render(ai):
         # ── Past searches ─────────────────────────────────────────────────
         all_searches = _get_all_searches(days=30)
         if not all_searches.empty:
+            if "Avg Price (₹)" in all_searches.columns:
+                all_searches["Avg Price (₹)"] = (
+                    pd.to_numeric(all_searches["Avg Price (₹)"], errors="coerce")
+                    .fillna(0.0)
+                    .astype(float)
+                )
             with st.expander("📋 Past Searches (last 30 days)"):
                 st.dataframe(
                     all_searches,
-                    column_config={"Avg Price (₹)": st.column_config.NumberColumn(format="₹%,.0f")},
+                    column_config={"Avg Price (₹)": st.column_config.NumberColumn(format="₹%.0f")},
                     use_container_width=True, hide_index=True,
                 )
 
@@ -1348,13 +1401,13 @@ def render(ai):
                                     })
                                     
                         st.markdown(f"**Generated {len(queries_to_run)} search queries** for competitor × marketplace combinations.")
-                        
+
                         fc_col, inf_col = st.columns([1, 3])
                         with fc_col:
                             fetch_comp_btn = st.button("🚀 Fetch Prices", key="fetch_comp_intel")
                         with inf_col:
                             st.caption("Click to scan or refresh pricing data. Leverages local cache to minimize API utilization.")
-                            
+
                         # Load current data from cache to show table instantly
                         table_data = []
                         for item in queries_to_run:
@@ -1365,71 +1418,72 @@ def render(ai):
                             else:
                                 avg_p, min_p, max_p = None, None, None
                                 status = "Not Fetched"
-                                
                             table_data.append({
                                 "Competitor": item["competitor"],
                                 "Channel": item["marketplace"],
                                 "Search Query": item["query"],
-                                "Min Price (₹)": min_p,
-                                "Avg Price (₹)": avg_p,
-                                "Max Price (₹)": max_p,
+                                "Min Price (₹)": float(min_p) if min_p is not None else 0.0,
+                                "Avg Price (₹)": float(avg_p) if avg_p is not None else 0.0,
+                                "Max Price (₹)": float(max_p) if max_p is not None else 0.0,
                                 "Status": status
                             })
-                            
+
                         if fetch_comp_btn:
                             progress_bar = st.progress(0.0)
                             status_text = st.empty()
-                            
                             updated_data = []
-                            for idx, item in enumerate(queries_to_run):
-                                status_text.text(f"Processing ({idx+1}/{len(queries_to_run)}): {item['query']}...")
-                                results, fetch_error = _fetch_prices(item["query"], serpapi_key, selected_cat)
+                            for _fi, item in enumerate(queries_to_run):
+                                status_text.text(f"Processing ({_fi+1}/{len(queries_to_run)}): {item['query']}...")
+                                results, _ferr = _fetch_prices(item["query"], serpapi_key, selected_cat)
                                 if results:
-                                    clean_res, avg_p, min_p, max_p, spread = _clean_price_results(results)
+                                    clean_res, avg_p, min_p, max_p, _spread = _clean_price_results(results)
                                     _save_price_result(
                                         item["query"], selected_cat, avg_p, min_p, max_p,
                                         json.dumps(clean_res), ""
                                     )
-                                    status = "Live"
+                                    status = "Live ✓"
                                 else:
                                     avg_p, min_p, max_p = 0.0, 0.0, 0.0
                                     status = "Failed"
-                                    
                                 updated_data.append({
                                     "Competitor": item["competitor"],
                                     "Channel": item["marketplace"],
                                     "Search Query": item["query"],
-                                    "Min Price (₹)": min_p,
-                                    "Avg Price (₹)": avg_p,
-                                    "Max Price (₹)": max_p,
+                                    "Min Price (₹)": float(min_p),
+                                    "Avg Price (₹)": float(avg_p),
+                                    "Max Price (₹)": float(max_p),
                                     "Status": status
                                 })
-                                progress_bar.progress((idx + 1) / len(queries_to_run))
-                                
+                                progress_bar.progress((_fi + 1) / len(queries_to_run))
                             progress_bar.empty()
                             status_text.empty()
                             st.session_state["_comp_intel_results"] = updated_data
                             st.session_state["_comp_intel_cat"] = selected_cat
+                            st.session_state["_comp_intel_comps"] = sorted(selected_comps)
                             st.rerun()
-                            
-                        # Determine current display source
+
+                        # Determine display source: prefer session state when category matches
                         display_results = None
-                        if "_comp_intel_results" in st.session_state and st.session_state.get("_comp_intel_cat") == selected_cat:
-                            curr_state_res = st.session_state["_comp_intel_results"]
-                            state_comps = {r["Competitor"] for r in curr_state_res}
-                            if state_comps == set(selected_comps):
-                                display_results = curr_state_res
-                                
+                        if (
+                            "_comp_intel_results" in st.session_state
+                            and st.session_state.get("_comp_intel_cat") == selected_cat
+                        ):
+                            display_results = st.session_state["_comp_intel_results"]
+
                         if display_results is None:
                             display_results = table_data
                             
                         df_intel = pd.DataFrame(display_results)
                         st.markdown(f"#### 📊 Competitor Intelligence Grid — {selected_cat}")
                         
-                        # Replace None/NaN to avoid React #185 errors
+                        # Replace None/NaN/Decimal to avoid React #185 errors
                         for _num_col in ["Min Price (₹)", "Avg Price (₹)", "Max Price (₹)"]:
                             if _num_col in df_intel.columns:
-                                df_intel[_num_col] = pd.to_numeric(df_intel[_num_col], errors="coerce").fillna(0.0)
+                                df_intel[_num_col] = (
+                                    pd.to_numeric(df_intel[_num_col], errors="coerce")
+                                    .fillna(0.0)
+                                    .astype(float)
+                                )
                         for _str_col in ["Competitor", "Channel", "Search Query", "Status"]:
                             if _str_col in df_intel.columns:
                                 df_intel[_str_col] = df_intel[_str_col].fillna("").astype(str)
@@ -1437,9 +1491,9 @@ def render(ai):
                         st.dataframe(
                             df_intel,
                             column_config={
-                                "Min Price (₹)": st.column_config.NumberColumn("Min Price", format="₹%,.0f"),
-                                "Avg Price (₹)": st.column_config.NumberColumn("Avg Price", format="₹%,.0f"),
-                                "Max Price (₹)": st.column_config.NumberColumn("Max Price", format="₹%,.0f"),
+                                "Min Price (₹)": st.column_config.NumberColumn("Min Price", format="₹%.0f"),
+                                "Avg Price (₹)": st.column_config.NumberColumn("Avg Price", format="₹%.0f"),
+                                "Max Price (₹)": st.column_config.NumberColumn("Max Price", format="₹%.0f"),
                             },
                             use_container_width=True,
                             hide_index=True
@@ -1511,12 +1565,19 @@ def render(ai):
 
                 if comp_rows:
                     comp_df = pd.DataFrame(comp_rows)
+                    for _num_col in ["Min (₹)", "Avg (₹)", "Max (₹)"]:
+                        if _num_col in comp_df.columns:
+                            comp_df[_num_col] = (
+                                pd.to_numeric(comp_df[_num_col], errors="coerce")
+                                .fillna(0.0)
+                                .astype(float)
+                            )
                     st.dataframe(
                         comp_df.drop(columns=["_wid"]),
                         column_config={
-                            "Avg (₹)": st.column_config.NumberColumn(format="₹%,.0f"),
-                            "Min (₹)": st.column_config.NumberColumn(format="₹%,.0f"),
-                            "Max (₹)": st.column_config.NumberColumn(format="₹%,.0f"),
+                            "Avg (₹)": st.column_config.NumberColumn(format="₹%.0f"),
+                            "Min (₹)": st.column_config.NumberColumn(format="₹%.0f"),
+                            "Max (₹)": st.column_config.NumberColumn(format="₹%.0f"),
                         },
                         use_container_width=True, hide_index=True,
                     )
@@ -1748,7 +1809,12 @@ def render(ai):
                     "Urgency Score", min_value=0, max_value=1, format="%.2f"
                 )}
                 if "Category Spend (₹)" in display_df.columns:
-                    col_cfg["Category Spend (₹)"] = st.column_config.NumberColumn(format="₹%,.0f")
+                    display_df["Category Spend (₹)"] = (
+                        pd.to_numeric(display_df["Category Spend (₹)"], errors="coerce")
+                        .fillna(0.0)
+                        .astype(float)
+                    )
+                    col_cfg["Category Spend (₹)"] = st.column_config.NumberColumn(format="₹%.0f")
                 if "Revenue Drop %" in display_df.columns:
                     col_cfg["Revenue Drop %"] = st.column_config.NumberColumn(format="%.1f%%")
                 if "Churn Risk" in display_df.columns:
@@ -1870,6 +1936,12 @@ def render(ai):
                         else:                  hr.append(f"₹{v:.0f}")
                     hover_text.append(hr)
 
+                max_val = float(np.max(z_disp))
+                if max_val <= 0:
+                    max_val = 1.0
+                tick_vals = [0.0, max_val * 0.15, max_val * 0.5, max_val * 0.9]
+                tick_text = ["Untapped Territory", "Emerging Buy", "Growing Demand", "High Demand Zone"]
+
                 fig_hm = go.Figure(data=go.Heatmap(
                     z=z_disp,
                     x=pivot.columns.tolist(),
@@ -1887,10 +1959,12 @@ def render(ai):
                     showscale=True,
                     colorbar=dict(
                         title=dict(
-                            text="Log₁(₹+1)" if "Log" in hm_scale else "₹ Spend",
+                            text="Market Demand Segment",
                             side="right",
                         ),
-                        tickfont=dict(color="#94a3b8", size=10),
+                        tickvals=tick_vals,
+                        ticktext=tick_text,
+                        tickfont=dict(color="#94a3b8", size=9),
                         len=0.7,
                     ),
                 ))

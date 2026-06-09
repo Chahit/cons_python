@@ -73,6 +73,16 @@ def render(ai):
     ai.ensure_product_lifecycle()
     skel.empty()
 
+    def clean_stage_badge(stage):
+        mapping = {
+            "Growing": "🌟 Emerging (Hot Demand)",
+            "Mature": "✅ Stable (Consistent Seller)",
+            "Plateauing": "⚠️ Aging (Stock Slowly)",
+            "Declining": "🚨 Phase-Out (Stop Ordering)",
+            "End-of-Life": "🚨 Phase-Out (Stop Ordering)",
+        }
+        return mapping.get(stage, stage)
+
     # ── Calendar date-range picker (LOAD FIRST for Pitfall 1) ─────────────────
     sel_start, sel_end, date_label, span_days = _render_lifecycle_date_picker()
     ts_start = pd.Timestamp(sel_start)
@@ -306,9 +316,10 @@ def render(ai):
         for stage in present_stages:
             stage_df = filtered[filtered["lifecycle_stage"] == stage]
             color = color_map.get(stage, "#888")
+            display_stage = clean_stage_badge(stage)
             st.markdown(
                 f"<h4 style='color:{color}; margin-top:20px; margin-bottom:8px; border-bottom:1px solid #333; padding-bottom:4px;'>"
-                f"{stage} <span style='color:#666; font-size:14px; font-weight:normal;'>({len(stage_df)} products)</span></h4>",
+                f"{display_stage} <span style='color:#666; font-size:14px; font-weight:normal;'>({len(stage_df)} products)</span></h4>",
                 unsafe_allow_html=True,
             )
             st.dataframe(
@@ -366,7 +377,7 @@ def render(ai):
                 p = prod_info.iloc[0]
                 i1, i2, i3, i4 = st.columns(4)
                 with i1:
-                    st.metric("Lifecycle Stage", p["lifecycle_stage"])
+                    st.metric("Lifecycle Stage", clean_stage_badge(p["lifecycle_stage"]))
                 with i2:
                     st.metric("Velocity Score", f"{p['velocity_score']:.3f}")
                 with i3:
@@ -461,6 +472,7 @@ def render(ai):
     else:
         urgency_colors = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢"}
         eol_display = eol_df.copy()
+        eol_display["lifecycle_stage"] = eol_display["lifecycle_stage"].map(clean_stage_badge)
         eol_display["urgency_icon"] = eol_display["urgency"].map(urgency_colors).fillna("") + " " + eol_display["urgency"]
 
         display_cols = [c for c in [
